@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Icon } from "@/components/ui/Icon";
-import { utilLinks } from "@/lib/mock/nav";
+import { AuthMenu } from "@/components/account/AuthMenu";
 
 export function UtilBar() {
   return (
@@ -11,19 +11,11 @@ export function UtilBar() {
           <span>빠르고 안전한 B2B 배송 시스템</span>
         </div>
         <nav className="flex items-center">
-          {utilLinks.map((link, i) => (
-            <div key={link.href} className="flex items-center">
-              {i > 0 && (
-                <span className="mx-3 h-2.5 w-px bg-brand-300/70" aria-hidden />
-              )}
-              <Link
-                href={link.href}
-                className="text-brand-700/80 transition-colors hover:text-brand-700"
-              >
-                {link.label}
-              </Link>
-            </div>
-          ))}
+          <AuthMenu />
+          <span className="mx-3 h-2.5 w-px bg-brand-300/70" aria-hidden />
+          <Link href="/support" className="text-brand-700/80 transition-colors hover:text-brand-700">
+            고객센터
+          </Link>
         </nav>
       </div>
     </div>
