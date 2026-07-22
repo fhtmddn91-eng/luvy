@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String     @id @default(cuid())
+  email          String     @unique
+  passwordHash   String
+  companyName    String
+  businessNumber String
+  ownerName      String
+  phone          String
+  status         String     @default("APPROVED")
+  createdAt      DateTime   @default(now())
+  cartItems      CartItem[]
+  orders         Order[]
+}
+
+model Product {
+  id           String      @id @default(cuid())
+  name         String
+  brand        String
+  categorySlug String
+  description  String
+  image        String      @default("")
+  basePrice    Int
+  status       String      @default("ACTIVE")
+  createdAt    DateTime    @default(now())
+  priceTiers   PriceTier[]
+  cartItems    CartItem[]
+
+  @@index([categorySlug])
+}
+
+model PriceTier {
+  id        String  @id @default(cuid())
+  productId String
+  minQty    Int
+  unitPrice Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+model CartItem {
+  id        String  @id @default(cuid())
+  userId    String
+  productId String
+  quantity  Int
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+}
+
+model Order {
+  id          String      @id @default(cuid())
+  userId      String
+  status      String      @default("RECEIVED")
+  recipient   String
+  phone       String
+  address     String
+  memo        String?
+  subtotal    Int
+  shippingFee Int
+  total       Int
+  createdAt   DateTime    @default(now())
+  user        User        @relation(fields: [userId], references: [id])
+  items       OrderItem[]
+}
+
+model OrderItem {
+  id        String @id @default(cuid())
+  orderId   String
+  productId String
+  name      String
+  brand     String
+  unitPrice Int
+  quantity  Int
+  lineTotal Int
+  order     Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
