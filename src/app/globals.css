@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+@theme {
+  /* Brand — soft rose pink */
+  --color-brand-50: #fdf2f6;
+  --color-brand-100: #fce7ef;
+  --color-brand-200: #f9d2e0;
+  --color-brand-300: #f4aec6;
+  --color-brand-400: #ee85a8;
+  --color-brand-500: #e7568a;
+  --color-brand-600: #d63f77;
+  --color-brand-700: #b62f62;
+
+  /* Neutral ink */
+  --color-ink: #2c2b30;
+  --color-ink-soft: #55535b;
+  --color-muted: #8f8c95;
+  --color-line: #efe6ea;
+
+  /* Surfaces */
+  --color-cream: #fdf5f8;
+  --color-charcoal: #201d24;
+
+  --font-sans: "Pretendard", "Pretendard Variable", -apple-system,
+    BlinkMacSystemFont, system-ui, sans-serif;
+
+  --radius-pill: 999px;
+
+  --shadow-card: 0 8px 30px -12px rgba(214, 63, 119, 0.18);
+  --shadow-soft: 0 2px 16px -8px rgba(44, 43, 48, 0.12);
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    font-family: var(--font-sans);
+    color: var(--color-ink);
+    background: #ffffff;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--color-brand-200);
+    color: var(--color-brand-700);
+  }
+}
+
+/* Hero carousel fade animation */
+@keyframes heroFade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero-enter {
+  animation: heroFade 0.6s ease both;
+}
+
+/* Subtle floating for hero product */
+@keyframes floaty {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+.floaty {
+  animation: floaty 6s ease-in-out infinite;
+}
+
+/* Marquee-free thin scrollbar for category row on mobile */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
