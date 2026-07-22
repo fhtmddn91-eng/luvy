@@ -86,3 +86,27 @@ model OrderItem {
   lineTotal Int
   order     Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
+
+model Banner {
+  id             String   @id @default(cuid())
+  eyebrow        String
+  title          String
+  subtitle       String
+  primaryLabel   String
+  primaryHref    String
+  secondaryLabel String
+  secondaryHref  String
+  sortOrder      Int      @default(0)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+}
+
+model Notice {
+  id        String   @id @default(cuid())
+  kind      String   // notice | stock | event
+  tag       String
+  text      String
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}

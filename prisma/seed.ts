@@ -28,6 +28,47 @@ const products: Seed[] = [
   { name: "아이디어 방수 파우치", brand: "LUVY", categorySlug: "idea", description: "제품 보관용 지퍼 방수 파우치. 매장 사은품용.", basePrice: 4000, tiers: [{ minQty: 20, unitPrice: 1900 }, { minQty: 100, unitPrice: 1500 }] },
 ];
 
+const banners = [
+  {
+    eyebrow: "LOVE YOUR BUSINESS",
+    title: "LUVY, 당신의 비즈니스를\n더 빛나게",
+    subtitle: "신뢰할 수 있는 제품과 파트너십으로\n성인 라이프스타일 비즈니스의 성공을 함께합니다.",
+    primaryLabel: "회원가입하고 혜택받기", primaryHref: "/signup",
+    secondaryLabel: "B2B 안내 보기", secondaryHref: "/partner",
+    sortOrder: 1,
+  },
+  {
+    eyebrow: "NEW ARRIVALS",
+    title: "이번 주 입고된\n프리미엄 신상품",
+    subtitle: "엄선된 글로벌 브랜드의 신상품을\n합리적인 도매가로 가장 먼저 만나보세요.",
+    primaryLabel: "신상품 보러가기", primaryHref: "/new",
+    secondaryLabel: "브랜드관 둘러보기", secondaryHref: "/brands",
+    sortOrder: 2,
+  },
+  {
+    eyebrow: "PARTNER BENEFIT",
+    title: "전담 파트너가\n1:1로 함께합니다",
+    subtitle: "재고 관리부터 빠른 배송까지,\n안정적인 물류 시스템으로 매출을 키우세요.",
+    primaryLabel: "파트너 신청하기", primaryHref: "/partner",
+    secondaryLabel: "혜택 자세히 보기", secondaryHref: "/events",
+    sortOrder: 3,
+  },
+  {
+    eyebrow: "WELCOME OFFER",
+    title: "신규 가입 시\n10,000P 즉시 지급",
+    subtitle: "지금 LUVY의 파트너가 되고\n첫 주문부터 특별한 혜택을 받아보세요.",
+    primaryLabel: "지금 가입하기", primaryHref: "/signup",
+    secondaryLabel: "이벤트 전체 보기", secondaryHref: "/events",
+    sortOrder: 4,
+  },
+];
+
+const notices = [
+  { kind: "notice", tag: "공지사항", text: "2024 추석 연휴 배송 및 고객센터 운영 안내", sortOrder: 1 },
+  { kind: "stock", tag: "입고 소식", text: "인기 브랜드 신상품 입고 안내", sortOrder: 2 },
+  { kind: "event", tag: "이벤트", text: "신규 회원 가입 시 10,000P 지급", sortOrder: 3 },
+];
+
 async function main() {
   await db.orderItem.deleteMany();
   await db.order.deleteMany();
@@ -35,6 +76,11 @@ async function main() {
   await db.priceTier.deleteMany();
   await db.product.deleteMany();
   await db.user.deleteMany();
+  await db.banner.deleteMany();
+  await db.notice.deleteMany();
+
+  for (const b of banners) await db.banner.create({ data: b });
+  for (const n of notices) await db.notice.create({ data: n });
 
   for (const p of products) {
     await db.product.create({
@@ -78,7 +124,7 @@ async function main() {
   console.log(
     "Seeded",
     products.length,
-    "products + members (demo@luvy.co.kr/luvy1234, admin@luvy.co.kr/admin1234)",
+    `products, ${banners.length} banners, ${notices.length} notices + members (demo@luvy.co.kr/luvy1234, admin@luvy.co.kr/admin1234)`,
   );
 }
 

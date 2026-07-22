@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { Icon } from "@/components/ui/Icon";
-import { notices } from "@/lib/mock/notices";
 
 const tagStyles: Record<string, string> = {
   notice: "bg-brand-100 text-brand-600",
@@ -8,18 +7,26 @@ const tagStyles: Record<string, string> = {
   event: "bg-brand-500 text-white",
 };
 
-export function NoticeStrip() {
+export interface NoticeData {
+  kind: string;
+  tag: string;
+  text: string;
+}
+
+export function NoticeStrip({ notices }: { notices: NoticeData[] }) {
+  if (notices.length === 0) return null;
+
   return (
     <section className="mx-auto max-w-[1280px] px-6 py-8">
       <div className="grid items-stretch gap-4 rounded-2xl border border-line bg-white p-2 shadow-[var(--shadow-soft)] md:grid-cols-[1fr_1fr_1fr_auto]">
-        {notices.map((notice) => (
+        {notices.map((notice, i) => (
           <Link
-            key={notice.kind}
+            key={i}
             href="/support/notice"
             className="group flex items-center gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-brand-50/60"
           >
             <span
-              className={`shrink-0 rounded-pill px-3 py-1 text-[12px] font-bold ${tagStyles[notice.kind]}`}
+              className={`shrink-0 rounded-pill px-3 py-1 text-[12px] font-bold ${tagStyles[notice.kind] ?? "bg-brand-50 text-brand-500"}`}
             >
               {notice.tag}
             </span>

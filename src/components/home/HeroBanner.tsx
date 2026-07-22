@@ -5,11 +5,33 @@ import Image from "next/image";
 import Link from "next/link";
 import { Icon } from "@/components/ui/Icon";
 import { TrustBadges } from "./TrustBadges";
-import { banners } from "@/lib/mock/banners";
+
+export interface HeroBannerData {
+  id: string;
+  eyebrow: string;
+  title: string;
+  subtitle: string;
+  primaryLabel: string;
+  primaryHref: string;
+  secondaryLabel: string;
+  secondaryHref: string;
+}
+
+const FALLBACK: HeroBannerData = {
+  id: "fallback",
+  eyebrow: "LOVE YOUR BUSINESS",
+  title: "LUVY, 당신의 비즈니스를\n더 빛나게",
+  subtitle: "신뢰할 수 있는 제품과 파트너십으로\n성인 라이프스타일 비즈니스의 성공을 함께합니다.",
+  primaryLabel: "회원가입하고 혜택받기",
+  primaryHref: "/signup",
+  secondaryLabel: "B2B 안내 보기",
+  secondaryHref: "/partner",
+};
 
 const AUTOPLAY_MS = 6000;
 
-export function HeroBanner() {
+export function HeroBanner({ banners: input }: { banners: HeroBannerData[] }) {
+  const banners = input.length > 0 ? input : [FALLBACK];
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const count = banners.length;
@@ -25,7 +47,7 @@ export function HeroBanner() {
     return () => clearTimeout(t);
   }, [index, paused, go]);
 
-  const banner = banners[index];
+  const banner = banners[index] ?? banners[0];
 
   return (
     <section
@@ -70,10 +92,10 @@ export function HeroBanner() {
 
               <div className="mt-7 flex flex-wrap items-center gap-3 lg:mt-9">
                 <Link
-                  href={banner.primaryCta.href}
+                  href={banner.primaryHref}
                   className="group inline-flex items-center gap-2 rounded-pill bg-brand-500 px-7 py-3.5 text-[15px] font-bold text-white shadow-[var(--shadow-card)] transition-all hover:bg-brand-600 hover:shadow-lg"
                 >
-                  {banner.primaryCta.label}
+                  {banner.primaryLabel}
                   <Icon
                     name="arrowRight"
                     className="h-4 w-4 transition-transform group-hover:translate-x-1"
@@ -81,10 +103,10 @@ export function HeroBanner() {
                   />
                 </Link>
                 <Link
-                  href={banner.secondaryCta.href}
+                  href={banner.secondaryHref}
                   className="group inline-flex items-center gap-2 rounded-pill border border-brand-300 bg-white/70 px-7 py-3.5 text-[15px] font-bold text-brand-600 transition-all hover:border-brand-400 hover:bg-white"
                 >
-                  {banner.secondaryCta.label}
+                  {banner.secondaryLabel}
                   <Icon
                     name="arrowRight"
                     className="h-4 w-4 transition-transform group-hover:translate-x-1"
