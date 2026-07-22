@@ -1,15 +1,22 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { Icon } from "@/components/ui/Icon";
 
 export function SearchBar() {
+  const router = useRouter();
   return (
     <form
       role="search"
-      onSubmit={(e) => e.preventDefault()}
+      onSubmit={(e) => {
+        e.preventDefault();
+        const q = new FormData(e.currentTarget).get("q")?.toString().trim() ?? "";
+        if (q) router.push(`/search?q=${encodeURIComponent(q)}`);
+      }}
       className="group flex h-12 w-full max-w-[380px] items-center gap-2 rounded-pill border border-brand-200 bg-white pl-5 pr-2 transition-colors focus-within:border-brand-400"
     >
       <input
+        name="q"
         type="text"
         placeholder="상품명 또는 키워드를 검색하세요"
         aria-label="상품 검색"
