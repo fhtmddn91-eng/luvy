@@ -35,12 +35,12 @@ export async function signupAction(_prev: AuthState, formData: FormData): Promis
       businessNumber: normalizeBizNumber(businessNumber),
       ownerName,
       phone,
-      status: "APPROVED",
+      status: "PENDING",
     },
   });
 
   await createSession(user.id);
-  redirect("/");
+  redirect("/account/pending");
 }
 
 export async function loginAction(_prev: AuthState, formData: FormData): Promise<AuthState> {

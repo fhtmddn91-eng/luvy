@@ -2,11 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { getSession, requireUser } from "@/lib/auth";
+import { getSession, requireUser, requireApprovedUser } from "@/lib/auth";
 import { getMoq, type Tier } from "@/lib/pricing";
 
 export async function addToCart(productId: string, quantity: number): Promise<void> {
-  const user = await requireUser();
+  const user = await requireApprovedUser();
   const product = await db.product.findUnique({ where: { id: productId }, include: { priceTiers: true } });
   if (!product) return;
 

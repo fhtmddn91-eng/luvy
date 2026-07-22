@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { requireUser } from "@/lib/auth";
+import { requireApprovedUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { CartItemRow, type CartRowData } from "@/components/cart/CartItemRow";
 import { CartSummary } from "@/components/cart/CartSummary";
 import { getMoq, resolveUnitPrice, shippingFor, type Tier } from "@/lib/pricing";
 
 export default async function CartPage() {
-  const user = await requireUser();
+  const user = await requireApprovedUser();
   const items = await db.cartItem.findMany({
     where: { userId: user.id },
     include: { product: { include: { priceTiers: true } } },

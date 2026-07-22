@@ -16,7 +16,7 @@ export {
   verifySession,
 } from "./session";
 
-export type SessionUser = { id: string; email: string; companyName: string; role: string };
+export type SessionUser = { id: string; email: string; companyName: string; role: string; status: string };
 
 export async function createSession(userId: string): Promise<void> {
   const token = await signSession({ userId });
@@ -43,7 +43,7 @@ export async function getSession(): Promise<SessionUser | null> {
   if (!payload) return null;
   const user = await db.user.findUnique({
     where: { id: payload.userId },
-    select: { id: true, email: true, companyName: true, role: true },
+    select: { id: true, email: true, companyName: true, role: true, status: true },
   });
   return user;
 }
@@ -51,6 +51,13 @@ export async function getSession(): Promise<SessionUser | null> {
 export async function requireUser(): Promise<SessionUser> {
   const user = await getSession();
   if (!user) redirect("/login");
+  return user;
+}
+
+/** 로그인 + 가입 승인(APPROVED) 완료 회원만 통과. 미승인은 안내 페이지로. */
+export async function requireApprovedUser(): Promise<SessionUser> {
+  const user = await requireUser();
+  if (user.status !== "APPROVED") redirect("/account/pending");
   return user;
 }
 

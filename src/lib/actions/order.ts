@@ -3,13 +3,13 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { requireUser } from "@/lib/auth";
+import { requireApprovedUser } from "@/lib/auth";
 import { resolveUnitPrice, shippingFor, type Tier } from "@/lib/pricing";
 
 export type OrderState = { error?: string };
 
 export async function placeOrder(_prev: OrderState, formData: FormData): Promise<OrderState> {
-  const user = await requireUser();
+  const user = await requireApprovedUser();
 
   const recipient = String(formData.get("recipient") ?? "").trim();
   const phone = String(formData.get("phone") ?? "").trim();
