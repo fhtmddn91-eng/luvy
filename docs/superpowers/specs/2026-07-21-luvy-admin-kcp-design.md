@@ -10,10 +10,12 @@
 - **어드민 위치**: 별도 앱이 아닌 **동일 Next.js 앱의 `/admin` 라우트 그룹**.
   DB/컴포넌트/인증 재사용, 단일 배포. `User.role`(MEMBER/ADMIN) 추가,
   `middleware.ts`에서 `/admin/*`은 ADMIN만 통과(그 외 로그인 리다이렉트).
-- **KCP 연동**: **표준결제창(웹) + 서버 승인** 방식.
-  프론트에서 결제창 호출 → 인증결과 수신 → **서버가 승인 API 호출**(위변조 방지).
-  결제 금액은 항상 서버 DB의 주문 금액으로 재검증. 개발은 KCP **테스트 상점코드**,
-  실 상점코드/서명키는 `.env` 분리.
+- **KCP 연동**: **포트원(PortOne) V2 경유**. KCP를 포트원 콘솔에서 채널로 연결하고,
+  프론트는 `@portone/browser-sdk`의 `requestPayment()`로 결제창 호출,
+  서버는 `@portone/server-sdk`로 **결제 단건 조회(getPayment)로 승인·금액 검증** + 웹훅 대사.
+  결제 금액은 항상 서버 DB의 주문 금액과 대조(위변조 방지). 개발은 포트원 **테스트 채널**
+  (KCP 테스트 MID 연결), storeId/channelKey/API secret은 `.env` 분리.
+  수단 매핑: 카드=`CARD`, 계좌이체=`TRANSFER`, 간편결제=`EASY_PAY`.
 - **파일 저장**: dev는 `public/uploads/` 로컬 저장. `lib/storage.ts` 인터페이스로
   격리해 배포 시 S3류 교체 가능.
 
@@ -27,9 +29,11 @@ Order.status 확장:
   PENDING_PAYMENT → PAID → PREPARING → SHIPPED → DELIVERED
   (+ CANCELED, PAYMENT_FAILED)
 
-Payment (신규):
-  id, orderId(unique), method(CARD|BANK|EASYPAY), kcpTno(KCP 거래번호),
-  amount, status(READY|APPROVED|CANCELED|FAILED),
+Payment (신규):  // 포트원 V2 기준
+  id, orderId(unique), paymentId(포트원 결제 식별자 = 우리가 발급),
+  pgTxId(포트원/PG 거래번호), channel("kcp"),
+  method(CARD|TRANSFER|EASY_PAY), amount,
+  status(READY|PAID|CANCELED|FAILED),
   approvedAt, canceledAt, rawResponse(String, JSON 원문 — 정산/분쟁 대비)
 
 Banner (신규):   eyebrow, title, subtitle, primaryLabel/primaryHref,
@@ -44,16 +48,17 @@ Product += image(업로드 경로) — 기존 필드 활용
 
 ```
 [체크아웃 제출]
-  서버: Order 생성 (status=PENDING_PAYMENT, 서버 계산 금액 고정)
-  프론트: KCP 결제창 호출 (주문번호·금액·수단 전달)
-  인증 완료: KCP → returnUrl 로 인증데이터 POST
-  서버: KCP 승인 API 호출
-    성공 → Payment(APPROVED) 기록 + Order=PAID + 장바구니 비움
-    실패 → Order=PAYMENT_FAILED (재시도 허용)
-[KCP 노티(웹훅)]
-  서버 수신 → 승인/취소 상태 대사(이중확인)
+  서버: Order 생성 (status=PENDING_PAYMENT) + paymentId 발급, 금액 고정
+  프론트: PortOne.requestPayment({ storeId, channelKey, paymentId,
+          orderName, totalAmount, currency:"CURRENCY_KRW", payMethod })
+  결제창 완료: 브라우저가 서버 /api/payments/complete 로 paymentId 전달
+  서버: server-sdk getPayment(paymentId)
+    status=PAID & amount.total==주문금액 → Payment(PAID)+Order=PAID+장바구니 비움
+    불일치/실패 → Order=PAYMENT_FAILED (재시도 허용)
+[웹훅 /api/payments/webhook]
+  포트원 서명 검증(Webhook.verify) → 결제 재조회로 상태 대사(이중확인)
 [어드민 결제취소]
-  KCP 취소 API → Payment=CANCELED + Order=CANCELED
+  server-sdk cancelPayment(paymentId) → Payment=CANCELED + Order=CANCELED
 ```
 
 - 금액 검증: 결제창 요청·승인 응답 금액을 서버 주문 금액과 대조(불일치 시 거절).

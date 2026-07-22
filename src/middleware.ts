@@ -6,7 +6,7 @@ const secret = new TextEncoder().encode(
   process.env.AUTH_SECRET ?? "dev-only-luvy-secret-change-in-prod-0123456789abcdef",
 );
 
-const PROTECTED = ["/category", "/search", "/products", "/cart", "/checkout", "/orders"];
+const PROTECTED = ["/category", "/search", "/products", "/cart", "/checkout", "/orders", "/admin"];
 
 async function hasValidSession(req: NextRequest): Promise<boolean> {
   const token = req.cookies.get(SESSION_COOKIE)?.value;
@@ -39,5 +39,6 @@ export const config = {
     "/cart/:path*",
     "/checkout/:path*",
     "/orders/:path*",
+    "/admin/:path*",
   ],
 };

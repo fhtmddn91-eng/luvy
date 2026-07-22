@@ -1,9 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { UtilBar } from "@/components/layout/UtilBar";
-import { Header } from "@/components/layout/Header";
-import { CategoryBar } from "@/components/layout/CategoryBar";
-import { Footer } from "@/components/layout/Footer";
 
 export const metadata: Metadata = {
   title: "LUVY — 성인 라이프스타일 B2B 플랫폼",
@@ -26,13 +22,7 @@ export default function RootLayout({
           href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
         />
       </head>
-      <body>
-        <UtilBar />
-        <Header />
-        <CategoryBar />
-        <main>{children}</main>
-        <Footer />
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

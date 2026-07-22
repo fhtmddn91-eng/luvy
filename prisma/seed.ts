@@ -58,10 +58,28 @@ async function main() {
       ownerName: "김러비",
       phone: "010-1234-5678",
       status: "APPROVED",
+      role: "MEMBER",
     },
   });
 
-  console.log("Seeded", products.length, "products + demo user (demo@luvy.co.kr / luvy1234)");
+  await db.user.create({
+    data: {
+      email: "admin@luvy.co.kr",
+      passwordHash: await bcrypt.hash("admin1234", 10),
+      companyName: "LUVY 운영팀",
+      businessNumber: "0000000000",
+      ownerName: "관리자",
+      phone: "010-0000-0000",
+      status: "APPROVED",
+      role: "ADMIN",
+    },
+  });
+
+  console.log(
+    "Seeded",
+    products.length,
+    "products + members (demo@luvy.co.kr/luvy1234, admin@luvy.co.kr/admin1234)",
+  );
 }
 
 main().finally(() => db.$disconnect());

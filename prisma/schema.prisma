@@ -16,6 +16,7 @@ model User {
   ownerName      String
   phone          String
   status         String     @default("APPROVED")
+  role           String     @default("MEMBER")
   createdAt      DateTime   @default(now())
   cartItems      CartItem[]
   orders         Order[]

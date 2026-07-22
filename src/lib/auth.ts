@@ -16,7 +16,7 @@ export {
   verifySession,
 } from "./session";
 
-export type SessionUser = { id: string; email: string; companyName: string };
+export type SessionUser = { id: string; email: string; companyName: string; role: string };
 
 export async function createSession(userId: string): Promise<void> {
   const token = await signSession({ userId });
@@ -43,7 +43,7 @@ export async function getSession(): Promise<SessionUser | null> {
   if (!payload) return null;
   const user = await db.user.findUnique({
     where: { id: payload.userId },
-    select: { id: true, email: true, companyName: true },
+    select: { id: true, email: true, companyName: true, role: true },
   });
   return user;
 }
@@ -51,5 +51,12 @@ export async function getSession(): Promise<SessionUser | null> {
 export async function requireUser(): Promise<SessionUser> {
   const user = await getSession();
   if (!user) redirect("/login");
+  return user;
+}
+
+export async function requireAdmin(): Promise<SessionUser> {
+  const user = await getSession();
+  if (!user) redirect("/login?next=/admin");
+  if (user.role !== "ADMIN") redirect("/");
   return user;
 }
