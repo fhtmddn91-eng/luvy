@@ -10,7 +10,12 @@ const secret = new TextEncoder().encode(
   rawSecret ?? "dev-only-luvy-secret-change-in-prod-0123456789abcdef",
 );
 
-const PROTECTED = ["/category", "/search", "/products", "/cart", "/checkout", "/orders", "/admin"];
+/**
+ * 폐쇄몰(회원제): 로그인/회원가입을 제외한 모든 페이지는 세션이 있어야 접근 가능.
+ * /api 는 matcher에서 제외 — 결제 웹훅은 공개여야 하고(/api/payments/webhook,
+ * 서명 검증으로 보호), /api/payments/complete 는 핸들러 내부에서 세션을 검증한다.
+ */
+const PUBLIC_PATHS = ["/login", "/signup"];
 
 async function hasValidSession(req: NextRequest): Promise<boolean> {
   const token = req.cookies.get(SESSION_COOKIE)?.value;
@@ -25,24 +30,19 @@ async function hasValidSession(req: NextRequest): Promise<boolean> {
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  const isProtected = PROTECTED.some((p) => pathname === p || pathname.startsWith(p + "/"));
-  if (!isProtected) return NextResponse.next();
+
+  const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
+  if (isPublic) return NextResponse.next();
 
   if (await hasValidSession(req)) return NextResponse.next();
 
   const loginUrl = new URL("/login", req.url);
-  loginUrl.searchParams.set("next", pathname + req.nextUrl.search);
+  const next = pathname + req.nextUrl.search;
+  if (next !== "/") loginUrl.searchParams.set("next", next);
   return NextResponse.redirect(loginUrl);
 }
 
 export const config = {
-  matcher: [
-    "/category/:path*",
-    "/search/:path*",
-    "/products/:path*",
-    "/cart/:path*",
-    "/checkout/:path*",
-    "/orders/:path*",
-    "/admin/:path*",
-  ],
+  // 정적 자원(_next, 확장자 있는 파일)과 /api 를 제외한 모든 경로에 적용
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|.*\\..*).*)"],
 };
