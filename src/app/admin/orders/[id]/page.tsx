@@ -3,14 +3,21 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { won } from "@/lib/format";
 import { FULFILLMENT_STATUSES, orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
-import { setOrderStatus } from "@/lib/actions/admin-orders";
+import { setOrderStatus, cancelOrderPayment } from "@/lib/actions/admin-orders";
 
 const dateFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(d);
 
+const payMethodLabel: Record<string, string> = {
+  CARD: "신용카드", TRANSFER: "계좌이체", EASY_PAY: "간편결제",
+};
+
 export default async function AdminOrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const order = await db.order.findUnique({ where: { id }, include: { items: true, user: true } });
+  const order = await db.order.findUnique({
+    where: { id },
+    include: { items: true, user: true, payment: true },
+  });
   if (!order) notFound();
 
   return (
@@ -61,23 +68,46 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
           </section>
         </div>
 
-        <section className="h-fit rounded-2xl border border-line bg-white p-6">
-          <h2 className="mb-4 text-[15px] font-bold text-ink">상태 변경</h2>
-          <form action={setOrderStatus.bind(null, order.id)} className="space-y-3">
-            <select
-              name="status"
-              defaultValue={order.status}
-              className="h-11 w-full rounded-lg border border-line bg-white px-3 text-[14px] focus:border-brand-400 focus:outline-none"
-            >
-              {FULFILLMENT_STATUSES.map((s) => (
-                <option key={s} value={s}>{orderStatusLabel(s)}</option>
-              ))}
-            </select>
-            <button type="submit" className="h-11 w-full rounded-pill bg-brand-500 text-[14px] font-bold text-white hover:bg-brand-600">
-              변경 저장
-            </button>
-          </form>
-        </section>
+        <div className="h-fit space-y-4">
+          <section className="rounded-2xl border border-line bg-white p-6">
+            <h2 className="mb-4 text-[15px] font-bold text-ink">결제</h2>
+            {order.payment ? (
+              <dl className="space-y-1.5 text-[13px] text-ink-soft">
+                <div className="flex justify-between"><dt className="text-muted">상태</dt><dd className="font-semibold">{orderStatusLabel(order.payment.status)}</dd></div>
+                <div className="flex justify-between"><dt className="text-muted">수단</dt><dd>{order.payment.method ? payMethodLabel[order.payment.method] ?? order.payment.method : "-"}</dd></div>
+                <div className="flex justify-between"><dt className="text-muted">채널</dt><dd>{order.payment.channel.toUpperCase()}</dd></div>
+                <div className="flex justify-between"><dt className="text-muted">금액</dt><dd className="font-semibold">{won(order.payment.amount)}</dd></div>
+              </dl>
+            ) : (
+              <p className="text-[13px] text-muted">결제 정보 없음 (모의 주문)</p>
+            )}
+          </section>
+
+          <section className="rounded-2xl border border-line bg-white p-6">
+            <h2 className="mb-4 text-[15px] font-bold text-ink">상태 변경</h2>
+            <form action={setOrderStatus.bind(null, order.id)} className="space-y-3">
+              <select
+                name="status"
+                defaultValue={order.status}
+                className="h-11 w-full rounded-lg border border-line bg-white px-3 text-[14px] focus:border-brand-400 focus:outline-none"
+              >
+                {FULFILLMENT_STATUSES.map((s) => (
+                  <option key={s} value={s}>{orderStatusLabel(s)}</option>
+                ))}
+              </select>
+              <button type="submit" className="h-11 w-full rounded-pill bg-brand-500 text-[14px] font-bold text-white hover:bg-brand-600">
+                변경 저장
+              </button>
+            </form>
+            {order.status !== "CANCELED" && (
+              <form action={cancelOrderPayment.bind(null, order.id)} className="mt-3 border-t border-line pt-3">
+                <button type="submit" className="h-10 w-full rounded-pill border border-line bg-white text-[13px] font-bold text-ink-soft hover:bg-cream">
+                  {order.payment?.status === "PAID" ? "결제 취소 (환불)" : "주문 취소"}
+                </button>
+              </form>
+            )}
+          </section>
+        </div>
       </div>
     </div>
   );

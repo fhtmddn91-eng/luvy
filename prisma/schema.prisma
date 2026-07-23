@@ -73,6 +73,23 @@ model Order {
   createdAt   DateTime    @default(now())
   user        User        @relation(fields: [userId], references: [id])
   items       OrderItem[]
+  payment     Payment?
+}
+
+model Payment {
+  id          String    @id @default(cuid())
+  orderId     String    @unique
+  paymentId   String    @unique // 포트원 결제 식별자 (고객사 채번)
+  pgTxId      String?
+  channel     String    @default("kcp")
+  method      String? // CARD | TRANSFER | EASY_PAY
+  amount      Int
+  status      String    @default("READY") // READY | PAID | CANCELED | FAILED
+  approvedAt  DateTime?
+  canceledAt  DateTime?
+  rawResponse String?
+  createdAt   DateTime  @default(now())
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
 
 model OrderItem {

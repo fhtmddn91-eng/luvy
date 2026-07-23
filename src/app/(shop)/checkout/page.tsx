@@ -2,11 +2,14 @@ import { redirect } from "next/navigation";
 import { requireApprovedUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { CheckoutForm } from "./CheckoutForm";
+import { PortOneCheckout } from "@/components/checkout/PortOneCheckout";
+import { isPortOneConfigured, PORTONE_STORE_ID, PORTONE_CHANNEL_KEY_KCP } from "@/lib/portone";
 import { won } from "@/lib/format";
 import { resolveUnitPrice, shippingFor, type Tier } from "@/lib/pricing";
 
 export default async function CheckoutPage() {
   const user = await requireApprovedUser();
+  const portoneMode = isPortOneConfigured();
   const items = await db.cartItem.findMany({
     where: { userId: user.id },
     include: { product: { include: { priceTiers: true } } },
@@ -24,7 +27,16 @@ export default async function CheckoutPage() {
     <div className="mx-auto max-w-[1080px] px-6 py-10">
       <h1 className="mb-6 text-[26px] font-extrabold text-ink">주문/결제</h1>
       <div className="grid gap-8 lg:grid-cols-[1fr_360px]">
-        <CheckoutForm />
+        {portoneMode ? (
+          <PortOneCheckout
+            storeId={PORTONE_STORE_ID}
+            channelKey={PORTONE_CHANNEL_KEY_KCP}
+            customerName={user.companyName}
+            customerEmail={user.email}
+          />
+        ) : (
+          <CheckoutForm />
+        )}
         <div className="rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-soft)]">
           <h2 className="text-[16px] font-bold text-ink">주문 상품</h2>
           <ul className="mt-4 space-y-3 text-[14px]">
