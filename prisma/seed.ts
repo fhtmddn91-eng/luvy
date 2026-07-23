@@ -31,10 +31,10 @@ const products: Seed[] = [
 const banners = [
   {
     eyebrow: "LOVE YOUR BUSINESS",
-    title: "LUVY, 당신의 비즈니스를\n더 빛나게",
-    subtitle: "신뢰할 수 있는 제품과 파트너십으로\n성인 라이프스타일 비즈니스의 성공을 함께합니다.",
-    primaryLabel: "회원가입하고 혜택받기", primaryHref: "/signup",
-    secondaryLabel: "B2B 안내 보기", secondaryHref: "/partner",
+    title: "판매는 당신이,\n준비는 LUVY가.",
+    subtitle: "상세페이지부터 썸네일까지\n판매에 필요한 모든 자료를 제공합니다.",
+    primaryLabel: "회원가입하고 시작하기", primaryHref: "/signup",
+    secondaryLabel: "판매자료 다운로드", secondaryHref: "/partner",
     sortOrder: 1,
   },
   {

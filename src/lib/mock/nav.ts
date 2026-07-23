@@ -8,12 +8,13 @@ export const utilLinks: NavLink[] = [
   { label: "고객센터", href: "/support" },
 ];
 
-export const gnbLinks: NavLink[] = [
-  { label: "카테고리", href: "/category", hasDropdown: true },
-  { label: "브랜드", href: "/brands" },
+export const gnbLinks: (NavLink & { badge?: string })[] = [
+  { label: "이번주 추천", href: "/new", badge: "NEW" },
   { label: "신상품", href: "/new" },
-  { label: "베스트", href: "/best" },
+  { label: "인기상품", href: "/best" },
   { label: "기획전", href: "/events" },
   { label: "고객지원", href: "/support" },
-  { label: "파트너센터", href: "/partner" },
 ];
+
+/** 검색창 하단 추천 검색어 */
+export const recommendedKeywords = ["러브젤", "딜도", "SM", "애널", "콘돔", "마사지"];

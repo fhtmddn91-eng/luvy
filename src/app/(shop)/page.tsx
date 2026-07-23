@@ -1,5 +1,8 @@
 import { db } from "@/lib/db";
 import { HeroBanner } from "@/components/home/HeroBanner";
+import { HeroWidget } from "@/components/home/HeroWidget";
+import { QuickMenu } from "@/components/home/QuickMenu";
+import { NewProducts } from "@/components/home/NewProducts";
 import { NoticeStrip } from "@/components/home/NoticeStrip";
 import { FeatureGrid } from "@/components/home/FeatureGrid";
 
@@ -11,7 +14,9 @@ export default async function HomePage() {
 
   return (
     <>
-      <HeroBanner banners={banners} />
+      <HeroBanner banners={banners} widget={<HeroWidget />} />
+      <QuickMenu />
+      <NewProducts />
       <NoticeStrip notices={notices} />
       <FeatureGrid />
     </>

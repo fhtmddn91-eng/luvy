@@ -20,17 +20,23 @@ export interface HeroBannerData {
 const FALLBACK: HeroBannerData = {
   id: "fallback",
   eyebrow: "LOVE YOUR BUSINESS",
-  title: "LUVY, 당신의 비즈니스를\n더 빛나게",
-  subtitle: "신뢰할 수 있는 제품과 파트너십으로\n성인 라이프스타일 비즈니스의 성공을 함께합니다.",
-  primaryLabel: "회원가입하고 혜택받기",
+  title: "판매는 당신이,\n준비는 LUVY가.",
+  subtitle: "상세페이지부터 썸네일까지\n판매에 필요한 모든 자료를 제공합니다.",
+  primaryLabel: "회원가입하고 시작하기",
   primaryHref: "/signup",
-  secondaryLabel: "B2B 안내 보기",
+  secondaryLabel: "판매자료 다운로드",
   secondaryHref: "/partner",
 };
 
 const AUTOPLAY_MS = 6000;
 
-export function HeroBanner({ banners: input }: { banners: HeroBannerData[] }) {
+export function HeroBanner({
+  banners: input,
+  widget,
+}: {
+  banners: HeroBannerData[];
+  widget?: React.ReactNode;
+}) {
   const banners = input.length > 0 ? input : [FALLBACK];
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
@@ -118,6 +124,13 @@ export function HeroBanner({ banners: input }: { banners: HeroBannerData[] }) {
               </div>
             </div>
           </div>
+
+          {/* Member widget (우측 오버레이) */}
+          {widget && (
+            <div className="absolute right-16 top-1/2 z-20 hidden -translate-y-1/2 xl:block">
+              {widget}
+            </div>
+          )}
 
           {/* Arrows */}
           <button
