@@ -17,7 +17,13 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   return (
     <div className="mx-auto max-w-[1080px] px-6 py-10">
       <div className="grid gap-10 lg:grid-cols-2">
-        <ProductThumb id={product.id} brand={product.brand} className="aspect-square w-full rounded-2xl" />
+        <ProductThumb
+          id={product.id}
+          brand={product.brand}
+          image={product.image}
+          alt={product.name}
+          className="aspect-square w-full rounded-2xl"
+        />
         <div>
           <p className="text-[13px] font-semibold text-brand-500">
             {product.brand}{category ? ` · ${category.name}` : ""}

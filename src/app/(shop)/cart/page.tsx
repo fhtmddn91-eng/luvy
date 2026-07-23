@@ -18,6 +18,7 @@ export default async function CartPage() {
     productId: it.productId,
     name: it.product.name,
     brand: it.product.brand,
+    image: it.product.image || undefined,
     quantity: it.quantity,
     moq: getMoq(it.product.priceTiers as Tier[]),
     tiers: it.product.priceTiers as Tier[],

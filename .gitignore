@@ -31,3 +31,6 @@ next-env.d.ts
 /prisma/dev.db
 /prisma/dev.db-journal
 /src/generated
+
+# runtime uploads (product images)
+/public/uploads

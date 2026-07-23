@@ -4,6 +4,7 @@ import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
 import { categories } from "@/lib/mock/categories";
 import { setProductStatus, deleteProduct } from "@/lib/actions/admin-products";
+import { ProductThumb } from "@/components/product/ProductThumb";
 
 const categoryName = (slug: string) => categories.find((c) => c.slug === slug)?.name ?? slug;
 
@@ -71,7 +72,14 @@ export default async function AdminProductsPage({
                 return (
                   <tr key={p.id} className="border-b border-line/60">
                     <td className="px-4 py-3">
-                      <Link href={`/admin/products/${p.id}`} className="font-semibold text-ink hover:text-brand-600">
+                      <Link href={`/admin/products/${p.id}`} className="flex items-center gap-3 font-semibold text-ink hover:text-brand-600">
+                        <ProductThumb
+                          id={p.id}
+                          brand={p.brand}
+                          image={p.image || undefined}
+                          alt={p.name}
+                          className="h-10 w-10 shrink-0 rounded-lg text-[10px]"
+                        />
                         {p.name}
                       </Link>
                     </td>

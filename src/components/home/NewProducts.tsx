@@ -45,7 +45,7 @@ export async function NewProducts() {
               className="group w-[150px] shrink-0"
             >
               <div className="relative overflow-hidden rounded-xl border border-line">
-                <ProductThumb id={p.id} brand={p.brand} className="aspect-square w-full" />
+                <ProductThumb id={p.id} brand={p.brand} image={p.image} alt={p.name} className="aspect-square w-full" />
                 <span className="absolute left-2 top-2 rounded-pill bg-brand-500 px-2 py-0.5 text-[10px] font-extrabold text-white">
                   NEW
                 </span>

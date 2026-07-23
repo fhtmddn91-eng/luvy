@@ -7,6 +7,7 @@ export interface ProductCardData {
   id: string;
   name: string;
   brand: string;
+  image?: string;
   priceTiers: Tier[];
 }
 
@@ -18,7 +19,13 @@ export function ProductCard({ product }: { product: ProductCardData }) {
       href={`/products/${product.id}`}
       className="group flex flex-col overflow-hidden rounded-2xl border border-line bg-white transition-shadow hover:shadow-[var(--shadow-card)]"
     >
-      <ProductThumb id={product.id} brand={product.brand} className="aspect-square w-full" />
+      <ProductThumb
+        id={product.id}
+        brand={product.brand}
+        image={product.image}
+        alt={product.name}
+        className="aspect-square w-full"
+      />
       <div className="flex flex-1 flex-col p-4">
         <span className="text-[12px] font-semibold text-brand-500">{product.brand}</span>
         <h3 className="mt-1 line-clamp-2 flex-1 text-[14px] font-medium text-ink group-hover:text-brand-600">

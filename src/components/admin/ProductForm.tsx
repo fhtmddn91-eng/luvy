@@ -14,6 +14,7 @@ export interface ProductFormData {
   description: string;
   basePrice: number;
   status: string;
+  image?: string;
   priceTiers: { minQty: number; unitPrice: number }[];
 }
 
@@ -84,6 +85,31 @@ export function ProductForm({ action, product }: { action: Action; product?: Pro
           <option value="ACTIVE">판매중</option>
           <option value="HIDDEN">숨김</option>
         </select>
+      </div>
+
+      <div>
+        <label className={labelCls}>상품 이미지 (JPG/PNG/WebP, 5MB 이하)</label>
+        <div className="flex items-center gap-4">
+          {product?.image && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={product.image}
+              alt="현재 이미지"
+              className="h-20 w-20 rounded-xl border border-line object-cover"
+            />
+          )}
+          <div className="flex-1">
+            <input
+              name="imageFile"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/avif"
+              className="block w-full text-[13px] text-ink-soft file:mr-3 file:rounded-pill file:border-0 file:bg-brand-100 file:px-4 file:py-2 file:text-[13px] file:font-bold file:text-brand-600 hover:file:bg-brand-200"
+            />
+            <p className="mt-1 text-[12px] text-muted">
+              {product?.image ? "새 이미지를 선택하면 기존 이미지를 교체합니다." : "선택하지 않으면 브랜드 타일이 표시됩니다."}
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="rounded-xl border border-line bg-cream/50 p-4">

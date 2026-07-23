@@ -4,8 +4,21 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
+import { saveImageUpload, deleteImageUpload } from "@/lib/storage";
 
 export type ProductFormState = { error?: string };
+
+/**
+ * 업로드 파일이 있으면 저장하고 URL을, 없으면 undefined(기존 유지)를 반환.
+ * 실패 시 문자열 에러.
+ */
+async function handleImage(formData: FormData): Promise<{ url?: string } | { error: string }> {
+  const file = formData.get("imageFile");
+  if (!(file instanceof File) || file.size === 0) return {};
+  const saved = await saveImageUpload(file);
+  if (!saved.ok) return { error: saved.error };
+  return { url: saved.url };
+}
 
 function parseTiers(formData: FormData): { minQty: number; unitPrice: number }[] {
   const minQtys = formData.getAll("tierMinQty").map((v) => parseInt(String(v), 10));
@@ -48,10 +61,14 @@ export async function createProduct(_prev: ProductFormState, formData: FormData)
   const err = validate(fields, tiers);
   if (err) return { error: err };
 
+  const image = await handleImage(formData);
+  if ("error" in image) return { error: image.error };
+
   await db.product.create({
-    data: { ...fields, priceTiers: { create: tiers } },
+    data: { ...fields, image: image.url ?? "", priceTiers: { create: tiers } },
   });
   revalidatePath("/admin/products");
+  revalidatePath("/");
   redirect("/admin/products");
 }
 
@@ -62,15 +79,25 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
   const err = validate(fields, tiers);
   if (err) return { error: err };
 
+  const image = await handleImage(formData);
+  if ("error" in image) return { error: image.error };
+
+  // 새 이미지가 업로드되면 이전 업로드 파일은 정리
+  if (image.url) {
+    const prev = await db.product.findUnique({ where: { id }, select: { image: true } });
+    if (prev?.image) await deleteImageUpload(prev.image);
+  }
+
   await db.$transaction([
     db.priceTier.deleteMany({ where: { productId: id } }),
     db.product.update({
       where: { id },
-      data: { ...fields, priceTiers: { create: tiers } },
+      data: { ...fields, ...(image.url ? { image: image.url } : {}), priceTiers: { create: tiers } },
     }),
   ]);
   revalidatePath("/admin/products");
   revalidatePath(`/products/${id}`);
+  revalidatePath("/");
   redirect("/admin/products");
 }
 

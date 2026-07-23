@@ -13,6 +13,7 @@ export interface CartRowData {
   productId: string;
   name: string;
   brand: string;
+  image?: string;
   quantity: number;
   moq: number;
   tiers: Tier[];
@@ -37,7 +38,13 @@ export function CartItemRow({ item }: { item: CartRowData }) {
 
   return (
     <div className={`flex items-center gap-4 border-b border-line py-4 ${pending ? "opacity-60" : ""}`}>
-      <ProductThumb id={item.productId} brand={item.brand} className="h-20 w-20 shrink-0 rounded-xl" />
+      <ProductThumb
+        id={item.productId}
+        brand={item.brand}
+        image={item.image}
+        alt={item.name}
+        className="h-20 w-20 shrink-0 rounded-xl"
+      />
       <div className="min-w-0 flex-1">
         <p className="text-[12px] font-semibold text-brand-500">{item.brand}</p>
         <p className="truncate text-[14px] font-medium text-ink">{item.name}</p>
