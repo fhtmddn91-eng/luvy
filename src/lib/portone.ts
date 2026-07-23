@@ -5,12 +5,17 @@ import { PaymentClient } from "@portone/server-sdk";
 export const PORTONE_STORE_ID = process.env.PORTONE_STORE_ID ?? "";
 export const PORTONE_CHANNEL_KEY_KCP = process.env.PORTONE_CHANNEL_KEY_KCP ?? "";
 
-/** storeId/channelKey/secret이 모두 설정되어야 실제 결제 모드로 동작. */
+/**
+ * storeId/channelKey/API secret/webhook secret이 모두 설정되어야 실제 결제 모드로 동작.
+ * 웹훅 시크릿을 포함하는 이유: 결제창 완료(/complete) 콜백이 유실돼도 웹훅으로
+ * 상태를 대사할 수 있어야 "결제됐지만 미확정" 주문이 방치되지 않는다.
+ */
 export function isPortOneConfigured(): boolean {
   return Boolean(
     PORTONE_STORE_ID &&
       PORTONE_CHANNEL_KEY_KCP &&
-      process.env.PORTONE_API_SECRET,
+      process.env.PORTONE_API_SECRET &&
+      process.env.PORTONE_WEBHOOK_SECRET,
   );
 }
 

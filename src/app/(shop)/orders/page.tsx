@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { won } from "@/lib/format";
+import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
 
 const dateFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
@@ -9,7 +10,8 @@ const dateFmt = (d: Date) =>
 export default async function OrdersPage() {
   const user = await requireUser();
   const orders = await db.order.findMany({
-    where: { userId: user.id },
+    // 결제 전(대기/실패) 주문은 회원 내역에서 숨김
+    where: { userId: user.id, status: { notIn: ["PENDING_PAYMENT", "PAYMENT_FAILED"] } },
     include: { items: true },
     orderBy: { createdAt: "desc" },
   });
@@ -34,7 +36,7 @@ export default async function OrdersPage() {
               >
                 <div className="flex items-center justify-between text-[12px] text-muted">
                   <span>{dateFmt(o.createdAt)} · 주문 {o.id.slice(0, 8).toUpperCase()}</span>
-                  <span className="rounded-pill bg-brand-50 px-2.5 py-1 font-bold text-brand-600">접수됨</span>
+                  <span className={`rounded-pill px-2.5 py-1 font-bold ${orderStatusTone(o.status)}`}>{orderStatusLabel(o.status)}</span>
                 </div>
                 <div className="mt-2 flex items-center justify-between">
                   <p className="text-[15px] font-medium text-ink">

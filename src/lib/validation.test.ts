@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeBizNumber, isValidBizNumber, isValidEmail } from "./validation";
+import { normalizeBizNumber, isValidBizNumber, isValidEmail, safeNextPath } from "./validation";
 
 describe("normalizeBizNumber", () => {
   it("strips non-digits", () => {
@@ -24,5 +24,19 @@ describe("isValidEmail", () => {
   });
   it("rejects malformed", () => {
     expect(isValidEmail("nope")).toBe(false);
+  });
+});
+
+describe("safeNextPath", () => {
+  it("allows internal absolute paths", () => {
+    expect(safeNextPath("/admin")).toBe("/admin");
+    expect(safeNextPath("/cart?x=1")).toBe("/cart?x=1");
+  });
+  it("rejects protocol-relative / off-site redirects", () => {
+    expect(safeNextPath("//evil.com")).toBe("/");
+    expect(safeNextPath("/\\evil.com")).toBe("/");
+    expect(safeNextPath("https://evil.com")).toBe("/");
+    expect(safeNextPath("")).toBe("/");
+    expect(safeNextPath(null)).toBe("/");
   });
 });

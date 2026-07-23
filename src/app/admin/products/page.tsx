@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
 import { categories } from "@/lib/mock/categories";
 import { setProductStatus, deleteProduct } from "@/lib/actions/admin-products";
@@ -11,6 +12,7 @@ export default async function AdminProductsPage({
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
+  await requireAdmin();
   const { q } = await searchParams;
   const query = (q ?? "").trim();
 

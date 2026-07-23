@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
 import { ORDER_STATUS, orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
 
@@ -13,6 +14,7 @@ export default async function AdminOrdersPage({
 }: {
   searchParams: Promise<{ status?: string }>;
 }) {
+  await requireAdmin();
   const { status } = await searchParams;
   const active = status && ORDER_STATUS[status] ? status : "ALL";
 

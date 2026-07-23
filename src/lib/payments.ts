@@ -24,9 +24,14 @@ export async function buildOrderDraft(userId: string): Promise<OrderDraft | null
     where: { userId },
     include: { product: { include: { priceTiers: true } } },
   });
-  if (cart.length === 0) return null;
+  // 주문 가능한 항목만: 판매중(ACTIVE)이고 도매가 티어가 하나 이상 있어야 함.
+  // (비활성/티어 없는 상품이 0원으로 주문되는 것을 방지)
+  const orderable = cart.filter(
+    (it) => it.product.status === "ACTIVE" && it.product.priceTiers.length > 0,
+  );
+  if (orderable.length === 0) return null;
 
-  const items = cart.map((it) => {
+  const items = orderable.map((it) => {
     const unitPrice = resolveUnitPrice(it.product.priceTiers as Tier[], it.quantity);
     return {
       productId: it.productId,
@@ -83,17 +88,25 @@ export async function finalizePayment(paymentId: string): Promise<FinalizeResult
     return { ok: false, reason: "결제가 완료되지 않았거나 금액이 일치하지 않습니다.", orderId: payment.orderId };
   }
 
+  // 원자적 단일 실행: READY→PAID 전이를 성공시킨 호출자만 후속 처리(주문 확정·장바구니 비움).
+  // 웹훅과 /complete가 동시에 들어와도 side effect는 한 번만 발생한다.
+  const claimed = await db.payment.updateMany({
+    where: { paymentId, status: { not: "PAID" } },
+    data: {
+      status: "PAID",
+      method: info.method?.type ?? null,
+      pgTxId: info.pgTxId ?? null,
+      approvedAt: new Date(),
+      rawResponse: JSON.stringify(remote),
+    },
+  });
+
+  if (claimed.count === 0) {
+    // 다른 경로에서 이미 확정됨
+    return { ok: true, orderId: payment.orderId };
+  }
+
   await db.$transaction([
-    db.payment.update({
-      where: { paymentId },
-      data: {
-        status: "PAID",
-        method: info.method?.type ?? null,
-        pgTxId: info.pgTxId ?? null,
-        approvedAt: new Date(),
-        rawResponse: JSON.stringify(remote),
-      },
-    }),
     db.order.update({ where: { id: payment.orderId }, data: { status: "PAID" } }),
     db.cartItem.deleteMany({ where: { userId: payment.order.userId } }),
   ]);

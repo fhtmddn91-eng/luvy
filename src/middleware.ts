@@ -2,8 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 
 const SESSION_COOKIE = "luvy_session";
+const rawSecret = process.env.AUTH_SECRET;
+if (!rawSecret && process.env.NODE_ENV === "production") {
+  throw new Error("AUTH_SECRET environment variable is required in production");
+}
 const secret = new TextEncoder().encode(
-  process.env.AUTH_SECRET ?? "dev-only-luvy-secret-change-in-prod-0123456789abcdef",
+  rawSecret ?? "dev-only-luvy-secret-change-in-prod-0123456789abcdef",
 );
 
 const PROTECTED = ["/category", "/search", "/products", "/cart", "/checkout", "/orders", "/admin"];

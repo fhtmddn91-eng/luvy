@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
 import { StatCard } from "@/components/admin/StatCard";
 
@@ -7,6 +8,7 @@ const dateFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(d);
 
 export default async function AdminDashboardPage() {
+  await requireAdmin();
   const [orderCount, revenue, memberCount, productCount, recentOrders] = await Promise.all([
     db.order.count(),
     db.order.aggregate({ _sum: { total: true } }),

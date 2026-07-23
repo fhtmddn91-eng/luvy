@@ -5,13 +5,19 @@ import { db } from "@/lib/db";
 import { getSession, requireUser, requireApprovedUser } from "@/lib/auth";
 import { getMoq, type Tier } from "@/lib/pricing";
 
+const MAX_QTY = 100_000; // 상한 (정수 오버플로/오입력 방지)
+
+function clampQty(quantity: number, moq: number): number {
+  return Math.min(MAX_QTY, Math.max(moq, Math.floor(quantity) || moq));
+}
+
 export async function addToCart(productId: string, quantity: number): Promise<void> {
   const user = await requireApprovedUser();
   const product = await db.product.findUnique({ where: { id: productId }, include: { priceTiers: true } });
   if (!product) return;
 
   const moq = getMoq(product.priceTiers as Tier[]);
-  const qty = Math.max(moq, Math.floor(quantity) || moq);
+  const qty = clampQty(quantity, moq);
 
   await db.cartItem.upsert({
     where: { userId_productId: { userId: user.id, productId } },
@@ -32,7 +38,7 @@ export async function updateCartQty(itemId: string, quantity: number): Promise<v
   if (!item || item.userId !== user.id) return;
 
   const moq = getMoq(item.product.priceTiers as Tier[]);
-  const qty = Math.max(moq, Math.floor(quantity) || moq);
+  const qty = clampQty(quantity, moq);
 
   await db.cartItem.update({ where: { id: itemId }, data: { quantity: qty } });
   revalidatePath("/cart");

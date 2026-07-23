@@ -30,22 +30,25 @@ export async function placeOrder(_prev: OrderState, formData: FormData): Promise
   const draft = await buildOrderDraft(user.id);
   if (!draft) return { error: "장바구니가 비어 있습니다." };
 
-  const order = await db.order.create({
-    data: {
-      userId: user.id,
-      status: "RECEIVED",
-      recipient: s.recipient,
-      phone: s.phone,
-      address: s.address,
-      memo: s.memo,
-      subtotal: draft.subtotal,
-      shippingFee: draft.shippingFee,
-      total: draft.total,
-      items: { create: draft.items },
-    },
+  const order = await db.$transaction(async (tx) => {
+    const created = await tx.order.create({
+      data: {
+        userId: user.id,
+        status: "RECEIVED",
+        recipient: s.recipient,
+        phone: s.phone,
+        address: s.address,
+        memo: s.memo,
+        subtotal: draft.subtotal,
+        shippingFee: draft.shippingFee,
+        total: draft.total,
+        items: { create: draft.items },
+      },
+    });
+    await tx.cartItem.deleteMany({ where: { userId: user.id } });
+    return created;
   });
 
-  await db.cartItem.deleteMany({ where: { userId: user.id } });
   revalidatePath("/", "layout");
   redirect(`/checkout/complete?order=${order.id}`);
 }

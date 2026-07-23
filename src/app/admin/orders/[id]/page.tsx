@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
 import { FULFILLMENT_STATUSES, orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
 import { setOrderStatus, cancelOrderPayment } from "@/lib/actions/admin-orders";
@@ -13,6 +14,7 @@ const payMethodLabel: Record<string, string> = {
 };
 
 export default async function AdminOrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireAdmin();
   const { id } = await params;
   const order = await db.order.findUnique({
     where: { id },

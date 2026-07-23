@@ -25,6 +25,13 @@ describe("resolveUnitPrice", () => {
   });
 });
 
+describe("empty tiers", () => {
+  it("getMoq defaults to 1 and resolveUnitPrice to 0 (order path must guard tier-less products)", () => {
+    expect(getMoq([])).toBe(1);
+    expect(resolveUnitPrice([], 5)).toBe(0);
+  });
+});
+
 describe("shippingFor", () => {
   it("charges 3000 below threshold, free at/above 100000", () => {
     expect(shippingFor(99999)).toBe(3000);

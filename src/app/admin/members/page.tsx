@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { MEMBER_STATUS, memberStatusLabel, memberStatusTone } from "@/lib/memberStatus";
 
 const dateFmt = (d: Date) =>
@@ -15,6 +16,7 @@ export default async function AdminMembersPage({
 }: {
   searchParams: Promise<{ status?: string }>;
 }) {
+  await requireAdmin();
   const { status } = await searchParams;
   const active = status && MEMBER_STATUS[status] ? status : "ALL";
 

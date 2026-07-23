@@ -102,17 +102,19 @@ export function HeroBanner({ banners: input }: { banners: HeroBannerData[] }) {
                     strokeWidth={2.2}
                   />
                 </Link>
-                <Link
-                  href={banner.secondaryHref}
-                  className="group inline-flex items-center gap-2 rounded-pill border border-brand-300 bg-white/70 px-7 py-3.5 text-[15px] font-bold text-brand-600 transition-all hover:border-brand-400 hover:bg-white"
-                >
-                  {banner.secondaryLabel}
-                  <Icon
-                    name="arrowRight"
-                    className="h-4 w-4 transition-transform group-hover:translate-x-1"
-                    strokeWidth={2.2}
-                  />
-                </Link>
+                {banner.secondaryLabel && (
+                  <Link
+                    href={banner.secondaryHref || "/"}
+                    className="group inline-flex items-center gap-2 rounded-pill border border-brand-300 bg-white/70 px-7 py-3.5 text-[15px] font-bold text-brand-600 transition-all hover:border-brand-400 hover:bg-white"
+                  >
+                    {banner.secondaryLabel}
+                    <Icon
+                      name="arrowRight"
+                      className="h-4 w-4 transition-transform group-hover:translate-x-1"
+                      strokeWidth={2.2}
+                    />
+                  </Link>
+                )}
               </div>
             </div>
           </div>

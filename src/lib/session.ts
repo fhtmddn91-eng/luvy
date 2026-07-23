@@ -8,8 +8,12 @@ import { SignJWT, jwtVerify } from "jose";
 
 export const SESSION_COOKIE = "luvy_session";
 
+const rawSecret = process.env.AUTH_SECRET;
+if (!rawSecret && process.env.NODE_ENV === "production") {
+  throw new Error("AUTH_SECRET environment variable is required in production");
+}
 const secret = new TextEncoder().encode(
-  process.env.AUTH_SECRET ?? "dev-only-luvy-secret-change-in-prod-0123456789abcdef",
+  rawSecret ?? "dev-only-luvy-secret-change-in-prod-0123456789abcdef",
 );
 
 export type SessionPayload = { userId: string };

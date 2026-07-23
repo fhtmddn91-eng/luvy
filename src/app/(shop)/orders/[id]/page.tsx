@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { won } from "@/lib/format";
+import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
 
 export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
@@ -11,7 +12,12 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
 
   return (
     <div className="mx-auto max-w-[720px] px-6 py-10">
-      <h1 className="text-[24px] font-extrabold text-ink">주문 상세</h1>
+      <div className="flex items-center gap-3">
+        <h1 className="text-[24px] font-extrabold text-ink">주문 상세</h1>
+        <span className={`rounded-pill px-2.5 py-1 text-[12px] font-bold ${orderStatusTone(order.status)}`}>
+          {orderStatusLabel(order.status)}
+        </span>
+      </div>
       <p className="mt-1 text-[13px] text-muted">주문번호 {order.id.slice(0, 8).toUpperCase()}</p>
 
       <section className="mt-8 rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-soft)]">

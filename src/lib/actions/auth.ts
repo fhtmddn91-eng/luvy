@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { createSession, destroySession, hashPassword, verifyPassword } from "@/lib/auth";
-import { isValidBizNumber, isValidEmail, normalizeBizNumber } from "@/lib/validation";
+import { isValidBizNumber, isValidEmail, normalizeBizNumber, safeNextPath } from "@/lib/validation";
 
 export type AuthState = { error?: string };
 
@@ -54,7 +54,7 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
   }
 
   await createSession(user.id);
-  redirect(next.startsWith("/") ? next : "/");
+  redirect(safeNextPath(next));
 }
 
 export async function logoutAction(): Promise<void> {

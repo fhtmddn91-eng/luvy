@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
 import { memberStatusLabel, memberStatusTone } from "@/lib/memberStatus";
 import { orderStatusLabel } from "@/lib/orderStatus";
@@ -13,6 +14,7 @@ const bizFmt = (n: string) =>
   n.length === 10 ? `${n.slice(0, 3)}-${n.slice(3, 5)}-${n.slice(5)}` : n;
 
 export default async function AdminMemberDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireAdmin();
   const { id } = await params;
   const member = await db.user.findUnique({
     where: { id },
