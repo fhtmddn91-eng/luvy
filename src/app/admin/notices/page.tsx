@@ -19,8 +19,8 @@ export default async function AdminNoticesPage() {
         </Link>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-line bg-white">
-        <table className="w-full text-[14px]">
+      <div className="overflow-x-auto rounded-2xl border border-line bg-white">
+        <table className="w-full min-w-[560px] text-[14px]">
           <thead>
             <tr className="border-b border-line bg-cream/60 text-left text-[12px] text-muted">
               <th className="px-4 py-3 font-medium">순서</th>

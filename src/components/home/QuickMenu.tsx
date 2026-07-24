@@ -34,20 +34,20 @@ const items = [
 
 export function QuickMenu() {
   return (
-    <section className="mx-auto max-w-[1280px] px-6 pt-8">
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+    <section className="mx-auto max-w-[1280px] px-4 pt-8 sm:px-6">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {items.map((item) => (
           <Link
             key={item.title}
             href={item.href}
-            className={`group flex items-center gap-3 rounded-2xl bg-gradient-to-br ${item.bg} p-5 transition-shadow hover:shadow-[var(--shadow-card)]`}
+            className={`group flex items-center gap-2.5 rounded-2xl bg-gradient-to-br ${item.bg} p-4 transition-shadow hover:shadow-[var(--shadow-card)] sm:gap-3 sm:p-5`}
           >
-            <span className="text-[28px]">{item.emoji}</span>
+            <span className="text-[24px] sm:text-[28px]">{item.emoji}</span>
             <span className="min-w-0 flex-1">
-              <span className="block text-[15px] font-extrabold text-ink">{item.title}</span>
-              <span className="mt-0.5 block truncate text-[12px] text-ink-soft">{item.desc}</span>
+              <span className="block break-keep text-[14px] font-extrabold leading-snug text-ink sm:text-[15px]">{item.title}</span>
+              <span className="mt-0.5 hidden truncate text-[12px] text-ink-soft sm:block">{item.desc}</span>
             </span>
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/80 text-brand-500 transition-transform group-hover:translate-x-0.5">
+            <span className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/80 text-brand-500 transition-transform group-hover:translate-x-0.5 sm:flex">
               <Icon name="chevronRight" className="h-4 w-4" strokeWidth={2.2} />
             </span>
           </Link>

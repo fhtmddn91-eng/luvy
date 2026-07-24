@@ -11,27 +11,29 @@ export async function Header() {
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-white/95 backdrop-blur">
       {/* 상단: 로고 + 중앙 검색 + 우측 액션 */}
-      <div className="mx-auto flex max-w-[1280px] items-center gap-6 px-6 pb-2 pt-4">
+      <div className="mx-auto flex max-w-[1280px] flex-wrap items-center gap-x-4 gap-y-2 px-4 pb-2 pt-3 sm:px-6 sm:pt-4 lg:gap-x-6">
         <Logo />
 
-        <div className="flex flex-1 justify-center">
+        <div className="order-3 flex w-full min-w-0 justify-center lg:order-none lg:w-auto lg:flex-1">
           <SearchBar />
         </div>
 
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
           <Link
             href="/orders"
-            className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-[14px] font-semibold text-ink transition-colors hover:bg-brand-50 hover:text-brand-600"
+            aria-label="마이페이지"
+            className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[14px] font-semibold text-ink transition-colors hover:bg-brand-50 hover:text-brand-600 sm:px-3"
           >
             <Icon name="userRound" className="h-5 w-5" strokeWidth={1.7} />
-            마이페이지
+            <span className="hidden sm:inline">마이페이지</span>
           </Link>
           <Link
             href="/partner"
-            className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-[14px] font-semibold text-ink transition-colors hover:bg-brand-50 hover:text-brand-600"
+            aria-label="파트너센터"
+            className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[14px] font-semibold text-ink transition-colors hover:bg-brand-50 hover:text-brand-600 sm:px-3"
           >
             <Icon name="partner" className="h-5 w-5" strokeWidth={1.7} />
-            파트너센터
+            <span className="hidden sm:inline">파트너센터</span>
           </Link>
           <Link
             href="/cart"

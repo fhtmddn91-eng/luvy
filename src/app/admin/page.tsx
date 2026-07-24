@@ -39,7 +39,8 @@ export default async function AdminDashboardPage() {
         {recentOrders.length === 0 ? (
           <p className="py-8 text-center text-[14px] text-muted">주문이 없습니다.</p>
         ) : (
-          <table className="w-full text-[14px]">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-[14px]">
             <thead>
               <tr className="border-b border-line text-left text-[12px] text-muted">
                 <th className="py-2 font-medium">주문번호</th>
@@ -67,6 +68,7 @@ export default async function AdminDashboardPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>

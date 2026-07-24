@@ -16,7 +16,7 @@ export function AdminSidebar() {
   const pathname = usePathname();
 
   return (
-    <nav className="flex flex-col gap-1 p-4">
+    <nav className="no-scrollbar flex gap-1 overflow-x-auto p-3 md:flex-col md:overflow-visible md:p-4">
       {nav.map((item) => {
         const active = item.exact
           ? pathname === item.href
@@ -25,7 +25,7 @@ export function AdminSidebar() {
           <Link
             key={item.href}
             href={item.href}
-            className={`rounded-lg px-4 py-2.5 text-[14px] font-semibold transition-colors ${
+            className={`shrink-0 whitespace-nowrap rounded-lg px-3.5 py-2 text-[14px] font-semibold transition-colors md:px-4 md:py-2.5 ${
               active
                 ? "bg-brand-500 text-white"
                 : "text-ink-soft hover:bg-brand-50 hover:text-brand-600"

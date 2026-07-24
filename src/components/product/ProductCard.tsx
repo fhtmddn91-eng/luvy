@@ -31,12 +31,12 @@ export function ProductCard({ product }: { product: ProductCardData }) {
         <h3 className="mt-1 line-clamp-2 flex-1 text-[14px] font-medium text-ink group-hover:text-brand-600">
           {product.name}
         </h3>
-        <div className="mt-3 flex items-end justify-between">
+        <div className="mt-3 flex flex-wrap items-end justify-between gap-x-2 gap-y-1">
           <div>
             <span className="text-[11px] text-muted">도매가</span>
-            <p className="text-[16px] font-extrabold text-ink">{won(fromPrice)}~</p>
+            <p className="whitespace-nowrap text-[15px] font-extrabold text-ink sm:text-[16px]">{won(fromPrice)}~</p>
           </div>
-          <span className="rounded-pill bg-brand-50 px-2.5 py-1 text-[11px] font-bold text-brand-600">
+          <span className="whitespace-nowrap rounded-pill bg-brand-50 px-2 py-1 text-[11px] font-bold text-brand-600 sm:px-2.5">
             MOQ {moq}
           </span>
         </div>

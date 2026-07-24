@@ -49,8 +49,8 @@ export default async function AdminProductsPage({
         />
       </form>
 
-      <div className="overflow-hidden rounded-2xl border border-line bg-white">
-        <table className="w-full text-[14px]">
+      <div className="overflow-x-auto rounded-2xl border border-line bg-white">
+        <table className="w-full min-w-[720px] text-[14px]">
           <thead>
             <tr className="border-b border-line bg-cream/60 text-left text-[12px] text-muted">
               <th className="px-4 py-3 font-medium">상품명</th>

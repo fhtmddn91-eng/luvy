@@ -40,6 +40,9 @@
     background: #ffffff;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    /* 한국어 조판: 단어 중간에서 줄바꿈되지 않게 (긴 영문/숫자는 넘칠 때만 강제 개행) */
+    word-break: keep-all;
+    overflow-wrap: break-word;
   }
   ::selection {
     background: var(--color-brand-200);

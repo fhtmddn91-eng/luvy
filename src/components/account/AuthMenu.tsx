@@ -21,7 +21,7 @@ export async function AuthMenu() {
 
   return (
     <>
-      <span className="font-semibold text-brand-700">{user.companyName}님</span>
+      <span className="max-w-[120px] truncate font-semibold text-brand-700 sm:max-w-none">{user.companyName}님</span>
       <span className="mx-3 h-2.5 w-px bg-brand-300/70" aria-hidden />
       <Link href="/orders" className="text-brand-700/80 transition-colors hover:text-brand-700">
         주문내역

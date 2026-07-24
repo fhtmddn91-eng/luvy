@@ -45,8 +45,8 @@ export default async function AdminMembersPage({
         ))}
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-2xl border border-line bg-white">
-        <table className="w-full text-[14px]">
+      <div className="mt-4 overflow-x-auto rounded-2xl border border-line bg-white">
+        <table className="w-full min-w-[640px] text-[14px]">
           <thead>
             <tr className="border-b border-line bg-cream/60 text-left text-[12px] text-muted">
               <th className="px-4 py-3 font-medium">상호명</th>
