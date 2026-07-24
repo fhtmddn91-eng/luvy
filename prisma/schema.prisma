@@ -20,6 +20,7 @@ model User {
   createdAt      DateTime   @default(now())
   cartItems      CartItem[]
   orders         Order[]
+  inquiries      Inquiry[]
 }
 
 model Product {
@@ -123,7 +124,23 @@ model Notice {
   kind      String   // notice | stock | event
   tag       String
   text      String
+  body      String   @default("") // 공지 상세 본문 (비어 있으면 목록에서 상세 링크 없이 표시)
   sortOrder Int      @default(0)
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
+}
+
+model Inquiry {
+  id         String    @id @default(cuid())
+  userId     String
+  type       String // GENERAL | PARTNER_APPLY | BULK | ALLIANCE
+  title      String
+  content    String
+  status     String    @default("OPEN") // OPEN | ANSWERED
+  answer     String?
+  answeredAt DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

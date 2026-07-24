@@ -10,6 +10,7 @@ export interface NoticeFormData {
   kind: string;
   tag: string;
   text: string;
+  body?: string;
   sortOrder: number;
   active: boolean;
 }
@@ -55,8 +56,18 @@ export function NoticeForm({ action, notice }: { action: Action; notice?: Notice
         </div>
       </div>
       <div>
-        <label className={labelCls}>내용</label>
+        <label className={labelCls}>제목 (목록/메인에 표시)</label>
         <input name="text" defaultValue={notice?.text} className={inputCls} />
+      </div>
+      <div>
+        <label className={labelCls}>상세 본문 (공지 상세 페이지에 표시, 선택)</label>
+        <textarea
+          name="body"
+          rows={6}
+          defaultValue={notice?.body}
+          placeholder="공지 상세 내용을 입력하세요. 비워두면 상세 페이지에 제목만 표시됩니다."
+          className="w-full rounded-lg border border-line bg-white px-3 py-2.5 text-[14px] leading-relaxed text-ink focus:border-brand-400 focus:outline-none"
+        />
       </div>
       <div className="flex items-end gap-6">
         <div>

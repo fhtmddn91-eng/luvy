@@ -21,6 +21,13 @@ import {
   ChevronLeft,
   ChevronRight,
   ArrowRight,
+  Bell,
+  CircleHelp,
+  MessageCircle,
+  Download,
+  Package,
+  Trophy,
+  Gift,
   type LucideIcon,
 } from "lucide-react";
 
@@ -47,6 +54,13 @@ const map: Record<string, LucideIcon> = {
   chevronLeft: ChevronLeft,
   chevronRight: ChevronRight,
   arrowRight: ArrowRight,
+  bell: Bell,
+  help: CircleHelp,
+  chat: MessageCircle,
+  download: Download,
+  package: Package,
+  trophy: Trophy,
+  gift: Gift,
 };
 
 interface IconProps {

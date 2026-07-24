@@ -12,6 +12,7 @@ function parse(formData: FormData) {
     kind: String(formData.get("kind") ?? "notice"),
     tag: String(formData.get("tag") ?? "").trim(),
     text: String(formData.get("text") ?? "").trim(),
+    body: String(formData.get("body") ?? "").trim(),
     sortOrder: parseInt(String(formData.get("sortOrder") ?? "0"), 10) || 0,
     active: formData.get("active") === "on",
   };

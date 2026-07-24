@@ -15,7 +15,8 @@ const secret = new TextEncoder().encode(
  * /api 는 matcher에서 제외 — 결제 웹훅은 공개여야 하고(/api/payments/webhook,
  * 서명 검증으로 보호), /api/payments/complete 는 핸들러 내부에서 세션을 검증한다.
  */
-const PUBLIC_PATHS = ["/login", "/signup"];
+// 약관/개인정보처리방침은 가입 전에도 열람할 수 있어야 하므로 공개
+const PUBLIC_PATHS = ["/login", "/signup", "/terms", "/privacy"];
 
 async function hasValidSession(req: NextRequest): Promise<boolean> {
   const token = req.cookies.get(SESSION_COOKIE)?.value;

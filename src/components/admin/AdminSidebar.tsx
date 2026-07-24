@@ -8,6 +8,7 @@ const nav = [
   { href: "/admin/products", label: "상품 관리" },
   { href: "/admin/orders", label: "주문 관리" },
   { href: "/admin/members", label: "회원 관리" },
+  { href: "/admin/inquiries", label: "문의 관리" },
   { href: "/admin/banners", label: "배너 관리" },
   { href: "/admin/notices", label: "공지 관리" },
 ];
