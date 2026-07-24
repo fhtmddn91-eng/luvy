@@ -50,6 +50,8 @@ Railway 프로젝트에서 이 GitHub 저장소를 소스로 연결합니다. `r
 |---|---|---|
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (Postgres 서비스 참조) | ✅ |
 | `AUTH_SECRET` | 아래 명령으로 생성한 랜덤 문자열 | ✅ (없으면 앱이 시작되지 않음) |
+| `ADMIN_ID` | 관리자 로그인 아이디 (예: `luvyb2b`) | 관리자 자동 생성 시 |
+| `ADMIN_PW` | 관리자 비밀번호 | 관리자 자동 생성 시 |
 | `PORTONE_STORE_ID` | 포트원 상점코드 | 결제 켤 때만 |
 | `PORTONE_CHANNEL_KEY_KCP` | KCP 채널 키 | 결제 켤 때만 |
 | `PORTONE_API_SECRET` | 포트원 V2 API Secret | 결제 켤 때만 |
@@ -67,6 +69,15 @@ openssl rand -hex 32
 ### 2-4. 배포
 push하면 Railway가 자동 빌드→배포합니다. 시작 시 `prisma migrate deploy`가
 스키마를 적용하므로 **테이블은 자동 생성**됩니다.
+
+### 2-5. 관리자 계정 (자동 생성)
+Variables 탭에 `ADMIN_ID`, `ADMIN_PW` 를 넣고 재배포하면, 시작 시
+`npm run set:admin` 이 실행되어 해당 아이디/비밀번호로 **관리자 계정을 자동 생성·갱신**합니다
+(셸 접속 불필요, 비밀번호는 bcrypt 해시로만 저장). 값이 없으면 조용히 건너뜁니다.
+로그인은 `/login` 에서 아이디(또는 이메일) + 비밀번호로 합니다.
+
+> 비밀번호는 저장소(git)에 넣지 마세요. 반드시 Railway Variables 로만 관리하세요.
+> 변경하려면 `ADMIN_PW` 값을 바꾸고 재배포하면 됩니다.
 
 ---
 

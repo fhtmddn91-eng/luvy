@@ -15,6 +15,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "db:templates": "tsx prisma/templates.ts",
+    "set:admin": "tsx prisma/set-admin.ts",
     "test": "vitest run"
   },
   "prisma": {
