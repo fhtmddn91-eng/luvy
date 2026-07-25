@@ -141,7 +141,23 @@ npm run dev
 - Railway **Volume**을 앱 서비스의 `/app/public/uploads` 에 마운트, 또는
 - `src/lib/storage.ts` 를 S3/R2 등 외부 스토리지 드라이버로 교체 (이 파일만 바꾸면 됨)
 
-## 6. 배포 후 점검
+## 6. 502 / 앱이 안 뜰 때 (부팅 단계 확인)
+
+시작 명령은 단계마다 마커를 찍습니다. Railway → **Deploy Logs** 에서
+마지막으로 보이는 마커가 어디서 멈췄는지를 알려줍니다.
+
+| 마지막 마커 | 의미 | 조치 |
+|---|---|---|
+| 마커 없음 | 빌드 실패 (배포까지 못 감) | **Build Logs** 확인 |
+| `[boot] 1/3 migrate` 까지 | `prisma migrate deploy` 실패 | `DATABASE_URL` 이 `${{Postgres.DATABASE_URL}}` 참조인지, Postgres 서비스가 있는지 확인 |
+| `[boot] 3/3 start` 후 크래시 | 앱 실행 중 오류 | `AUTH_SECRET` 미설정 여부 확인 (없으면 프로덕션에서 즉시 종료) |
+| `Ready in ...` 까지 나오는데 502 | 앱은 정상, 도메인/프록시 문제 | Railway 기본 도메인(`*.up.railway.app`)으로 먼저 접속해보고, Cloudflare CNAME·SSL 모드(**Full**) 확인 |
+
+> `set:admin` 은 실패해도 앱 시작을 막지 않습니다(`|| true`).
+
+---
+
+## 7. 배포 후 점검
 
 - `/` 메인 로드 (배너·공지 노출)
 - `/login` 로그인 → 회원전용 경로 접근
