@@ -1,29 +1,42 @@
 /**
- * 템플릿 상품 5개 생성 스크립트.
+ * 초기 상품 5종 등록 스크립트 (실제 상품명 반영, 내용 미완성 상태).
  *
- * 실제 상품 정보가 확정되기 전, 어드민에서 내용을 채워 넣을 수 있는
- * "빈 양식" 상품을 만든다. 전부 HIDDEN 상태로 생성되므로 스토어에는
- * 노출되지 않으며, 어드민 → 상품 관리에서 내용 입력 후 "판매" 전환하면 된다.
+ * 상품명만 확정된 단계이므로 브랜드·카테고리·도매가는 **임시값**이며,
+ * 전부 HIDDEN(숨김)으로 생성되어 스토어에 노출되지 않는다.
+ * 어드민 → 상품 관리에서 사진·가격·설명을 채운 뒤 "판매"로 전환한다.
  *
- * 실행: npm run db:templates  (이미 있으면 건너뜀 — 중복 생성 안 됨)
+ * 실행: npm run db:templates   (같은 이름이 이미 있으면 건너뜀 — 중복 생성 안 됨)
  */
 import { PrismaClient } from "@prisma/client";
 
 const db = new PrismaClient();
 
-const DESCRIPTION_TEMPLATE = `※ 이 상품은 입력용 템플릿입니다. 아래 항목을 실제 정보로 바꿔주세요.
+/** 이전 버전에서 만든 자리표시용 상품 (실제 상품명으로 대체됨) */
+const OBSOLETE_PLACEHOLDERS = [
+  "[템플릿] 상품 1 — 여성용품",
+  "[템플릿] 상품 2 — 남성용품",
+  "[템플릿] 상품 3 — 커플/SM",
+  "[템플릿] 상품 4 — 마사지/로션",
+  "[템플릿] 상품 5 — 콘돔/윤활제",
+];
+
+const descriptionFor = (name: string) => `※ 아직 내용이 채워지지 않은 상품입니다. 아래 항목을 실제 정보로 바꾸고 "판매"로 전환하세요.
+※ 도매가·MOQ는 임시값이므로 반드시 실제 가격으로 수정해야 합니다.
+
+■ 상품명
+${name}
 
 ■ 상품 소개
-(핵심 특징 1~2문장. 예: 수분 지속형 워터베이스 젤로 매장 회전율이 높은 스테디셀러입니다.)
+(핵심 특징 1~2문장)
 
 ■ 상품 구성
-(예: 본품 100ml × 1)
+(예: 본품 1 + 파우치 1)
 
-■ 소재 / 스펙
-(예: 의료용 실리콘 / 크기 180×32mm / USB-C 충전 / 생활방수 IPX5)
+■ 소재 / 사이즈 / 스펙
+(예: 폴리에스터 / FREE / 색상 2종)
 
 ■ 인증
-(예: KC 인증 완료)
+(예: KC 인증 완료 / 해당 없음)
 
 ■ 배송 안내
 평일 14시 이전 결제 시 당일 출고 · 무지 박스 포장
@@ -31,37 +44,56 @@ const DESCRIPTION_TEMPLATE = `※ 이 상품은 입력용 템플릿입니다. �
 ■ 판매자료
 상세페이지·썸네일 원본 제공 — 파트너센터에서 요청`;
 
-const templates = [
-  { name: "[템플릿] 상품 1 — 여성용품", brand: "브랜드입력", categorySlug: "women", basePrice: 30000, tiers: [{ minQty: 5, unitPrice: 20000 }, { minQty: 20, unitPrice: 18000 }] },
-  { name: "[템플릿] 상품 2 — 남성용품", brand: "브랜드입력", categorySlug: "men", basePrice: 30000, tiers: [{ minQty: 5, unitPrice: 20000 }, { minQty: 20, unitPrice: 18000 }] },
-  { name: "[템플릿] 상품 3 — 커플/SM", brand: "브랜드입력", categorySlug: "couple-sm", basePrice: 30000, tiers: [{ minQty: 5, unitPrice: 20000 }, { minQty: 20, unitPrice: 18000 }] },
-  { name: "[템플릿] 상품 4 — 마사지/로션", brand: "브랜드입력", categorySlug: "massage-lotion", basePrice: 15000, tiers: [{ minQty: 10, unitPrice: 9000 }, { minQty: 30, unitPrice: 8000 }] },
-  { name: "[템플릿] 상품 5 — 콘돔/윤활제", brand: "브랜드입력", categorySlug: "condom-lube", basePrice: 12000, tiers: [{ minQty: 10, unitPrice: 7000 }, { minQty: 50, unitPrice: 6000 }] },
+/**
+ * categorySlug / brand 는 상품명에서 추정한 값이므로 확인이 필요하다.
+ * (코스튬 전용 카테고리가 없어 메이드복·바니걸은 couple-sm 으로 임시 배치)
+ */
+const products = [
+  { name: "메이드복", brand: "브랜드입력", categorySlug: "couple-sm" },
+  { name: "문라이트 박스 (레드핑크)", brand: "브랜드입력", categorySlug: "women" },
+  { name: "블러쉬펀 우먼 인헐레이션 마젠타", brand: "블러쉬펀", categorySlug: "women" },
+  { name: "블러쉬펀 피노나 퍼플", brand: "블러쉬펀", categorySlug: "women" },
+  { name: "퍼플 바니걸", brand: "브랜드입력", categorySlug: "couple-sm" },
+];
+
+// 임시 가격 (실제 도매가 확정 시 어드민에서 수정)
+const PLACEHOLDER_BASE_PRICE = 30000;
+const PLACEHOLDER_TIERS = [
+  { minQty: 5, unitPrice: 20000 },
+  { minQty: 20, unitPrice: 18000 },
 ];
 
 async function main() {
+  // 이전 자리표시 상품 정리 (숨김 상태인 것만)
+  const removed = await db.product.deleteMany({
+    where: { name: { in: OBSOLETE_PLACEHOLDERS }, status: "HIDDEN" },
+  });
+  if (removed.count > 0) {
+    console.log(`이전 [템플릿] 자리표시 상품 ${removed.count}개 삭제`);
+  }
+
   let created = 0;
-  for (const t of templates) {
-    const exists = await db.product.findFirst({ where: { name: t.name } });
+  for (const p of products) {
+    const exists = await db.product.findFirst({ where: { name: p.name } });
     if (exists) {
-      console.log(`skip (이미 존재): ${t.name}`);
+      console.log(`skip (이미 존재): ${p.name}`);
       continue;
     }
     await db.product.create({
       data: {
-        name: t.name,
-        brand: t.brand,
-        categorySlug: t.categorySlug,
-        description: DESCRIPTION_TEMPLATE,
-        basePrice: t.basePrice,
+        name: p.name,
+        brand: p.brand,
+        categorySlug: p.categorySlug,
+        description: descriptionFor(p.name),
+        basePrice: PLACEHOLDER_BASE_PRICE,
         status: "HIDDEN", // 내용 입력 전까지 스토어 미노출
-        priceTiers: { create: t.tiers },
+        priceTiers: { create: PLACEHOLDER_TIERS },
       },
     });
     created++;
-    console.log(`created: ${t.name}`);
+    console.log(`created: ${p.name}`);
   }
-  console.log(`완료 — ${created}개 생성 (HIDDEN 상태, 어드민에서 수정 후 판매 전환)`);
+  console.log(`완료 — ${created}개 생성 (HIDDEN 상태, 어드민에서 사진·가격 입력 후 판매 전환)`);
 }
 
 main()
