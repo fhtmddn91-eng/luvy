@@ -45,7 +45,10 @@ export function ProductThumb({
   const palette = palettes[hash(id) % palettes.length];
   return (
     <div className={`relative flex items-center justify-center overflow-hidden bg-gradient-to-br ${palette} ${className}`}>
-      <span className="text-[1.75em] font-extrabold tracking-tight text-white/80">{brand}</span>
+      {/* 작은 썸네일에서 긴 브랜드명이 타일을 넘치지 않도록 잘라낸다 */}
+      <span className="max-w-full truncate px-1 text-[1.75em] font-extrabold tracking-tight text-white/80">
+        {brand}
+      </span>
     </div>
   );
 }
