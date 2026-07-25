@@ -1,9 +1,13 @@
 import Link from "next/link";
 
-/** LUVY wordmark — the "L" is drawn as a soft pink monogram tile. */
-export function Logo() {
-  return (
-    <Link href="/" className="flex items-center gap-2 select-none" aria-label="LUVY 홈">
+/**
+ * LUVY wordmark — the "L" is drawn as a soft pink monogram tile.
+ * href={null} 이면 링크 없이 로고만 표시한다 (비로그인 인증 페이지에서 사용:
+ * 폐쇄몰이라 "/" 로 보내면 다시 로그인으로 튕겨 루프가 된다).
+ */
+export function Logo({ href = "/" }: { href?: string | null }) {
+  const inner = (
+    <>
       <span className="relative inline-flex h-9 w-9 items-center justify-center">
         <svg viewBox="0 0 36 36" className="h-9 w-9" aria-hidden>
           <defs>
@@ -25,6 +29,16 @@ export function Logo() {
       <span className="text-[26px] font-extrabold tracking-[0.14em] text-ink">
         LUVY
       </span>
+    </>
+  );
+
+  if (href === null) {
+    return <span className="flex select-none items-center gap-2">{inner}</span>;
+  }
+
+  return (
+    <Link href={href} className="flex select-none items-center gap-2" aria-label="LUVY 홈">
+      {inner}
     </Link>
   );
 }

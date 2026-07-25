@@ -28,6 +28,7 @@ import {
   Package,
   Trophy,
   Gift,
+  Lock,
   type LucideIcon,
 } from "lucide-react";
 
@@ -61,6 +62,7 @@ const map: Record<string, LucideIcon> = {
   package: Package,
   trophy: Trophy,
   gift: Gift,
+  lock: Lock,
 };
 
 interface IconProps {

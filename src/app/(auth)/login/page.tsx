@@ -11,7 +11,7 @@ export default async function LoginPage({
   return (
     <AuthCard
       title="파트너 로그인"
-      subtitle="LUVY 사업자 회원 전용 서비스입니다."
+      subtitle="로그인 후 상품 열람 및 구매가 가능합니다."
       footer={
         <>
           아직 회원이 아니신가요?{" "}
@@ -22,8 +22,13 @@ export default async function LoginPage({
       }
     >
       <LoginForm next={next ?? "/"} />
-      <p className="mt-5 rounded-xl bg-brand-50 px-4 py-3 text-center text-[12px] text-brand-600">
-        데모 계정: demo@luvy.co.kr / luvy1234
+
+      {/* 비밀번호 재발급이 아직 자동화되지 않아 고객센터로 안내한다 */}
+      <p className="mt-5 border-t border-line pt-4 text-center text-[12px] leading-relaxed text-muted">
+        로그인이 어려우시면 고객센터{" "}
+        <span className="font-semibold text-ink-soft">1600-0000</span> 으로 문의해주세요.
+        <br />
+        (평일 10:00 ~ 17:00)
       </p>
     </AuthCard>
   );

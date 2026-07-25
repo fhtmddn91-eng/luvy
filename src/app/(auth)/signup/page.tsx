@@ -6,7 +6,7 @@ export default function SignupPage() {
   return (
     <AuthCard
       title="사업자 회원가입"
-      subtitle="만 19세 이상 사업자 회원만 가입할 수 있습니다."
+      subtitle={"만 19세 이상 사업자 회원만 가입할 수 있습니다.\n가입 후 관리자 승인이 완료되면 도매가 열람·주문이 가능합니다."}
       footer={
         <>
           이미 회원이신가요?{" "}
