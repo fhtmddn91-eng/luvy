@@ -1,7 +1,7 @@
 export interface Category {
   slug: string;
   name: string;
-  /** lucide-style icon key rendered by the CategoryBar */
+  /** lucide-style icon key (Icon 컴포넌트에서 사용) */
   icon: string;
 }
 

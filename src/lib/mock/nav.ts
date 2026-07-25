@@ -16,5 +16,3 @@ export const gnbLinks: (NavLink & { badge?: string })[] = [
   { label: "고객지원", href: "/support" },
 ];
 
-/** 검색창 하단 추천 검색어 */
-export const recommendedKeywords = ["러브젤", "딜도", "SM", "애널", "콘돔", "마사지"];

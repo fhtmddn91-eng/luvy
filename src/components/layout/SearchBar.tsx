@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Icon } from "@/components/ui/Icon";
-import { recommendedKeywords } from "@/lib/mock/nav";
+import { categories } from "@/lib/mock/categories";
+import { categoryHref } from "@/lib/nav";
 
 export function SearchBar() {
   const router = useRouter();
   return (
-    <div className="w-full max-w-[560px]">
+    <div className="w-full">
       <form
         role="search"
         onSubmit={(e) => {
@@ -16,7 +17,7 @@ export function SearchBar() {
           const q = new FormData(e.currentTarget).get("q")?.toString().trim() ?? "";
           if (q) router.push(`/search?q=${encodeURIComponent(q)}`);
         }}
-        className="flex h-12 w-full items-center gap-2 rounded-pill border-2 border-brand-400 bg-white pl-5 pr-1.5 transition-colors focus-within:border-brand-500"
+        className="mx-auto flex h-12 w-full max-w-[560px] items-center gap-2 rounded-pill border-2 border-brand-400 bg-white pl-5 pr-1.5 transition-colors focus-within:border-brand-500"
       >
         <input
           name="q"
@@ -33,20 +34,22 @@ export function SearchBar() {
           <Icon name="search" className="h-4.5 w-4.5 h-[18px] w-[18px]" strokeWidth={2.2} />
         </button>
       </form>
-      <div className="mt-1.5 hidden items-center gap-1 pl-5 text-[12px] lg:flex">
-        <span className="font-semibold text-brand-500">추천 검색</span>
-        {recommendedKeywords.map((k, i) => (
-          <span key={k} className="flex items-center">
-            {i > 0 && <span className="mx-1.5 h-2.5 w-px bg-line" aria-hidden />}
-            <Link
-              href={`/search?q=${encodeURIComponent(k)}`}
-              className="text-muted transition-colors hover:text-brand-500"
-            >
-              {k}
-            </Link>
-          </span>
+
+      {/* 카테고리 바로가기 — 좁은 화면에서는 가로 스크롤 */}
+      <nav
+        aria-label="상품 카테고리"
+        className="no-scrollbar mt-2 flex items-center gap-x-4 overflow-x-auto sm:justify-center sm:gap-x-5"
+      >
+        {categories.map((cat) => (
+          <Link
+            key={cat.slug}
+            href={categoryHref(cat.slug)}
+            className="shrink-0 whitespace-nowrap text-[13px] font-semibold text-ink-soft transition-colors hover:text-brand-500"
+          >
+            {cat.name}
+          </Link>
         ))}
-      </div>
+      </nav>
     </div>
   );
 }

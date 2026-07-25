@@ -11,7 +11,7 @@ export async function Header() {
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-white/95 backdrop-blur">
       {/* 상단: 로고 + 중앙 검색 + 우측 액션 */}
-      <div className="mx-auto flex max-w-[1280px] flex-wrap items-center gap-x-4 gap-y-2 px-4 pb-2 pt-3 sm:px-6 sm:pt-4 lg:gap-x-6">
+      <div className="mx-auto flex max-w-[1280px] flex-wrap items-center gap-x-4 gap-y-2 px-4 pb-3 pt-3 sm:px-6 sm:pt-4 lg:gap-x-6">
         <Logo />
 
         <div className="order-3 flex w-full min-w-0 justify-center lg:order-none lg:w-auto lg:flex-1">
