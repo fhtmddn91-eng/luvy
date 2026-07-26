@@ -67,7 +67,7 @@ export default async function AdminNoticesPage() {
                     <td className="px-5 py-3.5 sm:px-6">
                       <Link
                         href={`/admin/notices/${n.id}`}
-                        className="font-medium text-ink-deep hover:text-brand-600"
+                        className="font-medium text-ink-deep hover:text-ink-deep"
                       >
                         {n.text}
                       </Link>
@@ -87,7 +87,7 @@ export default async function AdminNoticesPage() {
                         <form action={toggleNoticeActive.bind(null, n.id, !n.active)}>
                           <button
                             type="submit"
-                            className="text-ink-soft transition-colors hover:text-brand-600"
+                            className="text-ink-soft transition-colors hover:text-ink-deep"
                           >
                             {n.active ? "숨김" : "노출"}
                           </button>
@@ -95,7 +95,7 @@ export default async function AdminNoticesPage() {
                         <span aria-hidden className="h-3 w-px bg-hairline" />
                         <Link
                           href={`/admin/notices/${n.id}`}
-                          className="text-ink-soft transition-colors hover:text-brand-600"
+                          className="text-ink-soft transition-colors hover:text-ink-deep"
                         >
                           수정
                         </Link>
@@ -103,7 +103,7 @@ export default async function AdminNoticesPage() {
                         <form action={deleteNotice.bind(null, n.id)}>
                           <button
                             type="submit"
-                            className="text-muted transition-colors hover:text-brand-600"
+                            className="text-muted transition-colors hover:text-ink-deep"
                           >
                             삭제
                           </button>

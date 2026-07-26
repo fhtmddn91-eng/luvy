@@ -67,7 +67,7 @@ export default async function AccountPage() {
     >
       <div className="space-y-4">
         {/* 멤버십 카드 */}
-        <div className="rise rise-1 overflow-hidden rounded-2xl bg-ink-deep p-6 text-white shadow-[var(--shadow-lift)] sm:p-7">
+        <div className="rise rise-1 overflow-hidden bg-ink-deep p-6 text-white sm:p-7">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
               <p className="eyebrow font-display text-white/45">Business partner</p>
@@ -106,7 +106,7 @@ export default async function AccountPage() {
         </div>
 
         {!approved && (
-          <div className="rise rise-2 rounded-2xl border border-[#f0dfc0] bg-[#fdf8ef] px-5 py-4 text-[13px] leading-relaxed text-[#7a5514]">
+          <div className="rise rise-2 border border-[#f0dfc0] bg-[#fdf8ef] px-5 py-4 text-[13px] leading-relaxed text-[#7a5514]">
             가입 승인이 완료되면 도매가 열람과 주문이 가능합니다. 영업일 기준 1일 이내 처리됩니다.
           </div>
         )}
@@ -117,12 +117,12 @@ export default async function AccountPage() {
             <Link
               key={s.href}
               href={s.href}
-              className="group rounded-2xl border border-hairline bg-white px-4 py-4 shadow-[var(--shadow-lift)] transition-colors hover:border-ink-deep"
+              className="group border border-hairline bg-white px-4 py-4 transition-colors hover:border-ink-deep"
             >
               <span className="flex h-9 w-9 items-center justify-center rounded-full bg-canvas text-ink-deep">
                 <Icon name={s.icon} className="h-4.5 w-4.5 h-[18px] w-[18px]" strokeWidth={1.7} />
               </span>
-              <p className="mt-3 text-[13.5px] font-bold text-ink-deep group-hover:text-brand-600">
+              <p className="mt-3 text-[13.5px] font-bold text-ink-deep group-hover:text-ink-deep">
                 {s.title}
               </p>
               <p className="mt-0.5 text-[12px] text-muted">{s.desc}</p>
@@ -138,7 +138,7 @@ export default async function AccountPage() {
             action={
               <Link
                 href="/orders"
-                className="text-[12px] font-semibold text-ink-soft transition-colors hover:text-brand-600"
+                className="text-[12px] font-semibold text-ink-soft transition-colors hover:text-ink-deep"
               >
                 전체 보기 →
               </Link>
@@ -149,7 +149,7 @@ export default async function AccountPage() {
                 아직 주문 내역이 없습니다.
                 <Link
                   href="/new"
-                  className="ml-1.5 font-semibold text-brand-600 hover:underline"
+                  className="ml-1.5 font-semibold text-ink-deep underline underline-offset-4"
                 >
                   상품 보러가기
                 </Link>
@@ -197,7 +197,7 @@ export default async function AccountPage() {
               openInquiries > 0 ? (
                 <Link
                   href="/support/inquiry"
-                  className="text-[12px] font-semibold text-brand-600 hover:underline"
+                  className="text-[12px] font-semibold text-ink-deep underline underline-offset-4"
                 >
                   답변 대기 문의 {openInquiries}건
                 </Link>

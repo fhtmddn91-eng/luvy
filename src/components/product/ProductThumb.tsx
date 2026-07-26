@@ -24,6 +24,14 @@ function monogram(brand: string): string {
   return /^[A-Za-z]/.test(trimmed) ? trimmed.slice(0, 2).toUpperCase() : trimmed.slice(0, 1);
 }
 
+/** 모노크롬 화면(어드민)에서 쓰는 무채색 대체 타일 */
+const neutralPalettes = [
+  "from-[#ededed] to-[#e0e0e0]",
+  "from-[#f3f3f3] to-[#e6e6e6]",
+  "from-[#e8e8e8] to-[#dadada]",
+  "from-[#f0f0f0] to-[#e3e3e3]",
+];
+
 export function ProductThumb({
   id,
   brand,
@@ -31,6 +39,7 @@ export function ProductThumb({
   alt,
   className = "",
   compact = false,
+  tone = "brand",
 }: {
   id: string;
   brand: string;
@@ -39,6 +48,8 @@ export function ProductThumb({
   className?: string;
   /** 작은 썸네일(목록·미니 그리드)에서 브랜드명 대신 머리글자를 표시 */
   compact?: boolean;
+  /** 어드민처럼 모노크롬 화면에서는 "neutral" */
+  tone?: "brand" | "neutral";
 }) {
   if (image) {
     return (
@@ -53,7 +64,9 @@ export function ProductThumb({
     );
   }
 
-  const palette = palettes[hash(id) % palettes.length];
+  const set = tone === "neutral" ? neutralPalettes : palettes;
+  const palette = set[hash(id) % set.length];
+  const textCls = tone === "neutral" ? "text-ink-deep/45" : "text-white/85";
   return (
     <div
       className={`relative flex items-center justify-center overflow-hidden bg-gradient-to-br ${palette} ${className}`}
@@ -61,8 +74,8 @@ export function ProductThumb({
       <span
         className={
           compact
-            ? "font-display text-[2.4em] leading-none tracking-tight text-white/85"
-            : "max-w-full truncate px-1 text-[1.75em] font-extrabold tracking-tight text-white/80"
+            ? `font-display text-[2.4em] leading-none tracking-tight ${textCls}`
+            : `max-w-full truncate px-1 text-[1.75em] font-extrabold tracking-tight ${tone === "neutral" ? "text-ink-deep/40" : "text-white/80"}`
         }
       >
         {compact ? monogram(brand) : brand}

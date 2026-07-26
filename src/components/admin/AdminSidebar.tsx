@@ -39,7 +39,7 @@ export function AdminSidebar() {
       {groups.map((group) => (
         <div key={group.heading} className="contents md:block">
           {/* 그룹 라벨은 데스크톱에서만 — 모바일은 한 줄 스크롤 탭 */}
-          <p className="eyebrow font-display mb-2 hidden px-3 md:block">{group.heading}</p>
+          <p className="eyebrow mb-2.5 hidden px-3 md:block">{group.heading}</p>
           {group.items.map((item) => {
             const active = isActive(item.href, item.exact);
             return (
@@ -47,17 +47,17 @@ export function AdminSidebar() {
                 key={item.href}
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                className={`relative flex shrink-0 items-center whitespace-nowrap rounded-lg px-3.5 py-2 text-[13.5px] transition-colors md:mb-0.5 md:px-3 md:py-2.5 ${
+                className={`relative flex shrink-0 items-center whitespace-nowrap px-3.5 py-2 text-[13px] transition-colors md:px-3 md:py-2 ${
                   active
                     ? "bg-ink-deep font-bold text-white md:bg-transparent md:text-ink-deep"
-                    : "font-medium text-muted hover:text-ink-deep md:hover:bg-hairline-soft"
+                    : "font-medium text-muted hover:text-ink-deep"
                 }`}
               >
-                {/* 데스크톱 활성 표시 — 좌측 얇은 바 */}
+                {/* 데스크톱 활성 표시 — 좌측 각진 바 */}
                 {active && (
                   <span
                     aria-hidden
-                    className="absolute left-0 top-1/2 hidden h-4 w-[2px] -translate-y-1/2 rounded-full bg-brand-500 md:block"
+                    className="absolute left-0 top-1/2 hidden h-3.5 w-[2px] -translate-y-1/2 bg-ink-deep md:block"
                   />
                 )}
                 {item.label}

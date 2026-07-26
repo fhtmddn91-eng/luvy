@@ -21,22 +21,21 @@
   --color-cream: #fdf5f8;
   --color-charcoal: #201d24;
 
-  /* Premium surfaces — 어드민 / 마이페이지의 차분한 아이보리 캔버스 */
-  --color-canvas: #f4f1ed;
-  --color-hairline: #e3ddd6;
-  --color-hairline-soft: #ede8e2;
-  --color-ink-deep: #17141a;
+  /* 어드민 / 마이페이지 — 뉴트럴 모노크롬 미니멀 */
+  --color-canvas: #f6f6f6;
+  --color-hairline: #e3e3e3;
+  --color-hairline-soft: #eeeeee;
+  --color-ink-deep: #111111;
 
   --font-sans: "Pretendard", "Pretendard Variable", -apple-system,
     BlinkMacSystemFont, system-ui, sans-serif;
-  /* 숫자·영문 라벨 전용 고대비 세리프. 한글은 Pretendard로 자연스럽게 폴백된다. */
-  --font-display: "Instrument Serif", "Pretendard", Georgia, serif;
 
   --radius-pill: 999px;
 
   --shadow-card: 0 8px 30px -12px rgba(214, 63, 119, 0.18);
   --shadow-soft: 0 2px 16px -8px rgba(44, 43, 48, 0.12);
-  --shadow-lift: 0 1px 2px rgba(23, 20, 26, 0.04), 0 12px 32px -20px rgba(23, 20, 26, 0.25);
+  /* 미니멀 기조 — 그림자 대신 헤어라인으로만 면을 나눈다 */
+  --shadow-lift: none;
 }
 
 @layer base {
@@ -91,19 +90,18 @@
 
 /* ── Premium UI 프리미티브 (어드민 / 마이페이지) ───────────────────── */
 
-/* 숫자·영문 라벨용 세리프. 한글이 섞이면 Pretendard로 폴백되므로
-   순수 숫자/영문에만 쓴다. */
+/* 지표 숫자 — Pretendard 고정폭 숫자로 자릿수가 흔들리지 않게 */
 .font-display {
-  font-family: var(--font-display);
-  font-weight: 400;
-  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.03em;
 }
 
 /* 섹션 상단의 작은 대문자 라벨 */
 .eyebrow {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--color-muted);
 }

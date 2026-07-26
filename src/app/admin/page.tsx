@@ -67,12 +67,12 @@ export default async function AdminDashboardPage() {
           {pendingMembers > 0 && (
             <Link
               href="/admin/members?status=PENDING"
-              className="group flex items-center gap-3 rounded-2xl border border-hairline bg-white px-5 py-4 shadow-[var(--shadow-lift)] transition-colors hover:border-brand-300"
+              className="group flex items-center gap-3 border border-hairline bg-white px-5 py-4 transition-colors hover:border-ink-deep"
             >
               <span className="font-display text-[26px] leading-none text-brand-500">
                 {pendingMembers}
               </span>
-              <span className="text-[13px] font-semibold text-ink-deep group-hover:text-brand-600">
+              <span className="text-[13px] font-semibold text-ink-deep group-hover:text-ink-deep">
                 승인 대기 회원
               </span>
             </Link>
@@ -80,12 +80,12 @@ export default async function AdminDashboardPage() {
           {openInquiries > 0 && (
             <Link
               href="/admin/inquiries?status=OPEN"
-              className="group flex items-center gap-3 rounded-2xl border border-hairline bg-white px-5 py-4 shadow-[var(--shadow-lift)] transition-colors hover:border-brand-300"
+              className="group flex items-center gap-3 border border-hairline bg-white px-5 py-4 transition-colors hover:border-ink-deep"
             >
               <span className="font-display text-[26px] leading-none text-brand-500">
                 {openInquiries}
               </span>
-              <span className="text-[13px] font-semibold text-ink-deep group-hover:text-brand-600">
+              <span className="text-[13px] font-semibold text-ink-deep group-hover:text-ink-deep">
                 답변 대기 문의
               </span>
             </Link>
@@ -100,7 +100,7 @@ export default async function AdminDashboardPage() {
           action={
             <Link
               href="/admin/orders"
-              className="text-[12px] font-semibold text-ink-soft transition-colors hover:text-brand-600"
+              className="text-[12px] font-semibold text-ink-soft transition-colors hover:text-ink-deep"
             >
               전체 보기 →
             </Link>
@@ -130,7 +130,7 @@ export default async function AdminDashboardPage() {
                       <td className="px-5 py-3.5 sm:px-6">
                         <Link
                           href={`/admin/orders/${o.id}`}
-                          className="font-display text-[14px] tracking-[0.04em] text-ink-deep hover:text-brand-600"
+                          className="font-display text-[14px] tracking-[0.04em] text-ink-deep hover:text-ink-deep"
                         >
                           {o.id.slice(0, 8).toUpperCase()}
                         </Link>

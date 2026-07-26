@@ -29,7 +29,7 @@ export default async function OrdersPage() {
           {orders.length === 0 ? (
             <EmptyState>
               주문 내역이 없습니다.
-              <Link href="/new" className="ml-1.5 font-semibold text-brand-600 hover:underline">
+              <Link href="/new" className="ml-1.5 font-semibold text-ink-deep underline underline-offset-4">
                 상품 보러가기
               </Link>
             </EmptyState>

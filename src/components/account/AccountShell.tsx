@@ -51,7 +51,7 @@ export function AccountShell({
                     <Link
                       href={item.href}
                       aria-current={active ? "page" : undefined}
-                      className={`relative block whitespace-nowrap rounded-lg px-3.5 py-2 text-[13.5px] transition-colors lg:px-3 lg:py-2.5 ${
+                      className={`relative block whitespace-nowrap  px-3.5 py-2 text-[13.5px] transition-colors lg:px-3 lg:py-2.5 ${
                         active
                           ? "bg-ink-deep font-bold text-white lg:bg-transparent lg:text-ink-deep"
                           : "font-medium text-muted hover:text-ink-deep lg:hover:bg-white"

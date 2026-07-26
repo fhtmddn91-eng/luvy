@@ -4,15 +4,15 @@ export interface StatusMeta {
 }
 
 /**
- * 주문 상태 라벨/색상. 결제 단계 상태는 포트원 연동에서 사용.
- * 톤은 절제된 팔레트로 통일 — 완료/확정만 진한 잉크, 진행중은 로즈, 종료·실패는 회색.
+ * 주문 상태 라벨/색상.
+ * 모노크롬 기조 — 진행중은 아웃라인, 완료는 블랙 채움, 종료·실패는 연회색.
  */
 export const ORDER_STATUS: Record<string, StatusMeta> = {
   PENDING_PAYMENT: { label: "결제대기", tone: "bg-hairline-soft text-muted" },
-  PAID: { label: "결제완료", tone: "bg-brand-50 text-brand-600" },
-  RECEIVED: { label: "접수됨", tone: "bg-brand-50 text-brand-600" },
-  PREPARING: { label: "배송준비", tone: "bg-brand-100 text-brand-700" },
-  SHIPPED: { label: "배송중", tone: "bg-brand-200 text-brand-700" },
+  PAID: { label: "결제완료", tone: "border border-ink-deep text-ink-deep" },
+  RECEIVED: { label: "접수됨", tone: "border border-ink-deep text-ink-deep" },
+  PREPARING: { label: "배송준비", tone: "border border-ink-deep text-ink-deep" },
+  SHIPPED: { label: "배송중", tone: "bg-ink-soft text-white" },
   DELIVERED: { label: "배송완료", tone: "bg-ink-deep text-white" },
   CANCELED: { label: "취소", tone: "bg-hairline-soft text-muted" },
   PAYMENT_FAILED: { label: "결제실패", tone: "bg-hairline-soft text-muted" },

@@ -1,8 +1,8 @@
 import Link from "next/link";
 
 /**
- * 프리미엄 UI 공용 프리미티브.
- * 무거운 카드 대신 헤어라인 + 넉넉한 여백으로 영역을 나눈다.
+ * 어드민 / 마이페이지 공용 프리미티브.
+ * 미니멀 모노크롬 — 각진 모서리, 그림자 없음, 헤어라인으로만 면을 나눈다.
  */
 
 export function PageHeader({
@@ -17,13 +17,13 @@ export function PageHeader({
   action?: React.ReactNode;
 }) {
   return (
-    <header className="rise mb-8 flex flex-wrap items-end justify-between gap-4 border-b border-hairline pb-6">
+    <header className="rise mb-9 flex flex-wrap items-end justify-between gap-4 border-b border-ink-deep pb-5">
       <div className="min-w-0">
-        {eyebrow && <p className="eyebrow font-display">{eyebrow}</p>}
-        <h1 className="mt-2 text-[26px] font-bold leading-tight tracking-[-0.02em] text-ink-deep sm:text-[30px]">
+        {eyebrow && <p className="eyebrow">{eyebrow}</p>}
+        <h1 className="mt-2.5 text-[24px] font-bold leading-none tracking-[-0.035em] text-ink-deep sm:text-[28px]">
           {title}
         </h1>
-        {description && <p className="mt-2 text-[13px] text-muted">{description}</p>}
+        {description && <p className="mt-3 text-[13px] text-muted">{description}</p>}
       </div>
       {action && <div className="shrink-0">{action}</div>}
     </header>
@@ -45,12 +45,14 @@ export function Panel({
   flush?: boolean;
 }) {
   return (
-    <section
-      className={`overflow-hidden rounded-2xl border border-hairline bg-white shadow-[var(--shadow-lift)] ${className}`}
-    >
+    <section className={`border border-hairline bg-white ${className}`}>
       {(title || action) && (
-        <div className="flex items-center justify-between gap-3 border-b border-hairline-soft px-5 py-4 sm:px-6">
-          {title && <h2 className="text-[14px] font-bold tracking-[-0.01em] text-ink-deep">{title}</h2>}
+        <div className="flex items-center justify-between gap-3 border-b border-hairline px-5 py-4 sm:px-6">
+          {title && (
+            <h2 className="text-[12px] font-bold uppercase tracking-[0.14em] text-ink-deep">
+              {title}
+            </h2>
+          )}
           {action}
         </div>
       )}
@@ -59,7 +61,7 @@ export function Panel({
   );
 }
 
-/** 큰 지표 — 숫자는 세리프로 눌러 담아 백화점 리포트 같은 인상을 준다 */
+/** 큰 지표 */
 export function StatTile({
   label,
   value,
@@ -76,21 +78,18 @@ export function StatTile({
   const body = (
     <>
       <p className="eyebrow">{label}</p>
-      <p className="mt-3 flex items-baseline gap-1 text-ink-deep">
-        <span className="font-display text-[34px] leading-none tracking-[-0.02em] sm:text-[40px]">
-          {value}
-        </span>
-        {suffix && <span className="text-[13px] font-semibold text-ink-soft">{suffix}</span>}
+      <p className="mt-4 flex items-baseline gap-1 text-ink-deep">
+        <span className="font-display text-[32px] leading-none sm:text-[36px]">{value}</span>
+        {suffix && <span className="text-[12px] font-semibold text-muted">{suffix}</span>}
       </p>
       {hint && <p className="mt-2 text-[12px] text-muted">{hint}</p>}
     </>
   );
 
-  const cls =
-    "block rounded-2xl border border-hairline bg-white px-5 py-5 shadow-[var(--shadow-lift)] transition-colors";
+  const cls = "block border border-hairline bg-white px-5 py-5 transition-colors";
 
   return href ? (
-    <Link href={href} className={`${cls} hover:border-brand-300`}>
+    <Link href={href} className={`${cls} hover:border-ink-deep`}>
       {body}
     </Link>
   ) : (
@@ -111,7 +110,7 @@ export function StatusPill({
 }) {
   return (
     <span
-      className={`inline-flex whitespace-nowrap rounded-pill px-2.5 py-1 text-[11px] font-bold tracking-[0.01em] ${tone}`}
+      className={`inline-flex whitespace-nowrap px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-[0.08em] ${tone}`}
     >
       {children}
     </span>
@@ -119,7 +118,13 @@ export function StatusPill({
 }
 
 /** 표는 좁은 화면에서 가로 스크롤 */
-export function TableWrap({ minWidth = 720, children }: { minWidth?: number; children: React.ReactNode }) {
+export function TableWrap({
+  minWidth = 720,
+  children,
+}: {
+  minWidth?: number;
+  children: React.ReactNode;
+}) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-[14px]" style={{ minWidth }}>
@@ -147,7 +152,7 @@ export function Th({
 }) {
   return (
     <th
-      className={`whitespace-nowrap px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted sm:px-6 ${alignCls[align]} ${className}`}
+      className={`whitespace-nowrap px-5 py-3.5 text-[10px] font-bold uppercase tracking-[0.16em] text-muted sm:px-6 ${alignCls[align]} ${className}`}
     >
       {children}
     </th>
@@ -160,21 +165,21 @@ export function FilterTabs({
   items: { href: string; label: string; active: boolean; count?: number }[];
 }) {
   return (
-    <div className="no-scrollbar mb-4 flex gap-1.5 overflow-x-auto">
+    <div className="no-scrollbar mb-5 flex gap-0 overflow-x-auto border-b border-hairline">
       {items.map((t) => (
         <Link
           key={t.href}
           href={t.href}
           aria-current={t.active ? "page" : undefined}
-          className={`shrink-0 whitespace-nowrap rounded-pill border px-4 py-1.5 text-[13px] transition-colors ${
+          className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-4 py-2.5 text-[13px] transition-colors ${
             t.active
-              ? "border-ink-deep bg-ink-deep font-bold text-white"
-              : "border-hairline bg-white font-medium text-ink-soft hover:border-ink-deep hover:text-ink-deep"
+              ? "border-ink-deep font-bold text-ink-deep"
+              : "border-transparent font-medium text-muted hover:text-ink-deep"
           }`}
         >
           {t.label}
           {typeof t.count === "number" && (
-            <span className={`ml-1.5 ${t.active ? "text-white/70" : "text-muted"}`}>{t.count}</span>
+            <span className="ml-1.5 font-display text-muted">{t.count}</span>
           )}
         </Link>
       ))}
@@ -182,14 +187,12 @@ export function FilterTabs({
   );
 }
 
-/** 어드민 기본 버튼 — 실선(주요) / 외곽선(보조) */
+/** 버튼 — 각진 형태, 블랙 / 아웃라인 */
 export const btnPrimary =
-  "inline-flex items-center justify-center gap-1.5 rounded-pill bg-ink-deep px-5 py-2.5 text-[13.5px] font-bold text-white transition-colors hover:bg-brand-600 disabled:opacity-60";
+  "inline-flex items-center justify-center gap-1.5 bg-ink-deep px-6 py-3 text-[12px] font-bold uppercase tracking-[0.12em] text-white transition-opacity hover:opacity-80 disabled:opacity-40";
 export const btnGhost =
-  "inline-flex items-center justify-center gap-1.5 rounded-pill border border-hairline bg-white px-4 py-2 text-[13px] font-medium text-ink-soft transition-colors hover:border-ink-deep hover:text-ink-deep";
+  "inline-flex items-center justify-center gap-1.5 border border-ink-deep bg-white px-5 py-2.5 text-[12px] font-bold uppercase tracking-[0.12em] text-ink-deep transition-colors hover:bg-ink-deep hover:text-white";
 
 export function EmptyState({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="px-6 py-16 text-center text-[14px] text-muted">{children}</div>
-  );
+  return <div className="px-6 py-20 text-center text-[13px] text-muted">{children}</div>;
 }

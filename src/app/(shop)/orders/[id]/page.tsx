@@ -39,7 +39,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
     >
       <div className="space-y-4">
         {/* 주문 요약 */}
-        <div className="rise rise-1 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-hairline bg-white px-5 py-4 shadow-[var(--shadow-lift)] sm:px-6">
+        <div className="rise rise-1 flex flex-wrap items-center justify-between gap-3 border border-hairline bg-white px-5 py-4 sm:px-6">
           <div>
             <p className="eyebrow">Order no.</p>
             <p className="mt-1 font-display text-[20px] tracking-[0.06em] text-ink-deep">

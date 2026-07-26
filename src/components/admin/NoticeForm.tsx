@@ -5,16 +5,16 @@ import { useFormStatus } from "react-dom";
 import Link from "next/link";
 import type { NoticeFormState } from "@/lib/actions/admin-notices";
 import { btnPrimary } from "@/components/ui/Panel";
-import { fieldCls, labelCls } from "@/components/ui/form";
+import { fieldCls, areaCls, labelCls } from "@/components/ui/form";
 
 export interface NoticeFormData {
-  id: string;
-  kind: string;
-  tag: string;
-  text: string;
-  body?: string;
-  sortOrder: number;
-  active: boolean;
+ id: string;
+ kind: string;
+ tag: string;
+ text: string;
+ body?: string;
+ sortOrder: number;
+ active: boolean;
 }
 
 type Action = (prev: NoticeFormState, formData: FormData) => Promise<NoticeFormState>;
@@ -22,73 +22,73 @@ type Action = (prev: NoticeFormState, formData: FormData) => Promise<NoticeFormS
 const inputCls = fieldCls;
 
 const KINDS = [
-  { value: "notice", label: "공지사항" },
-  { value: "stock", label: "입고 소식" },
-  { value: "event", label: "이벤트" },
+ { value: "notice", label: "공지사항" },
+ { value: "stock", label: "입고 소식" },
+ { value: "event", label: "이벤트" },
 ];
 
 function SaveButton() {
-  const { pending } = useFormStatus();
-  return (
-    <button type="submit" disabled={pending} className={btnPrimary}>
-      {pending ? "저장 중…" : "저장"}
-    </button>
-  );
+ const { pending } = useFormStatus();
+ return (
+ <button type="submit" disabled={pending} className={btnPrimary}>
+ {pending ? "저장 중…" : "저장"}
+ </button>
+ );
 }
 
 export function NoticeForm({ action, notice }: { action: Action; notice?: NoticeFormData }) {
-  const [state, formAction] = useActionState<NoticeFormState, FormData>(action, {});
+ const [state, formAction] = useActionState<NoticeFormState, FormData>(action, {});
 
-  return (
-    <form
-      action={formAction}
-      className="rise max-w-[720px] space-y-5 rounded-2xl border border-hairline bg-white p-5 shadow-[var(--shadow-lift)] sm:p-6"
-    >
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className={labelCls}>구분</label>
-          <select name="kind" defaultValue={notice?.kind ?? "notice"} className={inputCls}>
-            {KINDS.map((k) => (
-              <option key={k.value} value={k.value}>{k.label}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className={labelCls}>태그 라벨</label>
-          <input name="tag" defaultValue={notice?.tag} placeholder="공지사항" className={inputCls} />
-        </div>
-      </div>
-      <div>
-        <label className={labelCls}>제목 (목록/메인에 표시)</label>
-        <input name="text" defaultValue={notice?.text} className={inputCls} />
-      </div>
-      <div>
-        <label className={labelCls}>상세 본문 (공지 상세 페이지에 표시, 선택)</label>
-        <textarea
-          name="body"
-          rows={6}
-          defaultValue={notice?.body}
-          placeholder="공지 상세 내용을 입력하세요. 비워두면 상세 페이지에 제목만 표시됩니다."
-          className="w-full rounded-lg border border-line bg-white px-3 py-2.5 text-[14px] leading-relaxed text-ink focus:border-brand-400 focus:outline-none"
-        />
-      </div>
-      <div className="flex items-end gap-6">
-        <div>
-          <label className={labelCls}>정렬 순서</label>
-          <input name="sortOrder" type="number" defaultValue={notice?.sortOrder ?? 0} className={`${inputCls} w-28`} />
-        </div>
-        <label className="flex h-11 items-center gap-2 text-[14px] text-ink">
-          <input name="active" type="checkbox" defaultChecked={notice?.active ?? true} className="h-4 w-4 accent-brand-500" />
-          노출
-        </label>
-      </div>
+ return (
+ <form
+ action={formAction}
+ className="rise max-w-[720px] space-y-5 border border-hairline bg-white p-5 sm:p-6"
+ >
+ <div className="grid grid-cols-2 gap-4">
+ <div>
+ <label className={labelCls}>구분</label>
+ <select name="kind" defaultValue={notice?.kind ?? "notice"} className={inputCls}>
+ {KINDS.map((k) => (
+ <option key={k.value} value={k.value}>{k.label}</option>
+ ))}
+ </select>
+ </div>
+ <div>
+ <label className={labelCls}>태그 라벨</label>
+ <input name="tag" defaultValue={notice?.tag} placeholder="공지사항" className={inputCls} />
+ </div>
+ </div>
+ <div>
+ <label className={labelCls}>제목 (목록/메인에 표시)</label>
+ <input name="text" defaultValue={notice?.text} className={inputCls} />
+ </div>
+ <div>
+ <label className={labelCls}>상세 본문 (공지 상세 페이지에 표시, 선택)</label>
+ <textarea
+ name="body"
+ rows={6}
+ defaultValue={notice?.body}
+ placeholder="공지 상세 내용을 입력하세요. 비워두면 상세 페이지에 제목만 표시됩니다."
+ className={areaCls}
+ />
+ </div>
+ <div className="flex items-end gap-6">
+ <div>
+ <label className={labelCls}>정렬 순서</label>
+ <input name="sortOrder" type="number" defaultValue={notice?.sortOrder ?? 0} className={`${inputCls} w-28`} />
+ </div>
+ <label className="flex h-11 items-center gap-2 text-[14px] text-ink-deep">
+ <input name="active" type="checkbox" defaultChecked={notice?.active ?? true} className="h-4 w-4 accent-brand-500" />
+ 노출
+ </label>
+ </div>
 
-      {state.error && <p className="text-[13px] font-medium text-brand-600">{state.error}</p>}
+ {state.error && <p className="text-[13px] font-medium text-brand-600">{state.error}</p>}
 
-      <div className="flex items-center gap-3 pt-2">
-        <SaveButton />
-        <Link href="/admin/notices" className="text-[14px] text-muted hover:text-ink">취소</Link>
-      </div>
-    </form>
-  );
+ <div className="flex items-center gap-3 pt-2">
+ <SaveButton />
+ <Link href="/admin/notices" className="text-[13.5px] text-muted hover:text-ink-deep">취소</Link>
+ </div>
+ </form>
+ );
 }

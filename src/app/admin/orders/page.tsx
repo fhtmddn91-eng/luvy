@@ -83,7 +83,7 @@ export default async function AdminOrdersPage({
                     <td className="px-5 py-3.5 sm:px-6">
                       <Link
                         href={`/admin/orders/${o.id}`}
-                        className="font-display text-[14px] tracking-[0.04em] text-ink-deep hover:text-brand-600"
+                        className="font-display text-[14px] tracking-[0.04em] text-ink-deep hover:text-ink-deep"
                       >
                         {o.id.slice(0, 8).toUpperCase()}
                       </Link>

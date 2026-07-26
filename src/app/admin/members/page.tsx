@@ -82,7 +82,7 @@ export default async function AdminMembersPage({
                     <td className="px-5 py-3.5 sm:px-6">
                       <Link
                         href={`/admin/members/${m.id}`}
-                        className="font-semibold text-ink-deep hover:text-brand-600"
+                        className="font-semibold text-ink-deep hover:text-ink-deep"
                       >
                         {m.companyName}
                       </Link>

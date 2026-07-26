@@ -87,7 +87,7 @@ export default async function AdminInquiriesPage({
                       <td className="px-5 py-3.5 sm:px-6">
                         <Link
                           href={`/admin/inquiries/${inq.id}`}
-                          className="font-semibold text-ink-deep hover:text-brand-600"
+                          className="font-semibold text-ink-deep hover:text-ink-deep"
                         >
                           {inq.title}
                         </Link>

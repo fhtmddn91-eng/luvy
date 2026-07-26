@@ -56,7 +56,7 @@ export default async function AdminBannersPage() {
                       <span className="eyebrow text-brand-500">{b.eyebrow}</span>
                       <Link
                         href={`/admin/banners/${b.id}`}
-                        className="mt-0.5 block font-semibold text-ink-deep hover:text-brand-600"
+                        className="mt-0.5 block font-semibold text-ink-deep hover:text-ink-deep"
                       >
                         {b.title.replace(/\n/g, " ")}
                       </Link>
@@ -73,7 +73,7 @@ export default async function AdminBannersPage() {
                         <form action={toggleBannerActive.bind(null, b.id, !b.active)}>
                           <button
                             type="submit"
-                            className="text-ink-soft transition-colors hover:text-brand-600"
+                            className="text-ink-soft transition-colors hover:text-ink-deep"
                           >
                             {b.active ? "숨김" : "노출"}
                           </button>
@@ -81,7 +81,7 @@ export default async function AdminBannersPage() {
                         <span aria-hidden className="h-3 w-px bg-hairline" />
                         <Link
                           href={`/admin/banners/${b.id}`}
-                          className="text-ink-soft transition-colors hover:text-brand-600"
+                          className="text-ink-soft transition-colors hover:text-ink-deep"
                         >
                           수정
                         </Link>
@@ -89,7 +89,7 @@ export default async function AdminBannersPage() {
                         <form action={deleteBanner.bind(null, b.id)}>
                           <button
                             type="submit"
-                            className="text-muted transition-colors hover:text-brand-600"
+                            className="text-muted transition-colors hover:text-ink-deep"
                           >
                             삭제
                           </button>
