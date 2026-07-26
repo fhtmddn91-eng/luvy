@@ -141,6 +141,9 @@ npm run dev
 - Railway **Volume**을 앱 서비스의 `/app/public/uploads` 에 마운트, 또는
 - `src/lib/storage.ts` 를 S3/R2 등 외부 스토리지 드라이버로 교체 (이 파일만 바꾸면 됨)
 
+**가입 시 첨부되는 사업자등록증**도 파일(`/app/private-uploads`)로 저장되므로
+같은 방식으로 Volume 마운트가 필요합니다. (관리자만 열람 가능, 공개 URL 없음)
+
 ## 6. 502 / 앱이 안 뜰 때 (부팅 단계 확인)
 
 시작 명령은 단계마다 마커를 찍습니다. Railway → **Deploy Logs** 에서

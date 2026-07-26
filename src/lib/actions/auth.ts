@@ -5,6 +5,7 @@ import { cookies } from "next/headers";
 import { db } from "@/lib/db";
 import { createSession, destroySession, hashPassword, verifyPassword } from "@/lib/auth";
 import { isValidBizNumber, isValidEmail, normalizeBizNumber, safeNextPath } from "@/lib/validation";
+import { saveBizCertUpload } from "@/lib/storage";
 
 export type AuthState = { error?: string };
 
@@ -25,8 +26,17 @@ export async function signupAction(_prev: AuthState, formData: FormData): Promis
   if (!ownerName) return { error: "대표자명을 입력해주세요." };
   if (!phone) return { error: "연락처를 입력해주세요." };
 
+  // 폐쇄몰 심사용 사업자등록증 첨부 (필수)
+  const bizCert = formData.get("bizCert");
+  if (!(bizCert instanceof File) || bizCert.size === 0) {
+    return { error: "사업자등록증 파일을 첨부해주세요." };
+  }
+
   const exists = await db.user.findUnique({ where: { email } });
   if (exists) return { error: "이미 가입된 이메일입니다." };
+
+  const saved = await saveBizCertUpload(bizCert);
+  if (!saved.ok) return { error: saved.error };
 
   const user = await db.user.create({
     data: {
@@ -34,6 +44,7 @@ export async function signupAction(_prev: AuthState, formData: FormData): Promis
       passwordHash: await hashPassword(password),
       companyName,
       businessNumber: normalizeBizNumber(businessNumber),
+      bizCertFile: saved.name,
       ownerName,
       phone,
       status: "PENDING",

@@ -34,3 +34,6 @@ next-env.d.ts
 
 # runtime uploads (product images)
 /public/uploads
+
+# private uploads (사업자등록증 — 절대 커밋 금지)
+/private-uploads

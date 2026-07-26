@@ -43,6 +43,34 @@ export default async function AdminMemberDetailPage({ params }: { params: Promis
  <div className="flex gap-3"><dt className="w-24 shrink-0 text-muted">가입일</dt><dd>{dateFmt(member.createdAt)}</dd></div>
  </dl>
 
+ <h2 className="mb-3 mt-6 text-[15px] font-bold text-ink-deep">사업자등록증</h2>
+ {member.bizCertFile ? (
+ member.bizCertFile.endsWith(".pdf") ? (
+ <a
+ href={`/api/admin/bizcert/${member.bizCertFile}`}
+ target="_blank"
+ rel="noreferrer"
+ className="inline-flex items-center gap-2 border border-ink-deep px-4 py-2.5 text-[12px] font-bold uppercase tracking-[0.12em] text-ink-deep transition-colors hover:bg-ink-deep hover:text-white"
+ >
+ PDF 열기 ↗
+ </a>
+ ) : (
+ <a href={`/api/admin/bizcert/${member.bizCertFile}`} target="_blank" rel="noreferrer">
+ {/* eslint-disable-next-line @next/next/no-img-element */}
+ <img
+ src={`/api/admin/bizcert/${member.bizCertFile}`}
+ alt={`${member.companyName} 사업자등록증`}
+ className="max-h-[420px] w-full max-w-[440px] border border-hairline object-contain transition-opacity hover:opacity-90"
+ />
+ <span className="mt-1.5 block text-[12px] text-muted">클릭하면 원본 크기로 열립니다.</span>
+ </a>
+ )
+ ) : (
+ <p className="text-[13px] text-muted">
+ 첨부된 사업자등록증이 없습니다. (첨부 기능 도입 전에 가입한 회원)
+ </p>
+ )}
+
  <h2 className="mb-3 mt-6 text-[15px] font-bold text-ink-deep">최근 주문 ({member.orders.length})</h2>
  {member.orders.length === 0 ? (
  <p className="text-[13px] text-muted">주문 내역이 없습니다.</p>
