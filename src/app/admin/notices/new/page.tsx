@@ -1,10 +1,13 @@
+import { requireAdmin } from "@/lib/auth";
 import { NoticeForm } from "@/components/admin/NoticeForm";
 import { createNotice } from "@/lib/actions/admin-notices";
+import { PageHeader } from "@/components/ui/Panel";
 
-export default function NewNoticePage() {
+export default async function NewNoticePage() {
+  await requireAdmin();
   return (
     <div>
-      <h1 className="mb-6 text-[22px] font-extrabold text-ink">공지 추가</h1>
+      <PageHeader eyebrow="Catalog" title="공지 추가" description="메인 공지 스트립에 노출됩니다." />
       <NoticeForm action={createNotice} />
     </div>
   );

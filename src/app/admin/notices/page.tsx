@@ -1,73 +1,121 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { toggleNoticeActive, deleteNotice } from "@/lib/actions/admin-notices";
+import {
+  PageHeader,
+  Panel,
+  StatusPill,
+  TableWrap,
+  Th,
+  EmptyState,
+  btnPrimary,
+} from "@/components/ui/Panel";
 
-const kindLabel: Record<string, string> = { notice: "공지사항", stock: "입고 소식", event: "이벤트" };
+const kindLabel: Record<string, string> = {
+  notice: "공지사항",
+  stock: "입고 소식",
+  event: "이벤트",
+};
 
 export default async function AdminNoticesPage() {
+  await requireAdmin();
   const notices = await db.notice.findMany({ orderBy: { sortOrder: "asc" } });
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-[22px] font-extrabold text-ink">공지 관리</h1>
-          <p className="mt-1 text-[13px] text-muted">메인 공지 스트립 · {notices.length}개</p>
-        </div>
-        <Link href="/admin/notices/new" className="rounded-pill bg-brand-500 px-5 py-2.5 text-[14px] font-bold text-white hover:bg-brand-600">
-          + 공지 추가
-        </Link>
-      </div>
+      <PageHeader
+        eyebrow="Catalog"
+        title="공지 관리"
+        description={`메인 공지 스트립 · ${notices.length}개`}
+        action={
+          <Link href="/admin/notices/new" className={btnPrimary}>
+            + 공지 추가
+          </Link>
+        }
+      />
 
-      <div className="overflow-x-auto rounded-2xl border border-line bg-white">
-        <table className="w-full min-w-[560px] text-[14px]">
-          <thead>
-            <tr className="border-b border-line bg-cream/60 text-left text-[12px] text-muted">
-              <th className="px-4 py-3 font-medium">순서</th>
-              <th className="px-4 py-3 font-medium">구분</th>
-              <th className="px-4 py-3 font-medium">내용</th>
-              <th className="px-4 py-3 text-center font-medium">노출</th>
-              <th className="px-4 py-3 text-right font-medium">관리</th>
-            </tr>
-          </thead>
-          <tbody>
-            {notices.length === 0 ? (
-              <tr><td colSpan={5} className="px-4 py-10 text-center text-muted">공지가 없습니다.</td></tr>
-            ) : (
-              notices.map((n) => (
-                <tr key={n.id} className="border-b border-line/60">
-                  <td className="px-4 py-3 text-ink-soft">{n.sortOrder}</td>
-                  <td className="px-4 py-3">
-                    <span className="rounded-pill bg-brand-50 px-2.5 py-1 text-[12px] font-bold text-brand-600">
-                      {kindLabel[n.kind] ?? n.tag}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <Link href={`/admin/notices/${n.id}`} className="font-medium text-ink hover:text-brand-600">{n.text}</Link>
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`rounded-pill px-2.5 py-1 text-[12px] font-bold ${n.active ? "bg-brand-50 text-brand-600" : "bg-line text-muted"}`}>
-                      {n.active ? "노출중" : "숨김"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-3">
-                      <form action={toggleNoticeActive.bind(null, n.id, !n.active)}>
-                        <button type="submit" className="text-[13px] text-ink-soft hover:text-brand-600">
-                          {n.active ? "숨김" : "노출"}
-                        </button>
-                      </form>
-                      <Link href={`/admin/notices/${n.id}`} className="text-[13px] text-ink-soft hover:text-brand-600">수정</Link>
-                      <form action={deleteNotice.bind(null, n.id)}>
-                        <button type="submit" className="text-[13px] text-muted hover:text-brand-600">삭제</button>
-                      </form>
-                    </div>
-                  </td>
+      <div className="rise rise-1">
+        <Panel flush>
+          {notices.length === 0 ? (
+            <EmptyState>등록된 공지가 없습니다.</EmptyState>
+          ) : (
+            <TableWrap minWidth={660}>
+              <thead>
+                <tr className="border-b border-hairline-soft">
+                  <Th align="center">순서</Th>
+                  <Th>구분</Th>
+                  <Th>내용</Th>
+                  <Th align="center">노출</Th>
+                  <Th align="right">관리</Th>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {notices.map((n) => (
+                  <tr
+                    key={n.id}
+                    className="border-b border-hairline-soft last:border-0 transition-colors hover:bg-canvas"
+                  >
+                    <td className="px-5 py-3.5 text-center font-display text-[15px] text-muted sm:px-6">
+                      {n.sortOrder}
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3.5 sm:px-6">
+                      <StatusPill tone="bg-brand-50 text-brand-600">
+                        {kindLabel[n.kind] ?? n.tag}
+                      </StatusPill>
+                    </td>
+                    <td className="px-5 py-3.5 sm:px-6">
+                      <Link
+                        href={`/admin/notices/${n.id}`}
+                        className="font-medium text-ink-deep hover:text-brand-600"
+                      >
+                        {n.text}
+                      </Link>
+                      {n.body && (
+                        <span className="mt-0.5 block text-[12px] text-muted">상세 본문 있음</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5 text-center sm:px-6">
+                      <StatusPill
+                        tone={n.active ? "bg-ink-deep text-white" : "bg-hairline-soft text-muted"}
+                      >
+                        {n.active ? "노출중" : "숨김"}
+                      </StatusPill>
+                    </td>
+                    <td className="px-5 py-3.5 sm:px-6">
+                      <div className="flex items-center justify-end gap-3 whitespace-nowrap text-[13px]">
+                        <form action={toggleNoticeActive.bind(null, n.id, !n.active)}>
+                          <button
+                            type="submit"
+                            className="text-ink-soft transition-colors hover:text-brand-600"
+                          >
+                            {n.active ? "숨김" : "노출"}
+                          </button>
+                        </form>
+                        <span aria-hidden className="h-3 w-px bg-hairline" />
+                        <Link
+                          href={`/admin/notices/${n.id}`}
+                          className="text-ink-soft transition-colors hover:text-brand-600"
+                        >
+                          수정
+                        </Link>
+                        <span aria-hidden className="h-3 w-px bg-hairline" />
+                        <form action={deleteNotice.bind(null, n.id)}>
+                          <button
+                            type="submit"
+                            className="text-muted transition-colors hover:text-brand-600"
+                          >
+                            삭제
+                          </button>
+                        </form>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </TableWrap>
+          )}
+        </Panel>
       </div>
     </div>
   );

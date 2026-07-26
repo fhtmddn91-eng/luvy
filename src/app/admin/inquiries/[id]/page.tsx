@@ -24,18 +24,18 @@ export default async function AdminInquiryDetailPage({
 
   return (
     <div className="max-w-[760px]">
-      <Link href="/admin/inquiries" className="text-[13px] text-muted hover:text-ink">
+      <Link href="/admin/inquiries" className="text-[13px] text-muted hover:text-ink-deep">
         ← 문의 목록
       </Link>
 
-      <div className="mt-3 rounded-2xl border border-line bg-white p-5 sm:p-6">
+      <div className="mt-3 rounded-2xl border border-hairline bg-white p-5 shadow-[var(--shadow-lift)] sm:p-6">
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-pill bg-brand-50 px-2.5 py-1 text-[11px] font-bold text-brand-600">
             {INQUIRY_TYPES[inquiry.type as keyof typeof INQUIRY_TYPES] ?? inquiry.type}
           </span>
           <span
             className={`rounded-pill px-2.5 py-1 text-[11px] font-bold ${
-              inquiry.status === "ANSWERED" ? "bg-brand-500 text-white" : "bg-line text-ink-soft"
+              inquiry.status === "ANSWERED" ? "bg-ink-deep text-white" : "bg-[#fdf3e4] text-[#95651a]"
             }`}
           >
             {inquiry.status === "ANSWERED" ? "답변 완료" : "답변 대기"}
@@ -43,14 +43,14 @@ export default async function AdminInquiryDetailPage({
           <span className="text-[12px] text-muted">{dateFmt(inquiry.createdAt)}</span>
         </div>
 
-        <h1 className="mt-3 text-[19px] font-extrabold text-ink">{inquiry.title}</h1>
-        <p className="mt-3 whitespace-pre-line border-t border-line pt-4 text-[14px] leading-relaxed text-ink-soft">
+        <h1 className="mt-3 text-[19px] font-extrabold text-ink-deep">{inquiry.title}</h1>
+        <p className="mt-3 whitespace-pre-line border-t border-hairline-soft pt-4 text-[14px] leading-relaxed text-ink-soft">
           {inquiry.content}
         </p>
       </div>
 
-      <div className="mt-4 rounded-2xl border border-line bg-cream p-5 sm:p-6">
-        <h2 className="text-[14px] font-bold text-ink">문의 회원</h2>
+      <div className="mt-4 rounded-2xl border border-hairline bg-white p-5 shadow-[var(--shadow-lift)] sm:p-6">
+        <h2 className="text-[14px] font-bold text-ink-deep">문의 회원</h2>
         <dl className="mt-2 grid gap-x-6 gap-y-1 text-[13px] text-ink-soft sm:grid-cols-2">
           <div className="flex gap-2">
             <dt className="w-14 shrink-0 text-muted">상호명</dt>
@@ -71,8 +71,8 @@ export default async function AdminInquiryDetailPage({
         </dl>
       </div>
 
-      <div className="mt-4 rounded-2xl border border-line bg-white p-5 sm:p-6">
-        <h2 className="mb-3 text-[14px] font-bold text-ink">
+      <div className="mt-4 rounded-2xl border border-hairline bg-white p-5 shadow-[var(--shadow-lift)] sm:p-6">
+        <h2 className="mb-3 text-[14px] font-bold text-ink-deep">
           답변
           {inquiry.answeredAt && (
             <span className="ml-2 text-[12px] font-medium text-muted">

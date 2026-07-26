@@ -21,13 +21,22 @@
   --color-cream: #fdf5f8;
   --color-charcoal: #201d24;
 
+  /* Premium surfaces — 어드민 / 마이페이지의 차분한 아이보리 캔버스 */
+  --color-canvas: #f4f1ed;
+  --color-hairline: #e3ddd6;
+  --color-hairline-soft: #ede8e2;
+  --color-ink-deep: #17141a;
+
   --font-sans: "Pretendard", "Pretendard Variable", -apple-system,
     BlinkMacSystemFont, system-ui, sans-serif;
+  /* 숫자·영문 라벨 전용 고대비 세리프. 한글은 Pretendard로 자연스럽게 폴백된다. */
+  --font-display: "Instrument Serif", "Pretendard", Georgia, serif;
 
   --radius-pill: 999px;
 
   --shadow-card: 0 8px 30px -12px rgba(214, 63, 119, 0.18);
   --shadow-soft: 0 2px 16px -8px rgba(44, 43, 48, 0.12);
+  --shadow-lift: 0 1px 2px rgba(23, 20, 26, 0.04), 0 12px 32px -20px rgba(23, 20, 26, 0.25);
 }
 
 @layer base {
@@ -78,6 +87,50 @@
 }
 .floaty {
   animation: floaty 6s ease-in-out infinite;
+}
+
+/* ── Premium UI 프리미티브 (어드민 / 마이페이지) ───────────────────── */
+
+/* 숫자·영문 라벨용 세리프. 한글이 섞이면 Pretendard로 폴백되므로
+   순수 숫자/영문에만 쓴다. */
+.font-display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+/* 섹션 상단의 작은 대문자 라벨 */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+/* 페이지 로드 시 순차 등장 — 과하지 않게 한 번만 */
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: riseIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.rise-1 { animation-delay: 0.04s; }
+.rise-2 { animation-delay: 0.08s; }
+.rise-3 { animation-delay: 0.12s; }
+.rise-4 { animation-delay: 0.16s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rise {
+    animation: none;
+  }
 }
 
 /* 로그인 환영 팝업 */

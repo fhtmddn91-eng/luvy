@@ -20,7 +20,7 @@ export async function Header() {
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
           <Link
-            href="/orders"
+            href="/account"
             aria-label="마이페이지"
             className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-[14px] font-semibold text-ink transition-colors hover:bg-brand-50 hover:text-brand-600 sm:px-3"
           >

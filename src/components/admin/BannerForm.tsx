@@ -4,6 +4,8 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import Link from "next/link";
 import type { BannerFormState } from "@/lib/actions/admin-banners";
+import { btnPrimary } from "@/components/ui/Panel";
+import { fieldCls, labelCls } from "@/components/ui/form";
 
 export interface BannerFormData {
   id: string;
@@ -20,14 +22,12 @@ export interface BannerFormData {
 
 type Action = (prev: BannerFormState, formData: FormData) => Promise<BannerFormState>;
 
-const inputCls =
-  "h-11 w-full rounded-lg border border-line bg-white px-3 text-[14px] text-ink focus:border-brand-400 focus:outline-none";
-const labelCls = "mb-1.5 block text-[13px] font-semibold text-ink-soft";
+const inputCls = fieldCls;
 
 function SaveButton() {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending} className="h-11 rounded-pill bg-brand-500 px-8 text-[14px] font-bold text-white hover:bg-brand-600 disabled:opacity-60">
+    <button type="submit" disabled={pending} className={btnPrimary}>
       {pending ? "저장 중…" : "저장"}
     </button>
   );
@@ -37,7 +37,10 @@ export function BannerForm({ action, banner }: { action: Action; banner?: Banner
   const [state, formAction] = useActionState<BannerFormState, FormData>(action, {});
 
   return (
-    <form action={formAction} className="max-w-[720px] space-y-5">
+    <form
+      action={formAction}
+      className="rise max-w-[760px] space-y-5 rounded-2xl border border-hairline bg-white p-5 shadow-[var(--shadow-lift)] sm:p-6"
+    >
       <div>
         <label className={labelCls}>상단 라벨 (eyebrow)</label>
         <input name="eyebrow" defaultValue={banner?.eyebrow} placeholder="LOVE YOUR BUSINESS" className={inputCls} />

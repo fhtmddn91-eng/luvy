@@ -5,6 +5,15 @@ import { won } from "@/lib/format";
 import { categories } from "@/lib/mock/categories";
 import { setProductStatus, deleteProduct } from "@/lib/actions/admin-products";
 import { ProductThumb } from "@/components/product/ProductThumb";
+import {
+  PageHeader,
+  Panel,
+  StatusPill,
+  TableWrap,
+  Th,
+  EmptyState,
+  btnPrimary,
+} from "@/components/ui/Panel";
 
 const categoryName = (slug: string) => categories.find((c) => c.slug === slug)?.name ?? slug;
 
@@ -25,95 +34,130 @@ export default async function AdminProductsPage({
     orderBy: { createdAt: "desc" },
   });
 
+  const liveCount = products.filter((p) => p.status === "ACTIVE").length;
+
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-[22px] font-extrabold text-ink">상품 관리</h1>
-          <p className="mt-1 text-[13px] text-muted">{products.length}개 상품</p>
-        </div>
-        <Link
-          href="/admin/products/new"
-          className="rounded-pill bg-brand-500 px-5 py-2.5 text-[14px] font-bold text-white hover:bg-brand-600"
-        >
-          + 상품 등록
-        </Link>
-      </div>
+      <PageHeader
+        eyebrow="Catalog"
+        title="상품 관리"
+        description={`전체 ${products.length}개 · 판매중 ${liveCount}개`}
+        action={
+          <Link href="/admin/products/new" className={btnPrimary}>
+            + 상품 등록
+          </Link>
+        }
+      />
 
-      <form className="mb-4" action="/admin/products">
-        <input
-          name="q"
-          defaultValue={query}
-          placeholder="상품명 또는 브랜드 검색"
-          className="h-11 w-full max-w-sm rounded-lg border border-line bg-white px-4 text-[14px] focus:border-brand-400 focus:outline-none"
-        />
+      <form className="rise rise-1 mb-4" action="/admin/products">
+        <div className="relative max-w-sm">
+          <input
+            name="q"
+            defaultValue={query}
+            placeholder="상품명 또는 브랜드 검색"
+            className="h-11 w-full rounded-pill border border-hairline bg-white pl-4 pr-20 text-[14px] text-ink-deep placeholder:text-muted focus:border-ink-deep focus:outline-none"
+          />
+          <button
+            type="submit"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-pill px-3.5 py-1.5 text-[13px] font-semibold text-ink-soft transition-colors hover:text-brand-600"
+          >
+            검색
+          </button>
+        </div>
       </form>
 
-      <div className="overflow-x-auto rounded-2xl border border-line bg-white">
-        <table className="w-full min-w-[720px] text-[14px]">
-          <thead>
-            <tr className="border-b border-line bg-cream/60 text-left text-[12px] text-muted">
-              <th className="px-4 py-3 font-medium">상품명</th>
-              <th className="px-4 py-3 font-medium">브랜드</th>
-              <th className="px-4 py-3 font-medium">카테고리</th>
-              <th className="px-4 py-3 text-right font-medium">최저 도매가</th>
-              <th className="px-4 py-3 text-center font-medium">상태</th>
-              <th className="px-4 py-3 text-right font-medium">관리</th>
-            </tr>
-          </thead>
-          <tbody>
-            {products.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-muted">상품이 없습니다.</td>
-              </tr>
-            ) : (
-              products.map((p) => {
-                const minTier = [...p.priceTiers].sort((a, b) => a.unitPrice - b.unitPrice)[0];
-                return (
-                  <tr key={p.id} className="border-b border-line/60">
-                    <td className="px-4 py-3">
-                      <Link href={`/admin/products/${p.id}`} className="flex items-center gap-3 font-semibold text-ink hover:text-brand-600">
-                        <ProductThumb
-                          id={p.id}
-                          brand={p.brand}
-                          image={p.image || undefined}
-                          alt={p.name}
-                          className="h-10 w-10 shrink-0 rounded-lg text-[10px]"
-                        />
-                        {p.name}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 text-ink-soft">{p.brand}</td>
-                    <td className="px-4 py-3 text-ink-soft">{categoryName(p.categorySlug)}</td>
-                    <td className="px-4 py-3 text-right text-ink-soft">{minTier ? won(minTier.unitPrice) : "-"}</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`rounded-pill px-2.5 py-1 text-[12px] font-bold ${p.status === "ACTIVE" ? "bg-brand-50 text-brand-600" : "bg-line text-muted"}`}>
-                        {p.status === "ACTIVE" ? "판매중" : "숨김"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-end gap-3">
-                        <form action={setProductStatus.bind(null, p.id, p.status === "ACTIVE" ? "HIDDEN" : "ACTIVE")}>
-                          <button type="submit" className="text-[13px] text-ink-soft hover:text-brand-600">
-                            {p.status === "ACTIVE" ? "숨김" : "판매"}
-                          </button>
-                        </form>
-                        <Link href={`/admin/products/${p.id}`} className="text-[13px] text-ink-soft hover:text-brand-600">
-                          수정
+      <div className="rise rise-2">
+        <Panel flush>
+          {products.length === 0 ? (
+            <EmptyState>
+              {query ? `‘${query}’ 검색 결과가 없습니다.` : "등록된 상품이 없습니다."}
+            </EmptyState>
+          ) : (
+            <TableWrap minWidth={860}>
+              <thead>
+                <tr className="border-b border-hairline-soft">
+                  <Th>상품</Th>
+                  <Th>브랜드</Th>
+                  <Th>카테고리</Th>
+                  <Th align="right">최저 도매가</Th>
+                  <Th align="center">상태</Th>
+                  <Th align="right">관리</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {products.map((p) => {
+                  const minTier = [...p.priceTiers].sort((a, b) => a.unitPrice - b.unitPrice)[0];
+                  const live = p.status === "ACTIVE";
+                  return (
+                    <tr
+                      key={p.id}
+                      className="border-b border-hairline-soft last:border-0 transition-colors hover:bg-canvas"
+                    >
+                      <td className="px-5 py-3 sm:px-6">
+                        <Link
+                          href={`/admin/products/${p.id}`}
+                          className="flex items-center gap-3 font-semibold text-ink-deep hover:text-brand-600"
+                        >
+                          <ProductThumb
+                            id={p.id}
+                            brand={p.brand}
+                            image={p.image || undefined}
+                            alt={p.name}
+                            compact
+                            className="h-11 w-11 shrink-0 rounded-lg text-[7px]"
+                          />
+                          <span className="line-clamp-2">{p.name}</span>
                         </Link>
-                        <form action={deleteProduct.bind(null, p.id)}>
-                          <button type="submit" className="text-[13px] text-muted hover:text-brand-600">
-                            삭제
-                          </button>
-                        </form>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+                      </td>
+                      <td className="px-5 py-3 text-[13px] text-ink-soft sm:px-6">{p.brand}</td>
+                      <td className="px-5 py-3 text-[13px] text-ink-soft sm:px-6">
+                        {categoryName(p.categorySlug)}
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3 text-right font-semibold text-ink-deep sm:px-6">
+                        {minTier ? won(minTier.unitPrice) : "—"}
+                      </td>
+                      <td className="px-5 py-3 text-center sm:px-6">
+                        <StatusPill tone={live ? "positive" : "neutral"}>
+                          {live ? "판매중" : "숨김"}
+                        </StatusPill>
+                      </td>
+                      <td className="px-5 py-3 sm:px-6">
+                        <div className="flex items-center justify-end gap-3 whitespace-nowrap text-[13px]">
+                          <form
+                            action={setProductStatus.bind(null, p.id, live ? "HIDDEN" : "ACTIVE")}
+                          >
+                            <button
+                              type="submit"
+                              className="text-ink-soft transition-colors hover:text-brand-600"
+                            >
+                              {live ? "숨김" : "판매"}
+                            </button>
+                          </form>
+                          <span aria-hidden className="h-3 w-px bg-hairline" />
+                          <Link
+                            href={`/admin/products/${p.id}`}
+                            className="text-ink-soft transition-colors hover:text-brand-600"
+                          >
+                            수정
+                          </Link>
+                          <span aria-hidden className="h-3 w-px bg-hairline" />
+                          <form action={deleteProduct.bind(null, p.id)}>
+                            <button
+                              type="submit"
+                              className="text-muted transition-colors hover:text-brand-600"
+                            >
+                              삭제
+                            </button>
+                          </form>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </TableWrap>
+          )}
+        </Panel>
       </div>
     </div>
   );

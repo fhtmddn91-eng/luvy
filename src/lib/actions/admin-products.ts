@@ -110,6 +110,10 @@ export async function setProductStatus(id: string, status: "ACTIVE" | "HIDDEN"):
 
 export async function deleteProduct(id: string): Promise<void> {
   await requireAdmin();
+  // 업로드 이미지를 함께 정리하지 않으면 디스크에 고아 파일이 계속 쌓인다.
+  const product = await db.product.findUnique({ where: { id }, select: { image: true } });
   await db.product.delete({ where: { id } });
+  if (product?.image) await deleteImageUpload(product.image);
   revalidatePath("/admin/products");
+  revalidatePath("/");
 }

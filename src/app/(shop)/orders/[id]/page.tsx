@@ -1,8 +1,20 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { won } from "@/lib/format";
 import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
+import { AccountShell } from "@/components/account/AccountShell";
+import { Panel, StatusPill } from "@/components/ui/Panel";
+
+const dateTimeFmt = (d: Date) =>
+  new Intl.DateTimeFormat("ko-KR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
 
 export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
@@ -11,50 +23,95 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
   if (!order || order.userId !== user.id) notFound();
 
   return (
-    <div className="mx-auto max-w-[720px] px-6 py-10">
-      <div className="flex items-center gap-3">
-        <h1 className="text-[24px] font-extrabold text-ink">주문 상세</h1>
-        <span className={`rounded-pill px-2.5 py-1 text-[12px] font-bold ${orderStatusTone(order.status)}`}>
-          {orderStatusLabel(order.status)}
-        </span>
-      </div>
-      <p className="mt-1 text-[13px] text-muted">주문번호 {order.id.slice(0, 8).toUpperCase()}</p>
-
-      <section className="mt-8 rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-soft)]">
-        <h2 className="mb-4 text-[15px] font-bold text-ink">주문 상품</h2>
-        <ul className="space-y-3 text-[14px]">
-          {order.items.map((i) => (
-            <li key={i.id} className="flex justify-between gap-3">
-              <span className="min-w-0">
-                <span className="text-[12px] font-semibold text-brand-500">{i.brand}</span>
-                <span className="block truncate text-ink-soft">{i.name} × {i.quantity} ({won(i.unitPrice)})</span>
-              </span>
-              <span className="shrink-0 font-semibold text-ink">{won(i.lineTotal)}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="mt-4 rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-soft)]">
-        <h2 className="mb-4 text-[15px] font-bold text-ink">배송지</h2>
-        <dl className="space-y-1.5 text-[14px] text-ink-soft">
-          <div className="flex gap-3"><dt className="w-16 shrink-0 text-muted">수령인</dt><dd>{order.recipient}</dd></div>
-          <div className="flex gap-3"><dt className="w-16 shrink-0 text-muted">연락처</dt><dd>{order.phone}</dd></div>
-          <div className="flex gap-3"><dt className="w-16 shrink-0 text-muted">주소</dt><dd>{order.address}</dd></div>
-          {order.memo && <div className="flex gap-3"><dt className="w-16 shrink-0 text-muted">메모</dt><dd>{order.memo}</dd></div>}
-        </dl>
-      </section>
-
-      <section className="mt-4 rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-soft)]">
-        <dl className="space-y-2 text-[14px]">
-          <div className="flex justify-between text-ink-soft"><dt>상품 합계</dt><dd>{won(order.subtotal)}</dd></div>
-          <div className="flex justify-between text-ink-soft"><dt>배송비</dt><dd>{order.shippingFee === 0 ? "무료" : won(order.shippingFee)}</dd></div>
-          <div className="flex justify-between border-t border-line pt-2">
-            <dt className="font-bold text-ink">합계</dt>
-            <dd className="text-[18px] font-extrabold text-brand-600">{won(order.total)}</dd>
+    <AccountShell
+      current="/orders"
+      eyebrow="Order detail"
+      title="주문 상세"
+      description={dateTimeFmt(order.createdAt)}
+      action={
+        <Link
+          href="/orders"
+          className="text-[13px] text-muted transition-colors hover:text-ink-deep"
+        >
+          ← 주문 내역
+        </Link>
+      }
+    >
+      <div className="space-y-4">
+        {/* 주문 요약 */}
+        <div className="rise rise-1 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-hairline bg-white px-5 py-4 shadow-[var(--shadow-lift)] sm:px-6">
+          <div>
+            <p className="eyebrow">Order no.</p>
+            <p className="mt-1 font-display text-[20px] tracking-[0.06em] text-ink-deep">
+              {order.id.slice(0, 8).toUpperCase()}
+            </p>
           </div>
-        </dl>
-      </section>
-    </div>
+          <StatusPill tone={orderStatusTone(order.status)}>
+            {orderStatusLabel(order.status)}
+          </StatusPill>
+        </div>
+
+        <div className="rise rise-2">
+          <Panel title="주문 상품" flush>
+            <ul className="divide-y divide-hairline-soft">
+              {order.items.map((i) => (
+                <li key={i.id} className="flex items-start justify-between gap-4 px-5 py-4 sm:px-6">
+                  <div className="min-w-0">
+                    <p className="text-[12px] font-semibold text-brand-500">{i.brand}</p>
+                    <p className="mt-0.5 text-[14px] font-medium text-ink-deep">{i.name}</p>
+                    <p className="mt-1 text-[12px] text-muted">
+                      {won(i.unitPrice)} × {i.quantity}개
+                    </p>
+                  </div>
+                  <p className="shrink-0 whitespace-nowrap text-[15px] font-bold text-ink-deep">
+                    {won(i.lineTotal)}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        </div>
+
+        <div className="rise rise-3">
+          <Panel title="배송지">
+            <dl className="space-y-2.5 text-[13.5px]">
+              {[
+                ["수령인", order.recipient],
+                ["연락처", order.phone],
+                ["주소", order.address],
+                ...(order.memo ? [["배송 메모", order.memo]] : []),
+              ].map(([k, v]) => (
+                <div key={k} className="flex gap-4">
+                  <dt className="w-[76px] shrink-0 text-muted">{k}</dt>
+                  <dd className="min-w-0 font-medium text-ink-deep">{v}</dd>
+                </div>
+              ))}
+            </dl>
+          </Panel>
+        </div>
+
+        <div className="rise rise-4">
+          <Panel title="결제 금액">
+            <dl className="space-y-2.5 text-[13.5px]">
+              <div className="flex justify-between text-ink-soft">
+                <dt>상품 합계</dt>
+                <dd>{won(order.subtotal)}</dd>
+              </div>
+              <div className="flex justify-between text-ink-soft">
+                <dt>배송비</dt>
+                <dd>{order.shippingFee === 0 ? "무료" : won(order.shippingFee)}</dd>
+              </div>
+              <div className="flex items-baseline justify-between border-t border-hairline pt-3">
+                <dt className="font-bold text-ink-deep">총 결제 금액</dt>
+                <dd className="font-display text-[24px] leading-none tracking-[-0.01em] text-ink-deep">
+                  {order.total.toLocaleString("ko-KR")}
+                  <span className="ml-0.5 font-sans text-[14px] font-bold">원</span>
+                </dd>
+              </div>
+            </dl>
+          </Panel>
+        </div>
+      </div>
+    </AccountShell>
   );
 }

@@ -3,6 +3,15 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { dateFmt } from "@/lib/format";
 import { INQUIRY_TYPES } from "@/lib/inquiry";
+import {
+  PageHeader,
+  Panel,
+  StatusPill,
+  TableWrap,
+  Th,
+  EmptyState,
+  FilterTabs,
+} from "@/components/ui/Panel";
 
 export default async function AdminInquiriesPage({
   searchParams,
@@ -22,85 +31,87 @@ export default async function AdminInquiriesPage({
     db.inquiry.count({ where: { status: "OPEN" } }),
   ]);
 
-  const tabs = [
-    { label: "전체", value: undefined },
-    { label: `답변 대기 (${openCount})`, value: "OPEN" },
-    { label: "답변 완료", value: "ANSWERED" },
-  ];
-
   return (
     <div>
-      <h1 className="text-[22px] font-extrabold text-ink">문의 관리</h1>
-      <p className="mt-1 text-[13px] text-muted">1:1 문의 · 입점 · 대량구매 · 제휴 문의</p>
+      <PageHeader
+        eyebrow="Operations"
+        title="문의 관리"
+        description="1:1 문의 · 입점 · 대량구매 · 제휴 문의"
+      />
 
-      <div className="mt-4 flex gap-2">
-        {tabs.map((t) => (
-          <Link
-            key={t.label}
-            href={t.value ? `/admin/inquiries?status=${t.value}` : "/admin/inquiries"}
-            className={`rounded-pill px-4 py-1.5 text-[13px] font-bold ${
-              filter === t.value
-                ? "bg-brand-500 text-white"
-                : "bg-white text-ink-soft border border-line hover:border-brand-300"
-            }`}
-          >
-            {t.label}
-          </Link>
-        ))}
+      <div className="rise rise-1">
+        <FilterTabs
+          items={[
+            { href: "/admin/inquiries", label: "전체", active: !filter },
+            {
+              href: "/admin/inquiries?status=OPEN",
+              label: "답변 대기",
+              active: filter === "OPEN",
+              count: openCount > 0 ? openCount : undefined,
+            },
+            {
+              href: "/admin/inquiries?status=ANSWERED",
+              label: "답변 완료",
+              active: filter === "ANSWERED",
+            },
+          ]}
+        />
       </div>
 
-      <div className="mt-4 overflow-x-auto rounded-2xl border border-line bg-white">
-        <table className="w-full min-w-[640px] text-[14px]">
-          <thead>
-            <tr className="border-b border-line bg-cream/60 text-left text-[12px] text-muted">
-              <th className="px-4 py-3 font-medium">유형</th>
-              <th className="px-4 py-3 font-medium">제목</th>
-              <th className="px-4 py-3 font-medium">회원</th>
-              <th className="px-4 py-3 text-center font-medium">상태</th>
-              <th className="px-4 py-3 text-right font-medium">접수일</th>
-            </tr>
-          </thead>
-          <tbody>
-            {inquiries.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-10 text-center text-muted">
-                  문의가 없습니다.
-                </td>
-              </tr>
-            ) : (
-              inquiries.map((inq) => (
-                <tr key={inq.id} className="border-b border-line/60">
-                  <td className="whitespace-nowrap px-4 py-3 text-[12px] text-ink-soft">
-                    {INQUIRY_TYPES[inq.type as keyof typeof INQUIRY_TYPES] ?? inq.type}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Link
-                      href={`/admin/inquiries/${inq.id}`}
-                      className="font-semibold text-ink hover:text-brand-600"
-                    >
-                      {inq.title}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3 text-ink-soft">{inq.user.companyName}</td>
-                  <td className="px-4 py-3 text-center">
-                    <span
-                      className={`rounded-pill px-2.5 py-1 text-[12px] font-bold ${
-                        inq.status === "ANSWERED"
-                          ? "bg-brand-50 text-brand-600"
-                          : "bg-line text-ink-soft"
-                      }`}
-                    >
-                      {inq.status === "ANSWERED" ? "답변 완료" : "답변 대기"}
-                    </span>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-right text-muted">
-                    {dateFmt(inq.createdAt)}
-                  </td>
+      <div className="rise rise-2">
+        <Panel flush>
+          {inquiries.length === 0 ? (
+            <EmptyState>해당 조건의 문의가 없습니다.</EmptyState>
+          ) : (
+            <TableWrap minWidth={720}>
+              <thead>
+                <tr className="border-b border-hairline-soft">
+                  <Th>유형</Th>
+                  <Th>제목</Th>
+                  <Th>회원</Th>
+                  <Th align="center">상태</Th>
+                  <Th align="right">접수일</Th>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {inquiries.map((inq) => {
+                  const answered = inq.status === "ANSWERED";
+                  return (
+                    <tr
+                      key={inq.id}
+                      className="border-b border-hairline-soft last:border-0 transition-colors hover:bg-canvas"
+                    >
+                      <td className="whitespace-nowrap px-5 py-3.5 text-[12px] text-muted sm:px-6">
+                        {INQUIRY_TYPES[inq.type as keyof typeof INQUIRY_TYPES] ?? inq.type}
+                      </td>
+                      <td className="px-5 py-3.5 sm:px-6">
+                        <Link
+                          href={`/admin/inquiries/${inq.id}`}
+                          className="font-semibold text-ink-deep hover:text-brand-600"
+                        >
+                          {inq.title}
+                        </Link>
+                      </td>
+                      <td className="px-5 py-3.5 text-[13px] text-ink-soft sm:px-6">
+                        {inq.user.companyName}
+                      </td>
+                      <td className="px-5 py-3.5 text-center sm:px-6">
+                        <StatusPill
+                          tone={answered ? "bg-ink-deep text-white" : "bg-[#fdf3e4] text-[#95651a]"}
+                        >
+                          {answered ? "답변 완료" : "답변 대기"}
+                        </StatusPill>
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3.5 text-right text-[13px] text-muted sm:px-6">
+                        {dateFmt(inq.createdAt)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </TableWrap>
+          )}
+        </Panel>
       </div>
     </div>
   );

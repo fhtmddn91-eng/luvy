@@ -58,7 +58,8 @@ export default async function BrandsPage() {
                     brand={p.brand}
                     image={p.image || undefined}
                     alt={p.name}
-                    className="aspect-square w-full rounded-lg text-[8px]"
+                    compact
+                    className="aspect-square w-full rounded-lg text-[9px]"
                   />
                 ))}
               </div>

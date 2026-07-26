@@ -74,7 +74,8 @@ export async function QuickMenu() {
                     id={thumb.id}
                     brand={thumb.brand}
                     image={thumb.image || undefined}
-                    className="h-12 w-12 rounded-xl text-[6px] xl:h-14 xl:w-14"
+                    compact
+                    className="h-12 w-12 rounded-xl text-[7px] xl:h-14 xl:w-14"
                   />
                 </span>
               )}

@@ -2,74 +2,162 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
-import { StatCard } from "@/components/admin/StatCard";
+import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
+import {
+  PageHeader,
+  Panel,
+  StatTile,
+  StatusPill,
+  TableWrap,
+  Th,
+  EmptyState,
+} from "@/components/ui/Panel";
 
 const dateFmt = (d: Date) =>
-  new Intl.DateTimeFormat("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(d);
+  new Intl.DateTimeFormat("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
 
 export default async function AdminDashboardPage() {
   await requireAdmin();
-  const [orderCount, revenue, memberCount, productCount, recentOrders] = await Promise.all([
-    db.order.count(),
-    db.order.aggregate({ _sum: { total: true } }),
-    db.user.count({ where: { role: "MEMBER" } }),
-    db.product.count({ where: { status: "ACTIVE" } }),
-    db.order.findMany({ orderBy: { createdAt: "desc" }, take: 5, include: { items: true, user: true } }),
-  ]);
+
+  const [orderCount, revenue, memberCount, productCount, pendingMembers, openInquiries, recentOrders] =
+    await Promise.all([
+      db.order.count(),
+      db.order.aggregate({ _sum: { total: true } }),
+      db.user.count({ where: { role: "MEMBER" } }),
+      db.product.count({ where: { status: "ACTIVE" } }),
+      db.user.count({ where: { role: "MEMBER", status: "PENDING" } }),
+      db.inquiry.count({ where: { status: "OPEN" } }),
+      db.order.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 6,
+        include: { items: true, user: true },
+      }),
+    ]);
+
+  const total = revenue._sum.total ?? 0;
 
   return (
     <div>
-      <h1 className="text-[22px] font-extrabold text-ink">대시보드</h1>
-      <p className="mt-1 text-[13px] text-muted">LUVY 운영 현황 요약</p>
+      <PageHeader
+        eyebrow="Overview"
+        title="대시보드"
+        description="LUVY 운영 현황 요약"
+      />
 
-      <div className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard label="총 주문" value={`${orderCount}건`} />
-        <StatCard label="총 매출" value={won(revenue._sum.total ?? 0)} />
-        <StatCard label="사업자 회원" value={`${memberCount}명`} />
-        <StatCard label="판매중 상품" value={`${productCount}개`} />
+      <div className="rise rise-1 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <StatTile label="Total orders" value={orderCount} suffix="건" href="/admin/orders" />
+        <StatTile
+          label="Revenue"
+          value={total.toLocaleString("ko-KR")}
+          suffix="원"
+          href="/admin/orders"
+        />
+        <StatTile label="Members" value={memberCount} suffix="명" href="/admin/members" />
+        <StatTile label="Live products" value={productCount} suffix="개" href="/admin/products" />
       </div>
 
-      <div className="mt-8 rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-soft)]">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-[15px] font-bold text-ink">최근 주문</h2>
-          <Link href="/admin/orders" className="text-[13px] font-semibold text-brand-600 hover:underline">
-            전체 보기
-          </Link>
+      {/* 처리 대기 항목이 있을 때만 노출 — 평소엔 화면을 비워 둔다 */}
+      {(pendingMembers > 0 || openInquiries > 0) && (
+        <div className="rise rise-2 mt-4 flex flex-wrap gap-3">
+          {pendingMembers > 0 && (
+            <Link
+              href="/admin/members?status=PENDING"
+              className="group flex items-center gap-3 rounded-2xl border border-hairline bg-white px-5 py-4 shadow-[var(--shadow-lift)] transition-colors hover:border-brand-300"
+            >
+              <span className="font-display text-[26px] leading-none text-brand-500">
+                {pendingMembers}
+              </span>
+              <span className="text-[13px] font-semibold text-ink-deep group-hover:text-brand-600">
+                승인 대기 회원
+              </span>
+            </Link>
+          )}
+          {openInquiries > 0 && (
+            <Link
+              href="/admin/inquiries?status=OPEN"
+              className="group flex items-center gap-3 rounded-2xl border border-hairline bg-white px-5 py-4 shadow-[var(--shadow-lift)] transition-colors hover:border-brand-300"
+            >
+              <span className="font-display text-[26px] leading-none text-brand-500">
+                {openInquiries}
+              </span>
+              <span className="text-[13px] font-semibold text-ink-deep group-hover:text-brand-600">
+                답변 대기 문의
+              </span>
+            </Link>
+          )}
         </div>
-        {recentOrders.length === 0 ? (
-          <p className="py-8 text-center text-[14px] text-muted">주문이 없습니다.</p>
-        ) : (
-          <div className="overflow-x-auto">
-          <table className="w-full min-w-[560px] text-[14px]">
-            <thead>
-              <tr className="border-b border-line text-left text-[12px] text-muted">
-                <th className="py-2 font-medium">주문번호</th>
-                <th className="py-2 font-medium">회원</th>
-                <th className="py-2 font-medium">상품</th>
-                <th className="py-2 text-right font-medium">금액</th>
-                <th className="py-2 text-right font-medium">일시</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentOrders.map((o) => (
-                <tr key={o.id} className="border-b border-line/60">
-                  <td className="py-2.5">
-                    <Link href={`/admin/orders/${o.id}`} className="font-semibold text-brand-600 hover:underline">
-                      {o.id.slice(0, 8).toUpperCase()}
-                    </Link>
-                  </td>
-                  <td className="py-2.5 text-ink-soft">{o.user.companyName}</td>
-                  <td className="py-2.5 text-ink-soft">
-                    {o.items[0]?.name}{o.items.length > 1 ? ` 외 ${o.items.length - 1}건` : ""}
-                  </td>
-                  <td className="py-2.5 text-right font-semibold text-ink">{won(o.total)}</td>
-                  <td className="py-2.5 text-right text-muted">{dateFmt(o.createdAt)}</td>
+      )}
+
+      <div className="rise rise-3 mt-8">
+        <Panel
+          title="최근 주문"
+          flush
+          action={
+            <Link
+              href="/admin/orders"
+              className="text-[12px] font-semibold text-ink-soft transition-colors hover:text-brand-600"
+            >
+              전체 보기 →
+            </Link>
+          }
+        >
+          {recentOrders.length === 0 ? (
+            <EmptyState>아직 주문이 없습니다.</EmptyState>
+          ) : (
+            <TableWrap minWidth={640}>
+              <thead>
+                <tr className="border-b border-hairline-soft">
+                  <Th>주문번호</Th>
+                  <Th>회원</Th>
+                  <Th>상품</Th>
+                  <Th align="center">상태</Th>
+                  <Th align="right">금액</Th>
+                  <Th align="right">일시</Th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          </div>
-        )}
+              </thead>
+              <tbody>
+                {recentOrders.map((o) => {
+                  return (
+                    <tr
+                      key={o.id}
+                      className="border-b border-hairline-soft last:border-0 transition-colors hover:bg-canvas"
+                    >
+                      <td className="px-5 py-3.5 sm:px-6">
+                        <Link
+                          href={`/admin/orders/${o.id}`}
+                          className="font-display text-[14px] tracking-[0.04em] text-ink-deep hover:text-brand-600"
+                        >
+                          {o.id.slice(0, 8).toUpperCase()}
+                        </Link>
+                      </td>
+                      <td className="px-5 py-3.5 text-ink-soft sm:px-6">{o.user.companyName}</td>
+                      <td className="max-w-[240px] truncate px-5 py-3.5 text-ink-soft sm:px-6">
+                        {o.items[0]?.name}
+                        {o.items.length > 1 ? ` 외 ${o.items.length - 1}건` : ""}
+                      </td>
+                      <td className="px-5 py-3.5 text-center sm:px-6">
+                        <StatusPill tone={orderStatusTone(o.status)}>
+                          {orderStatusLabel(o.status)}
+                        </StatusPill>
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3.5 text-right font-semibold text-ink-deep sm:px-6">
+                        {won(o.total)}
+                      </td>
+                      <td className="whitespace-nowrap px-5 py-3.5 text-right text-[13px] text-muted sm:px-6">
+                        {dateFmt(o.createdAt)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </TableWrap>
+          )}
+        </Panel>
       </div>
     </div>
   );

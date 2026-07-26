@@ -3,39 +3,69 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const nav = [
-  { href: "/admin", label: "대시보드", exact: true },
-  { href: "/admin/products", label: "상품 관리" },
-  { href: "/admin/orders", label: "주문 관리" },
-  { href: "/admin/members", label: "회원 관리" },
-  { href: "/admin/inquiries", label: "문의 관리" },
-  { href: "/admin/banners", label: "배너 관리" },
-  { href: "/admin/notices", label: "공지 관리" },
+const groups: { heading: string; items: { href: string; label: string; exact?: boolean }[] }[] = [
+  {
+    heading: "Overview",
+    items: [{ href: "/admin", label: "대시보드", exact: true }],
+  },
+  {
+    heading: "Catalog",
+    items: [
+      { href: "/admin/products", label: "상품 관리" },
+      { href: "/admin/banners", label: "배너 관리" },
+      { href: "/admin/notices", label: "공지 관리" },
+    ],
+  },
+  {
+    heading: "Operations",
+    items: [
+      { href: "/admin/orders", label: "주문 관리" },
+      { href: "/admin/members", label: "회원 관리" },
+      { href: "/admin/inquiries", label: "문의 관리" },
+    ],
+  },
 ];
 
 export function AdminSidebar() {
   const pathname = usePathname();
+  const isActive = (href: string, exact?: boolean) =>
+    exact ? pathname === href : pathname === href || pathname.startsWith(href + "/");
 
   return (
-    <nav className="no-scrollbar flex gap-1 overflow-x-auto p-3 md:flex-col md:overflow-visible md:p-4">
-      {nav.map((item) => {
-        const active = item.exact
-          ? pathname === item.href
-          : pathname === item.href || pathname.startsWith(item.href + "/");
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={`shrink-0 whitespace-nowrap rounded-lg px-3.5 py-2 text-[14px] font-semibold transition-colors md:px-4 md:py-2.5 ${
-              active
-                ? "bg-brand-500 text-white"
-                : "text-ink-soft hover:bg-brand-50 hover:text-brand-600"
-            }`}
-          >
-            {item.label}
-          </Link>
-        );
-      })}
+    <nav
+      aria-label="관리 메뉴"
+      className="no-scrollbar flex gap-1 overflow-x-auto px-3 py-3 md:block md:space-y-7 md:overflow-visible md:px-4 md:py-6"
+    >
+      {groups.map((group) => (
+        <div key={group.heading} className="contents md:block">
+          {/* 그룹 라벨은 데스크톱에서만 — 모바일은 한 줄 스크롤 탭 */}
+          <p className="eyebrow font-display mb-2 hidden px-3 md:block">{group.heading}</p>
+          {group.items.map((item) => {
+            const active = isActive(item.href, item.exact);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={active ? "page" : undefined}
+                className={`relative flex shrink-0 items-center whitespace-nowrap rounded-lg px-3.5 py-2 text-[13.5px] transition-colors md:mb-0.5 md:px-3 md:py-2.5 ${
+                  active
+                    ? "bg-ink-deep font-bold text-white md:bg-transparent md:text-ink-deep"
+                    : "font-medium text-muted hover:text-ink-deep md:hover:bg-hairline-soft"
+                }`}
+              >
+                {/* 데스크톱 활성 표시 — 좌측 얇은 바 */}
+                {active && (
+                  <span
+                    aria-hidden
+                    className="absolute left-0 top-1/2 hidden h-4 w-[2px] -translate-y-1/2 rounded-full bg-brand-500 md:block"
+                  />
+                )}
+                {item.label}
+              </Link>
+            );
+          })}
+        </div>
+      ))}
     </nav>
   );
 }

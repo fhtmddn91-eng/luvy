@@ -4,6 +4,8 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import Link from "next/link";
 import type { NoticeFormState } from "@/lib/actions/admin-notices";
+import { btnPrimary } from "@/components/ui/Panel";
+import { fieldCls, labelCls } from "@/components/ui/form";
 
 export interface NoticeFormData {
   id: string;
@@ -17,9 +19,7 @@ export interface NoticeFormData {
 
 type Action = (prev: NoticeFormState, formData: FormData) => Promise<NoticeFormState>;
 
-const inputCls =
-  "h-11 w-full rounded-lg border border-line bg-white px-3 text-[14px] text-ink focus:border-brand-400 focus:outline-none";
-const labelCls = "mb-1.5 block text-[13px] font-semibold text-ink-soft";
+const inputCls = fieldCls;
 
 const KINDS = [
   { value: "notice", label: "공지사항" },
@@ -30,7 +30,7 @@ const KINDS = [
 function SaveButton() {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending} className="h-11 rounded-pill bg-brand-500 px-8 text-[14px] font-bold text-white hover:bg-brand-600 disabled:opacity-60">
+    <button type="submit" disabled={pending} className={btnPrimary}>
       {pending ? "저장 중…" : "저장"}
     </button>
   );
@@ -40,7 +40,10 @@ export function NoticeForm({ action, notice }: { action: Action; notice?: Notice
   const [state, formAction] = useActionState<NoticeFormState, FormData>(action, {});
 
   return (
-    <form action={formAction} className="max-w-[640px] space-y-5">
+    <form
+      action={formAction}
+      className="rise max-w-[720px] space-y-5 rounded-2xl border border-hairline bg-white p-5 shadow-[var(--shadow-lift)] sm:p-6"
+    >
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className={labelCls}>구분</label>
