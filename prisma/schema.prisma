@@ -34,11 +34,49 @@ model Product {
   image        String      @default("")
   basePrice    Int
   status       String      @default("ACTIVE")
+  /** 수입 원본 (1688 등). sourceId 로 같은 상품 재수집을 막는다. */
+  sourceUrl    String      @default("")
+  sourceId     String?     @unique
   createdAt    DateTime    @default(now())
   priceTiers   PriceTier[]
   cartItems    CartItem[]
+  assets       ProductAsset[]
 
   @@index([categorySlug])
+}
+
+/**
+ * 상품별 판매자료 — 상세페이지 이미지 / 썸네일 / GIF.
+ * 승인 회원이 상품 페이지에서 내려받는다.
+ */
+model ProductAsset {
+  id        String   @id @default(cuid())
+  productId String
+  kind      String // MAIN | DETAIL | GIF | OPTION
+  url       String // 미러링된 로컬 경로 (/uploads/..)
+  bytes     Int      @default(0)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+/** 1688 수집 이력 — 실패 원인 추적과 재시도를 위해 남긴다. */
+model ImportJob {
+  id        String   @id @default(cuid())
+  source    String   @default("1688")
+  sourceId  String
+  sourceUrl String
+  status    String   @default("PENDING") // PENDING | DONE | FAILED
+  rawTitle  String   @default("")
+  koTitle   String   @default("")
+  imageCount Int     @default(0)
+  error     String?
+  productId String?
+  createdAt DateTime @default(now())
+
+  @@index([status])
 }
 
 model PriceTier {

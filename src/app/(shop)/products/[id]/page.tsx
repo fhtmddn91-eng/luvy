@@ -5,10 +5,14 @@ import { ProductThumb } from "@/components/product/ProductThumb";
 import { PriceTierTable } from "@/components/product/PriceTierTable";
 import { AddToCart } from "@/components/product/AddToCart";
 import { getMoq } from "@/lib/pricing";
+import { AssetDownloads } from "@/components/product/AssetDownloads";
 
 export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const product = await db.product.findUnique({ where: { id }, include: { priceTiers: true } });
+  const product = await db.product.findUnique({
+    where: { id },
+    include: { priceTiers: true, assets: { orderBy: { sortOrder: "asc" } } },
+  });
   if (!product || product.status !== "ACTIVE") notFound();
 
   const category = categories.find((c) => c.slug === product.categorySlug);
@@ -41,6 +45,15 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           </div>
         </div>
       </div>
+
+      <AssetDownloads
+        assets={product.assets.map((a) => ({
+          id: a.id,
+          kind: a.kind,
+          url: a.url,
+          bytes: a.bytes,
+        }))}
+      />
     </div>
   );
 }

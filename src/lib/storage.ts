@@ -17,6 +17,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "image/png": "png",
   "image/webp": "webp",
   "image/avif": "avif",
+  "image/gif": "gif",
 };
 
 export type UploadResult = { ok: true; url: string } | { ok: false; error: string };
@@ -32,6 +33,28 @@ export async function saveImageUpload(file: File): Promise<UploadResult> {
   await mkdir(UPLOAD_DIR, { recursive: true });
   const buffer = Buffer.from(await file.arrayBuffer());
   await writeFile(path.join(UPLOAD_DIR, name), buffer);
+  return { ok: true, url: `/uploads/${name}` };
+}
+
+/**
+ * 원격에서 받아온 바이트를 저장(외부 소스 미러링용).
+ * File 객체가 없는 경로라 MIME을 직접 넘긴다.
+ */
+export async function saveImageBuffer(
+  data: Buffer,
+  mime: string,
+  maxBytes = MAX_BYTES,
+): Promise<UploadResult> {
+  const ext = EXT_BY_MIME[mime];
+  if (!ext) return { ok: false, error: `지원하지 않는 이미지 형식입니다 (${mime}).` };
+  if (data.byteLength <= 0) return { ok: false, error: "빈 파일입니다." };
+  if (data.byteLength > maxBytes) {
+    return { ok: false, error: `이미지가 너무 큽니다 (${Math.round(data.byteLength / 1024)}KB).` };
+  }
+
+  const name = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${ext}`;
+  await mkdir(UPLOAD_DIR, { recursive: true });
+  await writeFile(path.join(UPLOAD_DIR, name), data);
   return { ok: true, url: `/uploads/${name}` };
 }
 

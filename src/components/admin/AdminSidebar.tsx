@@ -12,6 +12,7 @@ const groups: { heading: string; items: { href: string; label: string; exact?: b
     heading: "Catalog",
     items: [
       { href: "/admin/products", label: "상품 관리" },
+      { href: "/admin/import", label: "1688 수집" },
       { href: "/admin/banners", label: "배너 관리" },
       { href: "/admin/notices", label: "공지 관리" },
     ],
