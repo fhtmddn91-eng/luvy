@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
 import { ORDER_STATUS, orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
+import { courierName, hasShipment } from "@/lib/shipping";
 import {
   PageHeader,
   Panel,
@@ -63,13 +64,14 @@ export default async function AdminOrdersPage({
           {orders.length === 0 ? (
             <EmptyState>해당 조건의 주문이 없습니다.</EmptyState>
           ) : (
-            <TableWrap minWidth={720}>
+            <TableWrap minWidth={900}>
               <thead>
                 <tr className="border-b border-hairline-soft">
                   <Th>주문번호</Th>
                   <Th>회원</Th>
                   <Th>상품</Th>
                   <Th align="right">금액</Th>
+                  <Th>송장</Th>
                   <Th align="center">상태</Th>
                   <Th align="right">일시</Th>
                 </tr>
@@ -97,6 +99,18 @@ export default async function AdminOrdersPage({
                     </td>
                     <td className="whitespace-nowrap px-5 py-3.5 text-right font-semibold text-ink-deep sm:px-6">
                       {won(o.total)}
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3.5 text-[12px] sm:px-6">
+                      {hasShipment(o) ? (
+                        <span className="text-ink-soft">
+                          {courierName(o.courier)}
+                          <span className="ml-1.5 font-display tracking-[0.04em] text-ink-deep">
+                            {o.trackingNo}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
                     </td>
                     <td className="px-5 py-3.5 text-center sm:px-6">
                       <StatusPill tone={orderStatusTone(o.status)}>

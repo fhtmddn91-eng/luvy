@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { won } from "@/lib/format";
 import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
+import { courierName, hasShipment, trackingUrl } from "@/lib/shipping";
 import { AccountShell } from "@/components/account/AccountShell";
 import { Panel, StatusPill } from "@/components/ui/Panel";
 
@@ -21,6 +22,10 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
   const { id } = await params;
   const order = await db.order.findUnique({ where: { id }, include: { items: true } });
   if (!order || order.userId !== user.id) notFound();
+
+  const shipment = { courier: order.courier, trackingNo: order.trackingNo };
+  const shipped = hasShipment(shipment);
+  const trackUrl = trackingUrl(shipment);
 
   return (
     <AccountShell
@@ -51,7 +56,45 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
           </StatusPill>
         </div>
 
-        <div className="rise rise-2">
+        {/* 발송된 주문만 노출 — 송장이 없으면 조회할 것도 없다 */}
+        {shipped && (
+          <div className="rise rise-2">
+            <Panel title="배송 조회">
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <dl className="space-y-2.5 text-[13.5px]">
+                  <div className="flex gap-4">
+                    <dt className="w-[76px] shrink-0 text-muted">택배사</dt>
+                    <dd className="font-medium text-ink-deep">{courierName(order.courier)}</dd>
+                  </div>
+                  <div className="flex gap-4">
+                    <dt className="w-[76px] shrink-0 text-muted">운송장번호</dt>
+                    <dd className="font-display tracking-[0.06em] text-ink-deep">
+                      {order.trackingNo}
+                    </dd>
+                  </div>
+                  {order.shippedAt && (
+                    <div className="flex gap-4">
+                      <dt className="w-[76px] shrink-0 text-muted">발송일</dt>
+                      <dd className="font-medium text-ink-deep">{dateTimeFmt(order.shippedAt)}</dd>
+                    </div>
+                  )}
+                </dl>
+                {trackUrl && (
+                  <a
+                    href={trackUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex h-11 items-center justify-center bg-ink-deep px-6 text-[12px] font-bold uppercase tracking-[0.12em] text-white transition-opacity hover:opacity-80"
+                  >
+                    배송 조회 ↗
+                  </a>
+                )}
+              </div>
+            </Panel>
+          </div>
+        )}
+
+        <div className="rise rise-3">
           <Panel title="주문 상품" flush>
             <ul className="divide-y divide-hairline-soft">
               {order.items.map((i) => (
@@ -72,7 +115,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
           </Panel>
         </div>
 
-        <div className="rise rise-3">
+        <div className="rise rise-4">
           <Panel title="배송지">
             <dl className="space-y-2.5 text-[13.5px]">
               {[

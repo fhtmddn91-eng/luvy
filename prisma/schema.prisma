@@ -117,6 +117,11 @@ model Order {
   subtotal    Int
   shippingFee Int
   total       Int
+  /** 택배사 코드 (src/lib/shipping.ts COURIERS). 미발송이면 빈 문자열 */
+  courier     String      @default("")
+  /** 운송장번호. 영숫자만 정규화해 저장하며, 비어 있으면 미발송 */
+  trackingNo  String      @default("")
+  shippedAt   DateTime?
   createdAt   DateTime    @default(now())
   user        User        @relation(fields: [userId], references: [id])
   items       OrderItem[]

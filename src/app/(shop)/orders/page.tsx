@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { won } from "@/lib/format";
 import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
+import { courierName, hasShipment } from "@/lib/shipping";
 import { AccountShell } from "@/components/account/AccountShell";
 import { Panel, StatusPill, EmptyState } from "@/components/ui/Panel";
 
@@ -63,7 +64,15 @@ export default async function OrdersPage() {
                             {first?.name}
                             {rest > 0 ? ` 외 ${rest}건` : ""}
                           </p>
-                          <p className="mt-0.5 text-[12px] text-muted">총 {qty}개</p>
+                          <p className="mt-0.5 text-[12px] text-muted">
+                            총 {qty}개
+                            {hasShipment(o) && (
+                              <>
+                                <span aria-hidden className="mx-1.5">·</span>
+                                {courierName(o.courier)} {o.trackingNo}
+                              </>
+                            )}
+                          </p>
                         </div>
                         <p className="whitespace-nowrap text-[17px] font-bold text-ink-deep">
                           {won(o.total)}
