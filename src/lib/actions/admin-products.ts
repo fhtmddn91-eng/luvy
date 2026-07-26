@@ -42,6 +42,8 @@ function parseFields(formData: FormData) {
     description: String(formData.get("description") ?? "").trim(),
     basePrice: parseInt(String(formData.get("basePrice") ?? "0"), 10) || 0,
     status: String(formData.get("status") ?? "ACTIVE"),
+    trackStock: formData.get("trackStock") === "on",
+    stock: Math.max(0, parseInt(String(formData.get("stock") ?? "0"), 10) || 0),
   };
 }
 

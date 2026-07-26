@@ -2,30 +2,44 @@ import Link from "next/link";
 import { ProductThumb } from "./ProductThumb";
 import { won } from "@/lib/format";
 import { getMoq, resolveUnitPrice, type Tier } from "@/lib/pricing";
+import { isSoldOut } from "@/lib/stock";
 
 export interface ProductCardData {
   id: string;
   name: string;
   brand: string;
   image?: string;
+  trackStock?: boolean;
+  stock?: number;
   priceTiers: Tier[];
 }
 
 export function ProductCard({ product }: { product: ProductCardData }) {
   const moq = getMoq(product.priceTiers);
   const fromPrice = resolveUnitPrice(product.priceTiers, moq);
+  const soldOut = isSoldOut({
+    trackStock: product.trackStock ?? false,
+    stock: product.stock ?? 0,
+  });
   return (
     <Link
       href={`/products/${product.id}`}
       className="group flex flex-col overflow-hidden rounded-2xl border border-line bg-white transition-shadow hover:shadow-[var(--shadow-card)]"
     >
-      <ProductThumb
-        id={product.id}
-        brand={product.brand}
-        image={product.image}
-        alt={product.name}
-        className="aspect-square w-full"
-      />
+      <div className="relative">
+        <ProductThumb
+          id={product.id}
+          brand={product.brand}
+          image={product.image}
+          alt={product.name}
+          className={`aspect-square w-full ${soldOut ? "opacity-45" : ""}`}
+        />
+        {soldOut && (
+          <span className="absolute left-2.5 top-2.5 bg-ink/85 px-2.5 py-1 text-[11px] font-extrabold text-white">
+            품절
+          </span>
+        )}
+      </div>
       <div className="flex flex-1 flex-col p-4">
         <span className="text-[12px] font-semibold text-brand-500">{product.brand}</span>
         <h3 className="mt-1 line-clamp-2 flex-1 text-[14px] font-medium text-ink group-hover:text-brand-600">

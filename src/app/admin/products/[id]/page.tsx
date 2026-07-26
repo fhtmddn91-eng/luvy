@@ -26,6 +26,8 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
           description: product.description,
           basePrice: product.basePrice,
           status: product.status,
+          trackStock: product.trackStock,
+          stock: product.stock,
           image: product.image || undefined,
           priceTiers: product.priceTiers.map((t) => ({ minQty: t.minQty, unitPrice: t.unitPrice })),
         }}

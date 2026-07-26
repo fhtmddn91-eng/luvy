@@ -16,6 +16,8 @@ export interface ProductFormData {
  description: string;
  basePrice: number;
  status: string;
+ trackStock?: boolean;
+ stock?: number;
  image?: string;
  priceTiers: { minQty: number; unitPrice: number }[];
 }
@@ -87,6 +89,34 @@ export function ProductForm({ action, product }: { action: Action; product?: Pro
  <option value="ACTIVE">판매중</option>
  <option value="HIDDEN">숨김</option>
  </select>
+ </div>
+ <div className="sm:col-span-2 border-t border-hairline pt-4">
+ <label className="flex cursor-pointer items-start gap-2.5">
+ <input
+ name="trackStock"
+ type="checkbox"
+ defaultChecked={product?.trackStock ?? false}
+ className="mt-0.5 h-4 w-4 accent-ink-deep"
+ />
+ <span>
+ <span className="block text-[13.5px] font-bold text-ink-deep">재고 관리 사용</span>
+ <span className="mt-0.5 block text-[12px] leading-relaxed text-muted">
+ 켜면 재고 수량만큼만 주문받고, 0이 되면 자동으로 품절 처리됩니다.
+ 주문 후 사입하는 무재고 상품은 꺼두세요.
+ </span>
+ </span>
+ </label>
+ <div className="mt-3">
+ <label className={labelCls}>재고 수량</label>
+ <input
+ name="stock"
+ type="number"
+ min={0}
+ defaultValue={product?.stock ?? 0}
+ className={`${fieldCls} w-40`}
+ />
+ <p className={helpCls}>재고 관리를 끄면 이 값은 사용되지 않습니다.</p>
+ </div>
  </div>
  <div className="sm:col-span-2">
  <label className={labelCls}>상세 설명</label>

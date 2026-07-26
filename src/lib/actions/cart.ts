@@ -4,25 +4,30 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { getSession, requireUser, requireApprovedUser } from "@/lib/auth";
 import { getMoq, type Tier } from "@/lib/pricing";
+import { clampToStock, isSoldOut } from "@/lib/stock";
 
 const MAX_QTY = 100_000; // 상한 (정수 오버플로/오입력 방지)
-
-function clampQty(quantity: number, moq: number): number {
-  return Math.min(MAX_QTY, Math.max(moq, Math.floor(quantity) || moq));
-}
 
 export async function addToCart(productId: string, quantity: number): Promise<void> {
   const user = await requireApprovedUser();
   const product = await db.product.findUnique({ where: { id: productId }, include: { priceTiers: true } });
   if (!product) return;
+  if (isSoldOut(product)) return; // 품절 상품은 담기지 않는다
 
   const moq = getMoq(product.priceTiers as Tier[]);
-  const qty = clampQty(quantity, moq);
+
+  // 이미 담긴 수량까지 합해 재고를 넘지 않도록 한다
+  const existing = await db.cartItem.findUnique({
+    where: { userId_productId: { userId: user.id, productId } },
+  });
+  const desired = (existing?.quantity ?? 0) + (Math.floor(quantity) || moq);
+  const qty = clampToStock(desired, moq, product, MAX_QTY);
+  if (qty <= 0) return;
 
   await db.cartItem.upsert({
     where: { userId_productId: { userId: user.id, productId } },
     create: { userId: user.id, productId, quantity: qty },
-    update: { quantity: { increment: qty } },
+    update: { quantity: qty },
   });
 
   revalidatePath("/cart");
@@ -38,9 +43,14 @@ export async function updateCartQty(itemId: string, quantity: number): Promise<v
   if (!item || item.userId !== user.id) return;
 
   const moq = getMoq(item.product.priceTiers as Tier[]);
-  const qty = clampQty(quantity, moq);
+  const qty = clampToStock(quantity, moq, item.product, MAX_QTY);
 
-  await db.cartItem.update({ where: { id: itemId }, data: { quantity: qty } });
+  if (qty <= 0) {
+    // 재고가 사라진 상품은 장바구니에서 제거해 결제 단계에서 막히지 않게 한다
+    await db.cartItem.delete({ where: { id: itemId } });
+  } else {
+    await db.cartItem.update({ where: { id: itemId }, data: { quantity: qty } });
+  }
   revalidatePath("/cart");
   revalidatePath("/", "layout");
 }

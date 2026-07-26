@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "@/lib/db";
 import { resolveUnitPrice, shippingFor, type Tier } from "@/lib/pricing";
 import { fetchPortOnePayment } from "@/lib/portone";
+import { restoreStock, linesFromOrderItems } from "@/lib/stockOps";
 
 export interface OrderDraft {
   items: {
@@ -81,10 +82,25 @@ export async function finalizePayment(paymentId: string): Promise<FinalizeResult
   const paidOk = info.status === "PAID" && info.amount?.total === payment.amount;
 
   if (!paidOk) {
-    await db.$transaction([
-      db.payment.update({ where: { paymentId }, data: { status: "FAILED", rawResponse: JSON.stringify(remote) } }),
-      db.order.update({ where: { id: payment.orderId }, data: { status: "PAYMENT_FAILED" } }),
-    ]);
+    // 결제 실패 → 선점했던 재고를 되돌린다.
+    // 상태 전이를 조건부로 claim 해 웹훅/콜백이 겹쳐도 복원이 두 번 일어나지 않게 한다.
+    await db.$transaction(async (tx) => {
+      const claimed = await tx.order.updateMany({
+        where: { id: payment.orderId, status: { notIn: ["PAYMENT_FAILED", "CANCELED"] } },
+        data: { status: "PAYMENT_FAILED" },
+      });
+      await tx.payment.update({
+        where: { paymentId },
+        data: { status: "FAILED", rawResponse: JSON.stringify(remote) },
+      });
+      if (claimed.count === 1) {
+        const items = await tx.orderItem.findMany({
+          where: { orderId: payment.orderId },
+          select: { productId: true, name: true, quantity: true },
+        });
+        await restoreStock(tx, linesFromOrderItems(items));
+      }
+    });
     return { ok: false, reason: "결제가 완료되지 않았거나 금액이 일치하지 않습니다.", orderId: payment.orderId };
   }
 

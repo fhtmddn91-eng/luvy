@@ -41,7 +41,12 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           </div>
 
           <div className="mt-8">
-            <AddToCart productId={product.id} tiers={product.priceTiers} moq={moq} />
+            <AddToCart
+              productId={product.id}
+              tiers={product.priceTiers}
+              moq={moq}
+              stockInfo={{ trackStock: product.trackStock, stock: product.stock }}
+            />
           </div>
         </div>
       </div>

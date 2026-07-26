@@ -6,9 +6,25 @@ import { QtyStepper } from "./QtyStepper";
 import { addToCart } from "@/lib/actions/cart";
 import { won } from "@/lib/format";
 import { resolveUnitPrice, type Tier } from "@/lib/pricing";
+import { maxOrderable, stockState, type StockInfo } from "@/lib/stock";
 
-export function AddToCart({ productId, tiers, moq }: { productId: string; tiers: Tier[]; moq: number }) {
-  const [qty, setQty] = useState(moq);
+export function AddToCart({
+  productId,
+  tiers,
+  moq,
+  stockInfo,
+}: {
+  productId: string;
+  tiers: Tier[];
+  moq: number;
+  stockInfo: StockInfo;
+}) {
+  const state = stockState(stockInfo);
+  const max = maxOrderable(stockInfo, 100_000);
+  // 재고가 MOQ보다 적으면 재고만큼만 주문 가능
+  const startQty = Math.min(moq, max) || moq;
+
+  const [qty, setQty] = useState(startQty);
   const [pending, startTransition] = useTransition();
   const [done, setDone] = useState(false);
   const router = useRouter();
@@ -26,11 +42,43 @@ export function AddToCart({ productId, tiers, moq }: { productId: string; tiers:
       }
     });
 
+  if (state === "sold_out") {
+    return (
+      <div className="space-y-3">
+        <div className="border border-line bg-cream px-4 py-4 text-center">
+          <p className="text-[15px] font-extrabold text-ink">품절되었습니다</p>
+          <p className="mt-1 text-[13px] text-muted">
+            재입고 문의는 고객센터 또는 1:1 문의를 이용해주세요.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled
+          className="h-12 w-full rounded-pill bg-line text-[15px] font-bold text-muted"
+        >
+          품절
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
+      {state === "low" && (
+        <p className="text-[13px] font-semibold text-brand-600">
+          재고 {stockInfo.stock}개 남았습니다.
+        </p>
+      )}
       <div className="flex items-center justify-between rounded-xl bg-brand-50 px-4 py-3">
-        <span className="text-[13px] text-ink-soft">주문 수량 (최소 {moq}개)</span>
-        <QtyStepper value={qty} min={moq} onChange={(v) => { setQty(v); setDone(false); }} />
+        <span className="text-[13px] text-ink-soft">
+          주문 수량 (최소 {moq}개{stockInfo.trackStock ? ` · 재고 ${stockInfo.stock}개` : ""})
+        </span>
+        <QtyStepper
+          value={qty}
+          min={startQty}
+          max={max}
+          onChange={(v) => { setQty(v); setDone(false); }}
+        />
       </div>
       <div className="flex items-center justify-between border-t border-line pt-4">
         <span className="text-[14px] text-ink-soft">적용 단가 {won(unit)} · 합계</span>

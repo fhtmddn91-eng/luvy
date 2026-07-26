@@ -5,6 +5,7 @@ import { won } from "@/lib/format";
 import { categories } from "@/lib/mock/categories";
 import { setProductStatus, deleteProduct } from "@/lib/actions/admin-products";
 import { ProductThumb } from "@/components/product/ProductThumb";
+import { stockLabel, stockState } from "@/lib/stock";
 import {
  PageHeader,
  Panel,
@@ -73,13 +74,14 @@ export default async function AdminProductsPage({
  {query ? `‘${query}’ 검색 결과가 없습니다.` : "등록된 상품이 없습니다."}
  </EmptyState>
  ) : (
- <TableWrap minWidth={860}>
+ <TableWrap minWidth={940}>
  <thead>
  <tr className="border-b border-hairline-soft">
  <Th>상품</Th>
  <Th>브랜드</Th>
  <Th>카테고리</Th>
  <Th align="right">최저 도매가</Th>
+ <Th align="center">재고</Th>
  <Th align="center">상태</Th>
  <Th align="right">관리</Th>
  </tr>
@@ -117,8 +119,21 @@ export default async function AdminProductsPage({
  <td className="whitespace-nowrap px-5 py-3 text-right font-semibold text-ink-deep sm:px-6">
  {minTier ? won(minTier.unitPrice) : "—"}
  </td>
+ <td className="whitespace-nowrap px-5 py-3 text-center text-[13px] font-semibold sm:px-6">
+ <span
+ className={
+ stockState(p) === "sold_out"
+ ? "text-brand-600"
+ : stockState(p) === "low"
+ ? "text-[#95651a]"
+ : "text-ink-soft"
+ }
+ >
+ {stockLabel(p)}
+ </span>
+ </td>
  <td className="px-5 py-3 text-center sm:px-6">
- <StatusPill tone={live ? "positive" : "neutral"}>
+ <StatusPill tone={live ? "bg-ink-deep text-white" : "bg-hairline-soft text-muted"}>
  {live ? "판매중" : "숨김"}
  </StatusPill>
  </td>

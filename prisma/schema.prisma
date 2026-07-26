@@ -34,6 +34,12 @@ model Product {
   image        String      @default("")
   basePrice    Int
   status       String      @default("ACTIVE")
+  /**
+   * 재고 추적 여부. 무재고(주문 후 사입) 상품은 false로 두어 수량 제한 없이 판매한다.
+   * 기존 상품이 갑자기 품절되지 않도록 기본값은 false.
+   */
+  trackStock   Boolean     @default(false)
+  stock        Int         @default(0)
   /** 수입 원본 (1688 등). sourceId 로 같은 상품 재수집을 막는다. */
   sourceUrl    String      @default("")
   sourceId     String?     @unique
