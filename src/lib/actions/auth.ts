@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { db } from "@/lib/db";
 import { createSession, destroySession, hashPassword, verifyPassword } from "@/lib/auth";
 import { isValidBizNumber, isValidEmail, normalizeBizNumber, safeNextPath } from "@/lib/validation";
@@ -54,6 +55,19 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
   }
 
   await createSession(user.id);
+
+  // 메인에서 환영 팝업을 한 번 띄우기 위한 1회용 표식.
+  // httpOnly가 아니어야 팝업을 띄운 뒤 클라이언트가 즉시 지울 수 있다.
+  // (민감 정보가 아니며, 없어도 로그인 자체에는 영향이 없다)
+  const store = await cookies();
+  store.set("luvy_welcome", "1", {
+    httpOnly: false,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 60 * 10,
+  });
+
   redirect(safeNextPath(next));
 }
 

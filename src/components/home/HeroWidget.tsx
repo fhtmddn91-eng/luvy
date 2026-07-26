@@ -1,29 +1,11 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth";
+import { getHomeStats } from "@/lib/home-stats";
 import { Icon } from "@/components/ui/Icon";
 
 /** 히어로 우측 회원 위젯 — 오늘의 업데이트/추천 요약 카드 */
 export async function HeroWidget() {
-  const user = await getSession();
-
-  const dayStart = new Date();
-  dayStart.setHours(0, 0, 0, 0);
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
-  const [todayCount, newCount, activeCount, reorderCount] = await Promise.all([
-    db.product.count({ where: { status: "ACTIVE", createdAt: { gte: dayStart } } }),
-    db.product.count({ where: { status: "ACTIVE", createdAt: { gte: weekAgo } } }),
-    db.product.count({ where: { status: "ACTIVE" } }),
-    db.orderItem.groupBy({ by: ["productId"] }).then((g) => g.length),
-  ]);
-
-  const rows = [
-    { icon: "sparkle", label: "오늘 업데이트", value: `${todayCount}개`, hot: todayCount > 0 },
-    { icon: "bag", label: "신상품", value: `${newCount}개` },
-    { icon: "verified", label: "많이 팔리는 상품", value: "TOP 100" },
-    { icon: "heart", label: "재구매 높은 상품", value: `${reorderCount || activeCount}개` },
-  ];
+  const [user, rows] = await Promise.all([getSession(), getHomeStats()]);
 
   return (
     <div className="w-[290px] rounded-2xl border border-white/60 bg-white/90 p-5 shadow-[var(--shadow-card)] backdrop-blur">
