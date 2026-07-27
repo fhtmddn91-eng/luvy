@@ -6,7 +6,7 @@ const STATUS_LABEL: Record<string, string> = { PENDING: "승인 대기", REJECTE
 const STATUS_MESSAGE: Record<string, { title: string; desc: string }> = {
   PENDING: {
     title: "가입 승인 대기 중입니다",
-    desc: "사업자 정보 확인 후 승인되면 도매가 확인과 주문이 가능합니다. 보통 영업일 기준 1일 이내 처리됩니다.",
+    desc: "사업자 정보 확인 후 승인되면 상품 열람과 주문이 가능합니다. 보통 영업일 기준 1일 이내 처리됩니다.",
   },
   REJECTED: {
     title: "가입이 반려되었습니다",
@@ -40,9 +40,19 @@ export default async function PendingPage() {
       <div className="mt-6 inline-flex items-center gap-2 rounded-pill bg-cream px-4 py-2 text-[13px] text-muted">
         현재 상태: <span className="font-bold text-brand-600">{STATUS_LABEL[user.status] ?? user.status}</span>
       </div>
-      <div className="mt-8">
-        <Link href="/" className="rounded-pill border border-brand-300 bg-white px-6 py-3 text-[14px] font-bold text-brand-600 hover:bg-brand-50">
-          메인으로
+      {/* 승인 전에는 몰이 열리지 않으므로 '메인으로'는 이 화면으로 되돌아올 뿐이다 */}
+      <div className="mt-8 flex flex-wrap justify-center gap-2">
+        <Link
+          href="/support/inquiry"
+          className="rounded-pill border border-brand-300 bg-white px-6 py-3 text-[14px] font-bold text-brand-600 hover:bg-brand-50"
+        >
+          1:1 문의하기
+        </Link>
+        <Link
+          href="/support"
+          className="rounded-pill border border-line bg-white px-6 py-3 text-[14px] font-bold text-ink-soft hover:border-brand-300 hover:text-brand-600"
+        >
+          고객센터
         </Link>
       </div>
     </div>
