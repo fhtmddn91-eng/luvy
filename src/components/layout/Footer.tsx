@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Logo } from "./Logo";
+import { COMPANY, companyLine, contactLine } from "@/lib/company";
 
 const footerColumns = [
   {
@@ -44,7 +45,7 @@ export function Footer() {
               검증된 제품과 파트너십으로 당신의 비즈니스 성공을 함께합니다.
             </p>
             <div className="mt-6 inline-flex items-center gap-2 rounded-pill bg-white px-4 py-2 text-[13px] font-semibold text-brand-600 shadow-[var(--shadow-soft)]">
-              고객센터 1600-0000
+              {contactLine()}
             </div>
           </div>
 
@@ -70,10 +71,10 @@ export function Footer() {
         </div>
 
         <div className="mt-12 flex flex-col gap-3 border-t border-line pt-6 text-[12px] text-muted md:flex-row md:items-center md:justify-between">
-          <p>
-            (주)러비 · 대표 000 · 사업자등록번호 000-00-00000 · 통신판매업
-            0000-서울-0000
-          </p>
+          <div className="space-y-1">
+            <p>{companyLine()}</p>
+            <p>{COMPANY.address}</p>
+          </div>
           <div className="flex items-center gap-4">
             <Link href="/terms" className="hover:text-brand-500">
               이용약관

@@ -1,3 +1,5 @@
+import { companyLine, contactLine } from "@/lib/company";
+
 /**
  * 인증 페이지 전용 레이아웃.
  *
@@ -11,7 +13,9 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         {children}
       </main>
       <footer className="px-4 pb-8 text-center text-[12px] text-muted">
-        <p>(주)러비 · 사업자등록번호 000-00-00000 · 고객센터 1600-0000</p>
+        <p>
+          {companyLine()} · {contactLine()}
+        </p>
         <p className="mt-1.5">
           <a href="/terms" className="hover:text-brand-500">
             이용약관

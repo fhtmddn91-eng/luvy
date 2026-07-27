@@ -140,6 +140,34 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
             )}
           </section>
 
+          {order.status === "CANCELED" && (
+            <section className="border border-hairline bg-white p-6">
+              <h2 className="mb-3 text-[15px] font-bold text-ink-deep">취소 내역</h2>
+              <dl className="space-y-1.5 text-[13px] text-ink-soft">
+                <div className="flex justify-between gap-3">
+                  <dt className="shrink-0 text-muted">취소자</dt>
+                  <dd className="font-semibold">
+                    {order.canceledBy === "MEMBER"
+                      ? "회원"
+                      : order.canceledBy === "ADMIN"
+                        ? "관리자"
+                        : "—"}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="shrink-0 text-muted">사유</dt>
+                  <dd className="text-right">{order.cancelReason || "—"}</dd>
+                </div>
+                {order.canceledAt && (
+                  <div className="flex justify-between gap-3">
+                    <dt className="shrink-0 text-muted">일시</dt>
+                    <dd>{dateFmt(order.canceledAt)}</dd>
+                  </div>
+                )}
+              </dl>
+            </section>
+          )}
+
           <section className="border border-hairline bg-white p-6">
             <h2 className="mb-1 text-[15px] font-bold text-ink-deep">송장 / 배송</h2>
             {shipped ? (

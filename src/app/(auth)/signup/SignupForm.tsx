@@ -13,7 +13,7 @@ export function SignupForm() {
       <AuthField label="비밀번호 (8자 이상)" name="password" type="password" autoComplete="new-password" />
       <AuthField label="비밀번호 확인" name="passwordConfirm" type="password" autoComplete="new-password" />
       <div className="my-2 border-t border-line" />
-      <AuthField label="상호명" name="companyName" placeholder="(주)러비상사" />
+      <AuthField label="상호명" name="companyName" placeholder="러비상사" />
       <AuthField label="사업자등록번호" name="businessNumber" placeholder="123-45-67890" />
       <AuthField label="대표자명" name="ownerName" />
       <AuthField label="휴대폰" name="phone" placeholder="010-0000-0000" autoComplete="tel" />

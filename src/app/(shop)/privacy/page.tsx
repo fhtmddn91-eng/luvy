@@ -1,3 +1,6 @@
+
+import { COMPANY, CONTACT_POINT } from "@/lib/company";
+
 const sections: { title: string; body: string }[] = [
   {
     title: "1. 수집하는 개인정보 항목",
@@ -21,7 +24,7 @@ const sections: { title: string; body: string }[] = [
   },
   {
     title: "6. 정보주체의 권리",
-    body: "회원은 언제든지 자신의 개인정보를 조회·수정하거나 삭제(탈퇴)를 요청할 수 있습니다. 고객센터(1600-0000) 또는 1:1 문의를 통해 요청하시면 지체 없이 조치합니다.",
+    body: `회원은 언제든지 자신의 개인정보를 조회·수정하거나 삭제(탈퇴)를 요청할 수 있습니다. 고객센터(${CONTACT_POINT}) 또는 1:1 문의를 통해 요청하시면 지체 없이 조치합니다.`,
   },
   {
     title: "7. 개인정보의 파기 절차 및 방법",
@@ -29,7 +32,7 @@ const sections: { title: string; body: string }[] = [
   },
   {
     title: "8. 개인정보 보호책임자",
-    body: "· 성명: 000\n· 직책: 개인정보 보호책임자\n· 연락처: 1600-0000, privacy@luvyb2b.com\n개인정보 관련 문의·불만·피해구제는 위 연락처로 접수할 수 있습니다.",
+    body: `· 성명: ${COMPANY.privacyOfficer}\n· 직책: 개인정보 보호책임자\n· 연락처: ${[COMPANY.tel, COMPANY.privacyEmail].filter(Boolean).join(", ")}\n개인정보 관련 문의·불만·피해구제는 위 연락처로 접수할 수 있습니다.`,
   },
 ];
 

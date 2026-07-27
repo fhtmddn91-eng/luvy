@@ -122,6 +122,10 @@ model Order {
   /** 운송장번호. 영숫자만 정규화해 저장하며, 비어 있으면 미발송 */
   trackingNo  String      @default("")
   shippedAt   DateTime?
+  canceledAt  DateTime?
+  /** 취소 주체. MEMBER | ADMIN (취소 전에는 빈 문자열) */
+  canceledBy  String      @default("")
+  cancelReason String     @default("")
   createdAt   DateTime    @default(now())
   user        User        @relation(fields: [userId], references: [id])
   items       OrderItem[]

@@ -3,9 +3,16 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { requireApprovedUser } from "@/lib/auth";
+import { requireApprovedUser, requireUser } from "@/lib/auth";
 import { buildOrderDraft } from "@/lib/payments";
 import { reserveStock, InsufficientStockError, linesFromOrderItems } from "@/lib/stockOps";
+import { cancelOrderCore, RefundFailedError } from "@/lib/orderCancel";
+import {
+  isMemberCancelable,
+  isCancelReason,
+  formatCancelReason,
+  orderStatusLabel,
+} from "@/lib/orderStatus";
 
 export type OrderState = { error?: string };
 
@@ -115,4 +122,55 @@ export async function createPendingOrder(formData: FormData): Promise<PendingOrd
   });
 
   return { ok: true, orderId: order.id, paymentId, orderName: draft.orderName, amount: draft.total };
+}
+
+export type CancelState = { error?: string };
+
+/**
+ * 회원의 주문 취소. 발송 전(결제완료·접수됨·배송준비)까지만 허용한다.
+ *
+ * 결제·재고 처리는 관리자 취소와 같은 cancelOrderCore 를 쓴다.
+ * (두 경로가 갈라지면 한쪽만 환불되거나 재고가 안 돌아오는 사고가 난다)
+ */
+export async function cancelMyOrder(
+  orderId: string,
+  _prev: CancelState,
+  formData: FormData,
+): Promise<CancelState> {
+  // requireApprovedUser 가 아니라 requireUser: 승인 상태가 바뀌어도
+  // 이미 넣은 주문은 스스로 취소할 수 있어야 한다.
+  const user = await requireUser();
+
+  const order = await db.order.findUnique({
+    where: { id: orderId },
+    select: { userId: true, status: true, trackingNo: true },
+  });
+  // 남의 주문인지 없는 주문인지 구분해 알려주지 않는다
+  if (!order || order.userId !== user.id) return { error: "주문을 찾을 수 없습니다." };
+
+  if (!isMemberCancelable(order)) {
+    return {
+      error:
+        order.status === "CANCELED"
+          ? "이미 취소된 주문입니다."
+          : `이미 발송 단계로 넘어간 주문(${orderStatusLabel(order.status)})은 직접 취소할 수 없습니다. 고객센터로 문의해주세요.`,
+    };
+  }
+
+  const reason = String(formData.get("reason") ?? "").trim();
+  if (!isCancelReason(reason)) return { error: "취소 사유를 선택해주세요." };
+  const detail = String(formData.get("detail") ?? "").slice(0, 200);
+
+  try {
+    await cancelOrderCore(orderId, { by: "MEMBER", reason: formatCancelReason(reason, detail) });
+  } catch (e) {
+    if (e instanceof RefundFailedError) return { error: e.message };
+    throw e;
+  }
+
+  revalidatePath("/orders");
+  revalidatePath(`/orders/${orderId}`);
+  revalidatePath("/admin/orders");
+  revalidatePath(`/admin/orders/${orderId}`);
+  return {};
 }

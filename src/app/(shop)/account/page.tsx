@@ -1,3 +1,4 @@
+import { CONTACT_POINT } from "@/lib/company";
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -220,7 +221,7 @@ export default async function AccountPage() {
               ))}
             </dl>
             <p className="mt-5 border-t border-hairline-soft pt-4 text-[12px] text-muted">
-              계정 정보 변경이 필요하시면 고객센터 1600-0000 또는 1:1 문의로 요청해주세요.
+              계정 정보 변경이 필요하시면 고객센터 {CONTACT_POINT} 또는 1:1 문의로 요청해주세요.
             </p>
           </Panel>
         </div>

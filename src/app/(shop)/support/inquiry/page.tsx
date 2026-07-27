@@ -1,3 +1,4 @@
+import { CONTACT_POINT } from "@/lib/company";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
@@ -24,7 +25,7 @@ export default async function InquiryPage({
       <p className="text-[13px] font-semibold text-brand-500">1:1 INQUIRY</p>
       <h1 className="mt-1 text-[26px] font-extrabold text-ink sm:text-[28px]">1:1 문의</h1>
       <p className="mb-8 mt-1 text-[14px] text-muted">
-        영업일 기준 24시간 내 답변드립니다. 급한 문의는 고객센터 1600-0000으로 연락해주세요.
+        영업일 기준 24시간 내 답변드립니다. 급한 문의는 고객센터 {CONTACT_POINT}로 연락해주세요.
       </p>
 
       {submitted && (

@@ -3,9 +3,10 @@ import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { won } from "@/lib/format";
-import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
+import { orderStatusLabel, orderStatusTone, isMemberCancelable } from "@/lib/orderStatus";
 import { courierName, hasShipment, trackingUrl } from "@/lib/shipping";
 import { AccountShell } from "@/components/account/AccountShell";
+import { CancelOrderForm } from "@/components/account/CancelOrderForm";
 import { Panel, StatusPill } from "@/components/ui/Panel";
 
 const dateTimeFmt = (d: Date) =>
@@ -26,6 +27,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
   const shipment = { courier: order.courier, trackingNo: order.trackingNo };
   const shipped = hasShipment(shipment);
   const trackUrl = trackingUrl(shipment);
+  const cancelable = isMemberCancelable(order);
 
   return (
     <AccountShell
@@ -55,6 +57,19 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             {orderStatusLabel(order.status)}
           </StatusPill>
         </div>
+
+        {order.status === "CANCELED" && (
+          <div className="rise rise-2 border border-hairline bg-white px-5 py-4 sm:px-6">
+            <p className="text-[13px] font-bold text-ink-deep">취소된 주문입니다</p>
+            <p className="mt-1.5 text-[13px] text-ink-soft">
+              {order.cancelReason || "사유 없음"}
+              {order.canceledBy === "ADMIN" && " (판매자 취소)"}
+            </p>
+            {order.canceledAt && (
+              <p className="mt-1 text-[12px] text-muted">{dateTimeFmt(order.canceledAt)}</p>
+            )}
+          </div>
+        )}
 
         {/* 발송된 주문만 노출 — 송장이 없으면 조회할 것도 없다 */}
         {shipped && (
@@ -154,6 +169,14 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
             </dl>
           </Panel>
         </div>
+
+        {cancelable && (
+          <div className="rise rise-4">
+            <Panel title="주문 취소">
+              <CancelOrderForm orderId={order.id} />
+            </Panel>
+          </div>
+        )}
       </div>
     </AccountShell>
   );

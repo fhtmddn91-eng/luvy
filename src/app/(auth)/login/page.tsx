@@ -1,3 +1,4 @@
+import { CONTACT_POINT } from "@/lib/company";
 import Link from "next/link";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { LoginForm } from "./LoginForm";
@@ -26,7 +27,7 @@ export default async function LoginPage({
       {/* 비밀번호 재발급이 아직 자동화되지 않아 고객센터로 안내한다 */}
       <p className="mt-5 border-t border-line pt-4 text-center text-[12px] leading-relaxed text-muted">
         로그인이 어려우시면 고객센터{" "}
-        <span className="font-semibold text-ink-soft">1600-0000</span> 으로 문의해주세요.
+        <span className="font-semibold text-ink-soft">{CONTACT_POINT}</span> 으로 문의해주세요.
         <br />
         (평일 10:00 ~ 17:00)
       </p>

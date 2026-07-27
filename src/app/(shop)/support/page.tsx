@@ -1,3 +1,4 @@
+import { CONTACT_POINT } from "@/lib/company";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { Icon } from "@/components/ui/Icon";
@@ -77,7 +78,9 @@ export default async function SupportPage() {
         {/* 운영 안내 */}
         <aside className="rounded-2xl border border-line bg-cream p-5 sm:p-6">
           <h2 className="text-[16px] font-bold text-ink">고객센터 운영 안내</h2>
-          <p className="mt-3 text-[24px] font-extrabold tracking-tight text-brand-600">1600-0000</p>
+          <p className="mt-3 break-all text-[20px] font-extrabold tracking-tight text-brand-600 sm:text-[24px]">
+            {CONTACT_POINT}
+          </p>
           <dl className="mt-3 space-y-1.5 text-[13px] text-ink-soft">
             <div className="flex gap-2">
               <dt className="w-16 shrink-0 text-muted">평일</dt>
@@ -93,7 +96,7 @@ export default async function SupportPage() {
             </div>
           </dl>
           <p className="mt-4 border-t border-line pt-4 text-[12px] leading-relaxed text-muted">
-            전화 연결이 어려운 시간에는 1:1 문의를 남겨주시면
+            운영 시간 외에는 1:1 문의를 남겨주시면
             영업일 기준 24시간 내 답변드립니다.
           </p>
         </aside>

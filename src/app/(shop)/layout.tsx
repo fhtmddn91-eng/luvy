@@ -4,6 +4,7 @@ import { Logo } from "@/components/layout/Logo";
 import { UtilBar } from "@/components/layout/UtilBar";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
+import { companyLine, contactLine } from "@/lib/company";
 
 export default async function ShopLayout({
   children,
@@ -33,7 +34,9 @@ export default async function ShopLayout({
         </header>
         <main className="flex-1">{children}</main>
         <footer className="px-4 py-8 text-center text-[12px] text-muted">
-          <p>(주)러비 · 사업자등록번호 000-00-00000 · 고객센터 1600-0000</p>
+          <p>
+            {companyLine()} · {contactLine()}
+          </p>
           <p className="mt-1.5">
             <Link href="/terms" className="hover:text-brand-500">
               이용약관
