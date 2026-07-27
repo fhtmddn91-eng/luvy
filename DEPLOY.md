@@ -293,3 +293,37 @@ src/app/(shop)/
 |---|---|---|
 | `mailOrderNumber` | **비어 있음** | 통신판매업 신고번호. 관할 시·군·구청 신고 후 기재 (미기재 시 과태료) |
 | `tel` | **비어 있음** | 고객센터 전화. 비어 있으면 이메일이 대신 노출됨 |
+
+## 14. 공유 카드 (오픈그래프)
+
+카카오톡·슬랙 등에 링크를 붙였을 때 뜨는 미리보기 이미지는 `public/og.jpg` (1200×630) 입니다.
+메타 태그는 `src/app/layout.tsx` 한 곳에서 관리합니다.
+
+> **화면 캡처를 쓰지 않은 이유**: 링크 미리보기는 로그인 없이 아무나 봅니다.
+> 메인 페이지를 그대로 캡처하면 상품명과 도매가가 카카오톡 대화방마다 박히는데,
+> 이건 폐쇄몰이 지키려는 바로 그 정보입니다. 그래서 상품이 없는 브랜드 카드를 따로 만들었습니다.
+
+### 이미지 수정 방법
+
+1. `design/og-card.html` 을 고칩니다 (그냥 HTML/CSS 입니다)
+2. 아래로 다시 렌더 → 리사이즈 → 저장
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=2 --window-size=1200,630 --virtual-time-budget=6000 --screenshot=/tmp/og@2x.png "file://$PWD/design/og-card.html"
+```
+
+```bash
+sips -z 630 1200 /tmp/og@2x.png --out /tmp/og.png && sips -s format jpeg -s formatOptions 92 /tmp/og.png --out public/og.jpg
+```
+
+2배(2400×1260)로 찍어 1200×630 으로 줄이면 글자 가장자리가 매끄럽습니다.
+JPEG 92 품질에서 약 80KB — 같은 그림의 PNG(약 500KB)보다 훨씬 가볍고 눈으로는 차이가 없습니다.
+
+### 주의
+
+- `NEXT_PUBLIC_SITE_URL` 이 없으면 `https://luvyb2b.com` 을 기준으로 절대 URL을 만듭니다.
+  도메인이 바뀌면 이 환경변수를 넣으세요 (상대 경로로 두면 카카오톡이 이미지를 못 찾습니다).
+- 카카오톡은 미리보기를 **캐시**합니다. 이미지를 바꿨는데 옛것이 뜨면
+  [카카오 디버거](https://developers.kakao.com/tool/debugger/sharing) 에서 캐시를 초기화하세요.
+- `og.jpg` 는 확장자에 점이 있어 미들웨어 대상에서 제외됩니다 = 로그인 없이 접근 가능.
+  크롤러가 읽어야 하므로 의도된 동작입니다.
