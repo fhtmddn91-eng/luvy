@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { getHomeStats } from "@/lib/home-stats";
 import { HeroBanner } from "@/components/home/HeroBanner";
-import { WelcomeGreeting } from "@/components/home/WelcomeGreeting";
+import { HeroGreeting } from "@/components/home/HeroGreeting";
 import { QuickMenu } from "@/components/home/QuickMenu";
 import { NewProducts } from "@/components/home/NewProducts";
 import { NoticeStrip } from "@/components/home/NoticeStrip";
@@ -18,10 +18,12 @@ export default async function HomePage() {
 
   return (
     <>
-      {/* 인사 카드는 로그인 직후 1회만 (luvy_welcome 쿠키를 보고 스스로 판단).
-          히어로에 같은 카드를 상주시키면 인사가 두 번 보이므로 여기 하나만 둔다. */}
-      <WelcomeGreeting companyName={user?.companyName ?? "LUVY"} rows={stats} />
-      <HeroBanner banners={banners} />
+      {/* 인사 카드 — 히어로 우측 원래 자리에서 로그인 직후 1회만 떴다가 내려간다
+          (luvy_welcome 쿠키를 보고 스스로 판단) */}
+      <HeroBanner
+        banners={banners}
+        widget={<HeroGreeting companyName={user?.companyName ?? "LUVY"} rows={stats} />}
+      />
       <QuickMenu />
       <NewProducts />
       <NoticeStrip notices={notices} />

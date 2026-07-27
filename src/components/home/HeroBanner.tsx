@@ -30,7 +30,14 @@ const FALLBACK: HeroBannerData = {
 
 const AUTOPLAY_MS = 6000;
 
-export function HeroBanner({ banners: input }: { banners: HeroBannerData[] }) {
+export function HeroBanner({
+  banners: input,
+  widget,
+}: {
+  banners: HeroBannerData[];
+  /** 히어로 우측 오버레이 슬롯 — 로그인 직후 인사 카드가 여기서 떴다 내려간다 */
+  widget?: React.ReactNode;
+}) {
   const banners = input.length > 0 ? input : [FALLBACK];
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
@@ -118,6 +125,13 @@ export function HeroBanner({ banners: input }: { banners: HeroBannerData[] }) {
               </div>
             </div>
           </div>
+
+          {/* 회원 인사 카드 (우측 오버레이) */}
+          {widget && (
+            <div className="absolute right-16 top-1/2 z-20 hidden -translate-y-1/2 xl:block">
+              {widget}
+            </div>
+          )}
 
           {/* Arrows */}
           <button

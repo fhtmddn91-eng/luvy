@@ -131,39 +131,6 @@
   }
 }
 
-/* 로그인 환영 팝업 */
-@keyframes welcomeFade {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-@keyframes welcomePop {
-  from {
-    opacity: 0;
-    transform: translateY(12px) scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-.welcome-fade {
-  animation: welcomeFade 0.2s ease both;
-}
-.welcome-pop {
-  animation: welcomePop 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .welcome-fade,
-  .welcome-pop {
-    animation: none;
-  }
-}
-
 /* Marquee-free thin scrollbar for category row on mobile */
 .no-scrollbar::-webkit-scrollbar {
   display: none;

@@ -4,7 +4,7 @@ import type { HomeStatRow } from "@/lib/home-stats";
 
 /**
  * 회원 인사 카드 — 오늘의 업데이트/추천 요약.
- * 히어로에 상주하지 않고, 로그인 직후 한 번만 팝업으로 띄운다(WelcomeGreeting).
+ * 히어로 우측에서 로그인 직후에만 잠시 떴다가 내려간다(HeroGreeting이 감싼다).
  */
 export function GreetingCard({
   companyName,
