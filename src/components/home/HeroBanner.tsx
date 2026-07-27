@@ -30,13 +30,7 @@ const FALLBACK: HeroBannerData = {
 
 const AUTOPLAY_MS = 6000;
 
-export function HeroBanner({
-  banners: input,
-  widget,
-}: {
-  banners: HeroBannerData[];
-  widget?: React.ReactNode;
-}) {
+export function HeroBanner({ banners: input }: { banners: HeroBannerData[] }) {
   const banners = input.length > 0 ? input : [FALLBACK];
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
@@ -124,13 +118,6 @@ export function HeroBanner({
               </div>
             </div>
           </div>
-
-          {/* Member widget (우측 오버레이) */}
-          {widget && (
-            <div className="absolute right-16 top-1/2 z-20 hidden -translate-y-1/2 xl:block">
-              {widget}
-            </div>
-          )}
 
           {/* Arrows */}
           <button
