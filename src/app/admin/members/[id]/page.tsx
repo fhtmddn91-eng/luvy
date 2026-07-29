@@ -6,6 +6,7 @@ import { won } from "@/lib/format";
 import { memberStatusLabel, memberStatusTone } from "@/lib/memberStatus";
 import { orderStatusLabel } from "@/lib/orderStatus";
 import { setMemberStatus } from "@/lib/actions/admin-members";
+import { TempPasswordForm } from "@/components/admin/TempPasswordForm";
 
 const dateFmt = (d: Date) =>
  new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium" }).format(d);
@@ -118,6 +119,13 @@ export default async function AdminMemberDetailPage({ params }: { params: Promis
  </form>
  )}
  </div>
+
+ {member.role !== "ADMIN" && (
+ <div className="mt-6 border-t border-hairline pt-5">
+ <h2 className="mb-3 text-[15px] font-bold text-ink-deep">계정 복구</h2>
+ <TempPasswordForm memberId={member.id} />
+ </div>
+ )}
  </section>
  </div>
  </div>

@@ -160,6 +160,31 @@ model OrderItem {
   order     Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
 
+model Faq {
+  id        String  @id @default(cuid())
+  category  String
+  question  String
+  answer    String
+  sortOrder Int     @default(0)
+  active    Boolean @default(true)
+}
+
+/** 운영자가 어드민에서 바꾸는 사이트 설정 (배송비 등). key-value 저장 */
+model Setting {
+  key   String @id
+  value String
+}
+
+model Category {
+  /** URL 에 그대로 쓰는 식별자 (예: women). 상품이 categorySlug 문자열로 참조한다. */
+  slug      String  @id
+  name      String
+  /** Icon 컴포넌트 키 */
+  icon      String  @default("sparkle")
+  sortOrder Int     @default(0)
+  active    Boolean @default(true)
+}
+
 model Banner {
   id             String   @id @default(cuid())
   eyebrow        String

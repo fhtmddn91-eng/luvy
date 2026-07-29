@@ -4,6 +4,7 @@ import { requireAdmin } from "@/lib/auth";
 import { ProductForm } from "@/components/admin/ProductForm";
 import { updateProduct } from "@/lib/actions/admin-products";
 import { PageHeader } from "@/components/ui/Panel";
+import { getAllCategories } from "@/lib/categories";
 
 export default async function EditProductPage({ params }: { params: Promise<{ id: string }> }) {
   await requireAdmin();
@@ -18,6 +19,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
       <PageHeader eyebrow="Catalog" title="상품 수정" description={product.name} />
       <ProductForm
         action={boundAction}
+        categories={await getAllCategories()}
         product={{
           id: product.id,
           name: product.name,

@@ -6,6 +6,7 @@ import { PortOneCheckout } from "@/components/checkout/PortOneCheckout";
 import { isPortOneConfigured, PORTONE_STORE_ID, PORTONE_CHANNEL_KEY_KCP } from "@/lib/portone";
 import { won } from "@/lib/format";
 import { resolveUnitPrice, shippingFor, type Tier } from "@/lib/pricing";
+import { getShippingPolicy } from "@/lib/settings";
 
 export default async function CheckoutPage() {
   const user = await requireApprovedUser();
@@ -21,7 +22,7 @@ export default async function CheckoutPage() {
     return { id: it.id, name: it.product.name, quantity: it.quantity, lineTotal: unit * it.quantity };
   });
   const subtotal = lines.reduce((s, l) => s + l.lineTotal, 0);
-  const shippingFee = shippingFor(subtotal);
+  const shippingFee = shippingFor(subtotal, await getShippingPolicy());
 
   return (
     <div className="mx-auto max-w-[1080px] px-6 py-10">

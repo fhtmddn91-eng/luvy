@@ -1,5 +1,5 @@
 import "server-only";
-import { categories } from "@/lib/mock/categories";
+import { getCategories } from "@/lib/categories";
 import type { ImportDraft } from "./types";
 
 /**
@@ -27,9 +27,9 @@ export function isTranslatorConfigured(): boolean {
 }
 
 /** 카테고리 슬러그가 실제 목록에 있는지 검증 (모델 환각 방지) */
-function validCategory(slug: unknown): string | null {
+function validCategory(slug: unknown, slugs: Set<string>): string | null {
   if (typeof slug !== "string") return null;
-  return categories.some((c) => c.slug === slug) ? slug : null;
+  return slugs.has(slug) ? slug : null;
 }
 
 function fallback(draft: ImportDraft, note: string): Translation {
@@ -65,6 +65,7 @@ export async function translateDraft(draft: ImportDraft): Promise<Translation> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return fallback(draft, "ANTHROPIC_API_KEY 미설정");
 
+  const categories = await getCategories();
   const catList = categories.map((c) => `${c.slug} = ${c.name}`).join("\n");
   const attrs = draft.rawAttributes.map((a) => `${a.label}: ${a.value}`).join("\n");
 
@@ -120,7 +121,7 @@ ${attrs || "(없음)"}
       name: name.slice(0, 120),
       description:
         `${description}\n\n[원본] ${draft.sourceUrl}`.trim().slice(0, 4000),
-      categorySlug: validCategory(parsed.categorySlug) ?? "",
+      categorySlug: validCategory(parsed.categorySlug, new Set(categories.map((c) => c.slug))) ?? "",
       translated: true,
     };
   } catch (e) {

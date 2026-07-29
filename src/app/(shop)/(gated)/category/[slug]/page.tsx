@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
-import { categories } from "@/lib/mock/categories";
+import { getCategories } from "@/lib/categories";
 import { ProductGrid } from "@/components/product/ProductGrid";
 import { SortSelect } from "@/components/product/SortSelect";
 
@@ -19,7 +19,7 @@ export default async function CategoryPage({
 }) {
   const { slug } = await params;
   const { sort } = await searchParams;
-  const category = categories.find((c) => c.slug === slug);
+  const category = (await getCategories()).find((c) => c.slug === slug);
   if (!category) notFound();
 
   const products = await db.product.findMany({

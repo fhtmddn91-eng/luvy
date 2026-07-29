@@ -3,7 +3,6 @@
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import Link from "next/link";
-import { categories } from "@/lib/mock/categories";
 import type { ProductFormState } from "@/lib/actions/admin-products";
 import { Panel, btnPrimary } from "@/components/ui/Panel";
 import { fieldCls, areaCls, labelCls, helpCls, errorCls } from "@/components/ui/form";
@@ -33,7 +32,15 @@ function SaveButton() {
  );
 }
 
-export function ProductForm({ action, product }: { action: Action; product?: ProductFormData }) {
+export function ProductForm({
+ action,
+ product,
+ categories,
+}: {
+ action: Action;
+ product?: ProductFormData;
+ categories: { slug: string; name: string }[];
+}) {
  const [state, formAction] = useActionState<ProductFormState, FormData>(action, {});
  const [tiers, setTiers] = useState<{ minQty: string; unitPrice: string }[]>(
  product?.priceTiers.length

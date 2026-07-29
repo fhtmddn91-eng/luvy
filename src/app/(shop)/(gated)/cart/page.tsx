@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { CartItemRow, type CartRowData } from "@/components/cart/CartItemRow";
 import { CartSummary } from "@/components/cart/CartSummary";
 import { getMoq, resolveUnitPrice, shippingFor, type Tier } from "@/lib/pricing";
+import { getShippingPolicy } from "@/lib/settings";
 
 export default async function CartPage() {
   const user = await requireApprovedUser();
@@ -25,7 +26,7 @@ export default async function CartPage() {
   }));
 
   const subtotal = rows.reduce((sum, r) => sum + resolveUnitPrice(r.tiers, r.quantity) * r.quantity, 0);
-  const shippingFee = shippingFor(subtotal);
+  const shippingFee = shippingFor(subtotal, await getShippingPolicy());
 
   return (
     <div className="mx-auto max-w-[1080px] px-6 py-10">

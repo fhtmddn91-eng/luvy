@@ -3,10 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Icon } from "@/components/ui/Icon";
-import { categories } from "@/lib/mock/categories";
 import { categoryHref } from "@/lib/nav";
 
-export function SearchBar() {
+export function SearchBar({
+  categories,
+}: {
+  categories: { slug: string; name: string }[];
+}) {
   const router = useRouter();
   return (
     <div className="w-full">

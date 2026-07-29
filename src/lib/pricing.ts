@@ -1,7 +1,14 @@
 export type Tier = { minQty: number; unitPrice: number };
 
+/** 배송비 기본값 — 실제 적용값은 어드민 설정(Setting 테이블)이 우선한다 (lib/settings.ts) */
 export const SHIPPING_FEE = 3000;
 export const FREE_SHIPPING_THRESHOLD = 100_000;
+
+export interface ShippingPolicy {
+  fee: number;
+  /** 이 금액 이상이면 무료. 0이면 항상 무료 */
+  freeThreshold: number;
+}
 
 /** 오름차순 정렬 사본. */
 function sorted(tiers: Tier[]): Tier[] {
@@ -23,7 +30,10 @@ export function resolveUnitPrice(tiers: Tier[], qty: number): number {
   return price;
 }
 
-export function shippingFor(subtotal: number): number {
+export function shippingFor(
+  subtotal: number,
+  policy: ShippingPolicy = { fee: SHIPPING_FEE, freeThreshold: FREE_SHIPPING_THRESHOLD },
+): number {
   if (subtotal <= 0) return 0;
-  return subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE;
+  return subtotal >= policy.freeThreshold ? 0 : policy.fee;
 }

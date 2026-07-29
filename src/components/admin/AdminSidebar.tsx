@@ -12,9 +12,11 @@ const groups: { heading: string; items: { href: string; label: string; exact?: b
     heading: "Catalog",
     items: [
       { href: "/admin/products", label: "상품 관리" },
+      { href: "/admin/categories", label: "카테고리" },
       { href: "/admin/import", label: "1688 수집" },
       { href: "/admin/banners", label: "배너 관리" },
       { href: "/admin/notices", label: "공지 관리" },
+      { href: "/admin/faqs", label: "FAQ 관리" },
     ],
   },
   {
@@ -25,9 +27,18 @@ const groups: { heading: string; items: { href: string; label: string; exact?: b
       { href: "/admin/inquiries", label: "문의 관리" },
     ],
   },
+  {
+    heading: "System",
+    items: [{ href: "/admin/settings", label: "설정" }],
+  },
 ];
 
-export function AdminSidebar() {
+export function AdminSidebar({
+  badges = {},
+}: {
+  /** href → 처리 대기 건수. 0이거나 없으면 배지를 그리지 않는다 */
+  badges?: Record<string, number>;
+}) {
   const pathname = usePathname();
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname === href || pathname.startsWith(href + "/");
@@ -43,12 +54,13 @@ export function AdminSidebar() {
           <p className="eyebrow mb-2.5 hidden px-3 md:block">{group.heading}</p>
           {group.items.map((item) => {
             const active = isActive(item.href, item.exact);
+            const badge = badges[item.href] ?? 0;
             return (
               <Link
                 key={item.href}
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                className={`relative flex shrink-0 items-center whitespace-nowrap px-3.5 py-2 text-[13px] transition-colors md:px-3 md:py-2 ${
+                className={`relative flex shrink-0 items-center gap-2 whitespace-nowrap px-3.5 py-2 text-[13px] transition-colors md:px-3 md:py-2 ${
                   active
                     ? "bg-ink-deep font-bold text-white md:bg-transparent md:text-ink-deep"
                     : "font-medium text-muted hover:text-ink-deep"
@@ -62,6 +74,14 @@ export function AdminSidebar() {
                   />
                 )}
                 {item.label}
+                {badge > 0 && (
+                  <span
+                    aria-label={`처리 대기 ${badge}건`}
+                    className="inline-flex h-[18px] min-w-[18px] items-center justify-center bg-brand-600 px-1 text-[10px] font-extrabold leading-none text-white"
+                  >
+                    {badge > 99 ? "99+" : badge}
+                  </span>
+                )}
               </Link>
             );
           })}

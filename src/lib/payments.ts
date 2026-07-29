@@ -1,6 +1,7 @@
 import "server-only";
 import { db } from "@/lib/db";
 import { resolveUnitPrice, shippingFor, type Tier } from "@/lib/pricing";
+import { getShippingPolicy } from "@/lib/settings";
 import { fetchPortOnePayment } from "@/lib/portone";
 import { restoreStock, linesFromOrderItems } from "@/lib/stockOps";
 
@@ -45,7 +46,7 @@ export async function buildOrderDraft(userId: string): Promise<OrderDraft | null
   });
 
   const subtotal = items.reduce((sum, i) => sum + i.lineTotal, 0);
-  const shippingFee = shippingFor(subtotal);
+  const shippingFee = shippingFor(subtotal, await getShippingPolicy());
   const orderName =
     items.length === 1 ? items[0].name : `${items[0].name} 외 ${items.length - 1}건`;
 

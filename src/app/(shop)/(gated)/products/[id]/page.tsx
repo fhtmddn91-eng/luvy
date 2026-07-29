@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
-import { categories } from "@/lib/mock/categories";
+import { getAllCategories } from "@/lib/categories";
 import { ProductThumb } from "@/components/product/ProductThumb";
 import { PriceTierTable } from "@/components/product/PriceTierTable";
 import { AddToCart } from "@/components/product/AddToCart";
@@ -15,7 +15,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   });
   if (!product || product.status !== "ACTIVE") notFound();
 
-  const category = categories.find((c) => c.slug === product.categorySlug);
+  // 숨긴 카테고리의 기존 상품도 이름은 표시되어야 하므로 전체 목록에서 찾는다
+  const category = (await getAllCategories()).find((c) => c.slug === product.categorySlug);
   const moq = getMoq(product.priceTiers);
 
   return (

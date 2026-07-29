@@ -4,9 +4,10 @@ import { Gnb } from "./Gnb";
 import { SearchBar } from "./SearchBar";
 import { Icon } from "@/components/ui/Icon";
 import { getCartCount } from "@/lib/actions/cart";
+import { getCategories } from "@/lib/categories";
 
 export async function Header() {
-  const cartCount = await getCartCount();
+  const [cartCount, cats] = await Promise.all([getCartCount(), getCategories()]);
 
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-white/95 backdrop-blur">
@@ -15,7 +16,7 @@ export async function Header() {
         <Logo />
 
         <div className="order-3 flex w-full min-w-0 justify-center lg:order-none lg:w-auto lg:flex-1">
-          <SearchBar />
+          <SearchBar categories={cats.map((c) => ({ slug: c.slug, name: c.name }))} />
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">

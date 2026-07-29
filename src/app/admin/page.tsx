@@ -24,10 +24,19 @@ const dateFmt = (d: Date) =>
 export default async function AdminDashboardPage() {
   await requireAdmin();
 
-  const [orderCount, revenue, memberCount, productCount, pendingMembers, openInquiries, recentOrders] =
+  // 매출 집계에서 제외할 상태 — 취소·실패·미결제는 돈이 아니다
+  const DEAD = ["CANCELED", "PAYMENT_FAILED", "PENDING_PAYMENT"];
+  const sales = { status: { notIn: DEAD } };
+
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+
+  const [orderCount, revenue, monthRevenue, memberCount, productCount, pendingMembers, openInquiries, recentOrders, recentSales] =
     await Promise.all([
       db.order.count(),
-      db.order.aggregate({ _sum: { total: true } }),
+      db.order.aggregate({ _sum: { total: true }, where: sales }),
+      db.order.aggregate({ _sum: { total: true }, where: { ...sales, createdAt: { gte: monthStart } } }),
       db.user.count({ where: { role: "MEMBER" } }),
       db.product.count({ where: { status: "ACTIVE" } }),
       db.user.count({ where: { role: "MEMBER", status: "PENDING" } }),
@@ -37,9 +46,28 @@ export default async function AdminDashboardPage() {
         take: 6,
         include: { items: true, user: true },
       }),
+      db.order.findMany({
+        where: { ...sales, createdAt: { gte: sixMonthsAgo } },
+        select: { createdAt: true, total: true },
+      }),
     ]);
 
   const total = revenue._sum.total ?? 0;
+  const thisMonth = monthRevenue._sum.total ?? 0;
+
+  // 최근 6개월 월별 매출 (주문이 없는 달도 0원으로 표시)
+  const months: { label: string; sum: number; count: number }[] = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({ label: `${d.getFullYear()}. ${d.getMonth() + 1}.`, sum: 0, count: 0 });
+  }
+  for (const o of recentSales) {
+    const idx = 5 - ((now.getFullYear() - o.createdAt.getFullYear()) * 12 + now.getMonth() - o.createdAt.getMonth());
+    if (idx >= 0 && idx < 6) {
+      months[idx].sum += o.total;
+      months[idx].count += 1;
+    }
+  }
 
   return (
     <div>
@@ -52,8 +80,8 @@ export default async function AdminDashboardPage() {
       <div className="rise rise-1 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatTile label="Total orders" value={orderCount} suffix="건" href="/admin/orders" />
         <StatTile
-          label="Revenue"
-          value={total.toLocaleString("ko-KR")}
+          label="This month"
+          value={thisMonth.toLocaleString("ko-KR")}
           suffix="원"
           href="/admin/orders"
         />
@@ -92,6 +120,35 @@ export default async function AdminDashboardPage() {
           )}
         </div>
       )}
+
+      {/* 월별 매출 — 취소·실패·미결제 제외 */}
+      <div className="rise rise-2 mt-8">
+        <Panel title={`월별 매출 (누적 ${won(total)})`} flush>
+          <TableWrap minWidth={520}>
+            <thead>
+              <tr className="border-b border-hairline-soft">
+                <Th>월</Th>
+                <Th align="right">주문</Th>
+                <Th align="right">매출</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {months.map((m, i) => (
+                <tr key={m.label} className="border-b border-hairline-soft last:border-0">
+                  <td className={`px-5 py-3 sm:px-6 ${i === 5 ? "font-bold text-ink-deep" : "text-ink-soft"}`}>
+                    {m.label}
+                    {i === 5 && <span className="ml-1.5 text-[11px] font-bold text-brand-500">이번 달</span>}
+                  </td>
+                  <td className="px-5 py-3 text-right text-ink-soft sm:px-6">{m.count}건</td>
+                  <td className={`px-5 py-3 text-right sm:px-6 ${i === 5 ? "font-bold text-ink-deep" : "font-semibold text-ink-soft"}`}>
+                    {won(m.sum)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </Panel>
+      </div>
 
       <div className="rise rise-3 mt-8">
         <Panel

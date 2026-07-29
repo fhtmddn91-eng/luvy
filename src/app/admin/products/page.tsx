@@ -2,7 +2,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
-import { categories } from "@/lib/mock/categories";
+import { getAllCategories } from "@/lib/categories";
 import { setProductStatus, deleteProduct } from "@/lib/actions/admin-products";
 import { ProductThumb } from "@/components/product/ProductThumb";
 import { stockLabel, stockState } from "@/lib/stock";
@@ -16,7 +16,7 @@ import {
  btnPrimary,
 } from "@/components/ui/Panel";
 
-const categoryName = (slug: string) => categories.find((c) => c.slug === slug)?.name ?? slug;
+
 
 export default async function AdminProductsPage({
  searchParams,
@@ -26,6 +26,9 @@ export default async function AdminProductsPage({
  await requireAdmin();
  const { q } = await searchParams;
  const query = (q ?? "").trim();
+
+ const cats = await getAllCategories();
+ const categoryName = (slug: string) => cats.find((c) => c.slug === slug)?.name ?? slug;
 
  const products = await db.product.findMany({
  where: query
