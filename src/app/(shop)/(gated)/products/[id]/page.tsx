@@ -52,6 +52,27 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         </div>
       </div>
 
+      {/* 상세페이지 — 업로드된 이미지·GIF 를 순서대로 이어 붙인다 */}
+      {product.assets.length > 0 && (
+        <section className="mx-auto mt-12 max-w-[860px]">
+          <h2 className="mb-4 border-b border-line pb-3 text-[16px] font-bold text-ink">
+            상품 상세
+          </h2>
+          <div>
+            {product.assets.map((a, i) => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={a.id}
+                src={a.url}
+                alt={`${product.name} 상세 ${i + 1}`}
+                loading={i < 2 ? "eager" : "lazy"}
+                className="block w-full"
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
       <AssetDownloads
         assets={product.assets.map((a) => ({
           id: a.id,

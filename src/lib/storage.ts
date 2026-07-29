@@ -25,7 +25,7 @@ export type UploadResult = { ok: true; url: string } | { ok: false; error: strin
 /** 이미지 파일을 저장하고 공개 URL 경로(/uploads/..)를 반환. */
 export async function saveImageUpload(file: File): Promise<UploadResult> {
   const ext = EXT_BY_MIME[file.type];
-  if (!ext) return { ok: false, error: "JPG/PNG/WebP/AVIF 이미지만 업로드할 수 있습니다." };
+  if (!ext) return { ok: false, error: "JPG/PNG/WebP/AVIF/GIF 이미지만 업로드할 수 있습니다." };
   if (file.size <= 0) return { ok: false, error: "빈 파일입니다." };
   if (file.size > MAX_BYTES) return { ok: false, error: "이미지는 5MB 이하만 가능합니다." };
 
