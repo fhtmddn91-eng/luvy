@@ -7,6 +7,7 @@ import { requireApprovedUser, requireUser } from "@/lib/auth";
 import { buildOrderDraft } from "@/lib/payments";
 import { reserveStock, InsufficientStockError, linesFromOrderItems } from "@/lib/stockOps";
 import { cancelOrderCore, RefundFailedError } from "@/lib/orderCancel";
+import { audit, shortId } from "@/lib/audit";
 import {
   isMemberCancelable,
   isCancelReason,
@@ -167,6 +168,13 @@ export async function cancelMyOrder(
     if (e instanceof RefundFailedError) return { error: e.message };
     throw e;
   }
+
+  await audit({
+    action: "ORDER_CANCEL_MEMBER",
+    target: "order",
+    targetId: orderId,
+    summary: `주문 ${shortId(orderId)} 회원 취소 — ${formatCancelReason(reason, detail)}`,
+  });
 
   revalidatePath("/orders");
   revalidatePath(`/orders/${orderId}`);

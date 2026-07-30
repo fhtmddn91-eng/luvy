@@ -29,7 +29,10 @@ const groups: { heading: string; items: { href: string; label: string; exact?: b
   },
   {
     heading: "System",
-    items: [{ href: "/admin/settings", label: "설정" }],
+    items: [
+      { href: "/admin/audit", label: "감사 로그" },
+      { href: "/admin/settings", label: "설정" },
+    ],
   },
 ];
 

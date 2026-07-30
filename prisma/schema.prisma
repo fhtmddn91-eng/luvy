@@ -229,3 +229,35 @@ model Inquiry {
 
   @@index([userId])
 }
+
+/**
+ * 감사 로그 — "누가 언제 무엇을 했는지".
+ *
+ * 승인·취소·환불·비밀번호 발급처럼 되돌리기 어렵거나 돈이 걸린 동작은
+ * 기록이 없으면 사고가 났을 때 원인도 책임도 확인할 수 없다.
+ * 로그는 앱에서 수정·삭제하지 않는다(append-only).
+ */
+model AuditLog {
+  id        String   @id @default(cuid())
+  /** 행위자. 시스템(웹훅 등)이면 null */
+  actorId   String?
+  /** 조회 화면에 그대로 보여줄 이름 — 회원이 탈퇴해도 기록이 남아야 한다 */
+  actorName String   @default("")
+  actorRole String   @default("")
+  /** 무엇을 했는지 (src/lib/audit.ts AUDIT_ACTIONS) */
+  action    String
+  /** 대상 종류: order | member | product | setting ... */
+  target    String   @default("")
+  /** 대상 식별자 */
+  targetId  String   @default("")
+  /** 사람이 읽는 한 줄 요약 */
+  summary   String   @default("")
+  /** 변경 전/후 등 부가 정보 (JSON 문자열) */
+  meta      String   @default("")
+  ip        String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([action])
+  @@index([target, targetId])
+}

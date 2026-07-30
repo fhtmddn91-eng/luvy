@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
+import { audit } from "@/lib/audit";
 import { runImport } from "@/lib/import/pipeline";
 import type { ImportPayload } from "@/lib/import/types";
 
@@ -48,6 +49,22 @@ export async function importFrom1688(
   }
 
   const result = await runImport(payload);
+
+  await audit({
+    action: "PRODUCT_IMPORT",
+    target: "product",
+    targetId: result.productId ?? "",
+    summary: result.ok
+      ? `1688 수집 성공 — ${result.detail?.koTitle ?? "제목 없음"}`
+      : `1688 수집 실패 — ${result.message}`,
+    meta: result.ok
+      ? {
+          images: (result.detail?.mainCount ?? 0) + (result.detail?.detailCount ?? 0),
+          gif: result.detail?.gifCount ?? 0,
+          translated: result.detail?.translated ?? false,
+        }
+      : undefined,
+  });
 
   revalidatePath("/admin/import");
   revalidatePath("/admin/products");

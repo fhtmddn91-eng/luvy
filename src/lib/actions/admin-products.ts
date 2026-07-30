@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
+import { audit } from "@/lib/audit";
 import { saveImageUpload, deleteImageUpload } from "@/lib/storage";
 
 export type ProductFormState = { error?: string };
@@ -66,8 +67,15 @@ export async function createProduct(_prev: ProductFormState, formData: FormData)
   const image = await handleImage(formData);
   if ("error" in image) return { error: image.error };
 
-  await db.product.create({
+  const created = await db.product.create({
     data: { ...fields, image: image.url ?? "", priceTiers: { create: tiers } },
+  });
+  await audit({
+    action: "PRODUCT_CREATE",
+    target: "product",
+    targetId: created.id,
+    summary: `${created.name} 등록 (${created.status === "ACTIVE" ? "판매중" : "숨김"})`,
+    meta: { tiers: tiers.length },
   });
   revalidatePath("/admin/products");
   revalidatePath("/");
@@ -97,6 +105,13 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
       data: { ...fields, ...(image.url ? { image: image.url } : {}), priceTiers: { create: tiers } },
     }),
   ]);
+  await audit({
+    action: "PRODUCT_UPDATE",
+    target: "product",
+    targetId: id,
+    summary: `${fields.name} 수정`,
+    meta: { status: fields.status, trackStock: fields.trackStock, stock: fields.stock, tiers: tiers.length },
+  });
   revalidatePath("/admin/products");
   revalidatePath(`/products/${id}`);
   revalidatePath("/");
@@ -105,7 +120,14 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
 
 export async function setProductStatus(id: string, status: "ACTIVE" | "HIDDEN"): Promise<void> {
   await requireAdmin();
+  const p = await db.product.findUnique({ where: { id }, select: { name: true } });
   await db.product.update({ where: { id }, data: { status } });
+  await audit({
+    action: "PRODUCT_STATUS",
+    target: "product",
+    targetId: id,
+    summary: `${p?.name ?? id} → ${status === "ACTIVE" ? "판매중" : "숨김"}`,
+  });
   revalidatePath("/admin/products");
   revalidatePath(`/products/${id}`);
 }
@@ -113,9 +135,15 @@ export async function setProductStatus(id: string, status: "ACTIVE" | "HIDDEN"):
 export async function deleteProduct(id: string): Promise<void> {
   await requireAdmin();
   // 업로드 이미지를 함께 정리하지 않으면 디스크에 고아 파일이 계속 쌓인다.
-  const product = await db.product.findUnique({ where: { id }, select: { image: true } });
+  const product = await db.product.findUnique({ where: { id }, select: { image: true, name: true } });
   await db.product.delete({ where: { id } });
   if (product?.image) await deleteImageUpload(product.image);
+  await audit({
+    action: "PRODUCT_DELETE",
+    target: "product",
+    targetId: id,
+    summary: `${product?.name ?? id} 삭제`,
+  });
   revalidatePath("/admin/products");
   revalidatePath("/");
 }

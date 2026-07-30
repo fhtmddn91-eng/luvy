@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { saveImageUpload, deleteImageUpload } from "@/lib/storage";
+import { audit } from "@/lib/audit";
 
 export type AssetFormState = { error?: string; ok?: number };
 
@@ -60,6 +61,12 @@ export async function addProductAssets(
     saved++;
   }
 
+  await audit({
+    action: "ASSET_ADD",
+    target: "product",
+    targetId: productId,
+    summary: `상세 이미지 ${saved}장 추가`,
+  });
   revalidateProduct(productId);
   return { ok: saved };
 }
@@ -71,6 +78,13 @@ export async function deleteProductAsset(assetId: string): Promise<void> {
   await db.productAsset.delete({ where: { id: assetId } });
   // /uploads/ 파일도 정리 (1688 수집분 등 다른 경로면 deleteImageUpload 가 무시)
   await deleteImageUpload(asset.url);
+  await audit({
+    action: "ASSET_DELETE",
+    target: "product",
+    targetId: asset.productId,
+    summary: `상세 이미지 1장 삭제 (${asset.kind})`,
+    meta: { url: asset.url },
+  });
   revalidateProduct(asset.productId);
 }
 

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin, createSession } from "@/lib/auth";
 import { saveShippingPolicy } from "@/lib/settings";
+import { audit } from "@/lib/audit";
 
 export type SettingsFormState = { error?: string; ok?: boolean };
 
@@ -25,6 +26,13 @@ export async function updateShippingSettings(
   }
 
   await saveShippingPolicy({ fee, freeThreshold });
+  await audit({
+    action: "SETTING_SHIPPING",
+    target: "setting",
+    targetId: "shipping",
+    summary: `배송비 ${fee.toLocaleString("ko-KR")}원 / 무료 기준 ${freeThreshold.toLocaleString("ko-KR")}원`,
+    meta: { fee, freeThreshold },
+  });
   // 장바구니·결제 화면이 정책을 쓰므로 전체 갱신
   revalidatePath("/", "layout");
   return { ok: true };
@@ -55,6 +63,13 @@ export async function changeAdminPassword(
     where: { id: admin.id },
     // sessionVersion 을 올려 다른 기기에 남아 있는 세션을 모두 끊는다
     data: { passwordHash: await bcrypt.hash(next, 10), sessionVersion: { increment: 1 } },
+  });
+
+  await audit({
+    action: "ADMIN_PASSWORD",
+    target: "admin",
+    targetId: admin.id,
+    summary: "관리자 비밀번호 변경 — 다른 기기 세션 전부 종료",
   });
 
   // 방금 바꾼 본인은 로그아웃되지 않도록 새 버전으로 세션을 재발급한다

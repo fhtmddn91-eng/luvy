@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { createSession, destroySession, hashPassword, verifyPassword } from "@/lib/auth";
 import { isValidBizNumber, isValidEmail, normalizeBizNumber, safeNextPath } from "@/lib/validation";
 import { saveBizCertUpload } from "@/lib/storage";
+import { audit } from "@/lib/audit";
 import {
   hit,
   reset,
@@ -97,6 +98,14 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
   const byIp = hit(ipKey, LOGIN_PER_IP);
   if (!byAccount.ok || !byIp.ok) {
     const sec = Math.max(byAccount.retryAfterSec, byIp.retryAfterSec);
+    // 공격 징후는 남긴다. 세션이 없으므로 행위자를 직접 지정한다.
+    await audit({
+      action: "LOGIN_BLOCKED",
+      target: "auth",
+      targetId: email.toLowerCase().slice(0, 120),
+      summary: `로그인 시도 초과로 차단 (${!byAccount.ok ? "계정" : "IP"} 한도)`,
+      actor: { id: null, name: email.slice(0, 120) || "(빈 아이디)", role: "ANON" },
+    });
     return {
       error: `로그인 시도가 너무 많습니다. ${retryMessage(sec)} 비밀번호를 잊으셨다면 고객센터로 문의해주세요.`,
     };

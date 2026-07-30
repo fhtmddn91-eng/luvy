@@ -5,12 +5,27 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { generateTempPassword } from "@/lib/tempPassword";
+import { audit } from "@/lib/audit";
 
 export async function setMemberStatus(id: string, status: "APPROVED" | "PENDING" | "REJECTED"): Promise<void> {
   const admin = await requireAdmin();
   // 관리자 자신의 상태는 변경하지 않음
   if (id === admin.id) return;
+  const target = await db.user.findUnique({
+    where: { id },
+    select: { companyName: true, status: true },
+  });
   await db.user.update({ where: { id }, data: { status } });
+
+  await audit({
+    action:
+      status === "APPROVED" ? "MEMBER_APPROVE" : status === "REJECTED" ? "MEMBER_REJECT" : "MEMBER_PENDING",
+    target: "member",
+    targetId: id,
+    summary: `${target?.companyName ?? id} → ${status}`,
+    meta: { from: target?.status, to: status },
+  });
+
   revalidatePath("/admin/members");
   revalidatePath(`/admin/members/${id}`);
 }
@@ -36,7 +51,7 @@ export async function issueTempPassword(
 
   const target = await db.user.findUnique({
     where: { id: memberId },
-    select: { id: true, role: true },
+    select: { id: true, role: true, companyName: true },
   });
   if (!target) return { error: "회원을 찾을 수 없습니다." };
   // 관리자 계정 비밀번호는 이 버튼으로 못 바꾼다 (관리자 탈취 시 2차 피해 방지)
@@ -49,6 +64,14 @@ export async function issueTempPassword(
     where: { id: memberId },
     // 계정을 탈취당해 발급 요청이 들어온 경우를 대비해 기존 세션을 모두 끊는다
     data: { passwordHash: await bcrypt.hash(password, 10), sessionVersion: { increment: 1 } },
+  });
+
+  // 발급된 비밀번호 자체는 절대 기록하지 않는다 (기록에 남으면 그게 유출 경로가 된다)
+  await audit({
+    action: "MEMBER_TEMP_PASSWORD",
+    target: "member",
+    targetId: memberId,
+    summary: `${target.companyName} 임시 비밀번호 발급 — 기존 세션 전부 종료`,
   });
 
   return { password };

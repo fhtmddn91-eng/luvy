@@ -4,8 +4,10 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { FULFILLMENT_STATUSES } from "@/lib/orderStatus";
-import { cancelOrderCore } from "@/lib/orderCancel";
+import { cancelOrderCore, RefundFailedError } from "@/lib/orderCancel";
+import { audit, shortId } from "@/lib/audit";
 import {
+  courierName,
   isCourierCode,
   isValidTrackingNo,
   normalizeTrackingNo,
@@ -35,7 +37,17 @@ export async function setOrderStatus(id: string, formData: FormData): Promise<vo
   const status = String(formData.get("status") ?? "").trim();
   // 허용된 배송 상태만 반영 (임의 문자열 주입 방지)
   if (!(FULFILLMENT_STATUSES as readonly string[]).includes(status)) return;
+  const before = await db.order.findUnique({ where: { id }, select: { status: true } });
   await db.order.update({ where: { id }, data: { status } });
+
+  await audit({
+    action: "ORDER_STATUS",
+    target: "order",
+    targetId: id,
+    summary: `주문 ${shortId(id)} ${before?.status} → ${status}`,
+    meta: { from: before?.status, to: status },
+  });
+
   revalidateOrder(id);
 }
 
@@ -64,6 +76,12 @@ export async function setShipping(
       where: { id },
       data: { courier: "", trackingNo: "", shippedAt: null },
     });
+    await audit({
+      action: "ORDER_SHIPPING_CLEAR",
+      target: "order",
+      targetId: id,
+      summary: `주문 ${shortId(id)} 송장 삭제`,
+    });
     revalidateOrder(id);
     return { ok: true, values };
   }
@@ -90,6 +108,14 @@ export async function setShipping(
     },
   });
 
+  await audit({
+    action: "ORDER_SHIPPING",
+    target: "order",
+    targetId: id,
+    summary: `주문 ${shortId(id)} 송장 ${courierName(courier)} ${trackingNo}${advance ? " (배송중 전환)" : ""}`,
+    meta: { courier, trackingNo, advanced: advance },
+  });
+
   revalidateOrder(id);
   return { ok: true, values: { courier, trackingNo } };
 }
@@ -99,6 +125,24 @@ export async function cancelOrderPayment(orderId: string): Promise<void> {
   await requireAdmin();
   try {
     await cancelOrderCore(orderId, { by: "ADMIN", reason: "관리자 취소" });
+    await audit({
+      action: "ORDER_CANCEL_ADMIN",
+      target: "order",
+      targetId: orderId,
+      summary: `주문 ${shortId(orderId)} 취소 — 재고 복원`,
+    });
+  } catch (e) {
+    // 환불 실패는 돈이 걸린 사고라 반드시 남긴다
+    if (e instanceof RefundFailedError) {
+      await audit({
+        action: "ORDER_REFUND_FAILED",
+        target: "order",
+        targetId: orderId,
+        summary: `주문 ${shortId(orderId)} 환불 실패 — 주문 상태 유지`,
+        meta: { message: e.message },
+      });
+    }
+    throw e;
   } finally {
     // 환불 실패로 Payment 가 CANCEL_FAILED 가 된 경우에도 화면에 반영되어야 한다.
     revalidateOrder(orderId);
