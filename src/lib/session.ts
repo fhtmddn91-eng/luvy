@@ -16,7 +16,11 @@ const secret = new TextEncoder().encode(
   rawSecret ?? "dev-only-luvy-secret-change-in-prod-0123456789abcdef",
 );
 
-export type SessionPayload = { userId: string };
+/**
+ * sv = sessionVersion. 비밀번호가 바뀌면 DB 값이 올라가고, 이 값이 다른 토큰은
+ * 검증 단계에서 버려진다 → 옛 비밀번호로 로그인해 둔 기기가 즉시 로그아웃된다.
+ */
+export type SessionPayload = { userId: string; sv: number };
 
 export async function hashPassword(pw: string): Promise<string> {
   return bcrypt.hash(pw, 10);
@@ -27,7 +31,7 @@ export async function verifyPassword(pw: string, hash: string): Promise<boolean>
 }
 
 export async function signSession(payload: SessionPayload): Promise<string> {
-  return new SignJWT(payload)
+  return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("7d")
@@ -38,7 +42,9 @@ export async function verifySession(token: string): Promise<SessionPayload | nul
   try {
     const { payload } = await jwtVerify(token, secret);
     if (typeof payload.userId !== "string") return null;
-    return { userId: payload.userId };
+    // sv 가 없는 토큰은 이 기능 도입 전에 발급된 것 → 0 으로 취급
+    const sv = typeof payload.sv === "number" ? payload.sv : 0;
+    return { userId: payload.userId, sv };
   } catch {
     return null;
   }

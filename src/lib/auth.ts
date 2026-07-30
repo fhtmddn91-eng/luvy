@@ -19,7 +19,8 @@ export {
 export type SessionUser = { id: string; email: string; companyName: string; role: string; status: string };
 
 export async function createSession(userId: string): Promise<void> {
-  const token = await signSession({ userId });
+  const u = await db.user.findUnique({ where: { id: userId }, select: { sessionVersion: true } });
+  const token = await signSession({ userId, sv: u?.sessionVersion ?? 0 });
   const store = await cookies();
   store.set(SESSION_COOKIE, token, {
     httpOnly: true,
@@ -43,9 +44,13 @@ export async function getSession(): Promise<SessionUser | null> {
   if (!payload) return null;
   const user = await db.user.findUnique({
     where: { id: payload.userId },
-    select: { id: true, email: true, companyName: true, role: true, status: true },
+    select: { id: true, email: true, companyName: true, role: true, status: true, sessionVersion: true },
   });
-  return user;
+  if (!user) return null;
+  // 비밀번호가 바뀐 뒤 발급된 토큰이 아니면 무효 (기존 로그인 세션 강제 종료)
+  if (user.sessionVersion !== payload.sv) return null;
+  const { sessionVersion: _sv, ...safe } = user;
+  return safe;
 }
 
 export async function requireUser(): Promise<SessionUser> {

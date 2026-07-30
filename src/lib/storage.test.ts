@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
-import { saveImageBuffer } from "./storage";
+import { saveImageBuffer, saveImageUpload, saveBizCertUpload, deleteImageUpload } from "./storage";
 
 /**
  * 1688 상세이미지에는 움직이는 GIF가 섞여 있다.
@@ -57,5 +57,65 @@ describe("saveImageBuffer", () => {
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toContain("너무 큽니다");
+  });
+});
+
+/* ── 위장 파일 차단 ─────────────────────────────────────
+ * 업로드 검증은 브라우저가 보내는 file.type 을 믿지 않고 내용을 확인해야 한다.
+ * 이 테스트가 깨지면 위장 파일이 서버에 저장된다는 뜻이다.
+ */
+const ascii = (s: string) => new Uint8Array([...s].map((c) => c.charCodeAt(0)));
+const REAL_PNG = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...new Array(30).fill(0),
+]);
+const REAL_PDF = new Uint8Array([...ascii("%PDF-1.7"), ...new Array(30).fill(0)]);
+// Buffer 로 감싸 BlobPart 타입 요구를 만족시킨다
+const asFile = (name: string, type: string, bytes: Uint8Array) =>
+  new File([Buffer.from(bytes)], name, { type });
+
+describe("saveImageUpload — 위장 파일 차단", () => {
+  it("HTML 을 image/png 로 선언해도 거부한다", async () => {
+    const r = await saveImageUpload(
+      asFile("evil.png", "image/png", ascii("<html><script>alert(1)</script></html>")),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("SVG(스크립트 삽입 가능)를 이미지로 위장해도 거부한다", async () => {
+    const r = await saveImageUpload(asFile("x.png", "image/png", ascii("<svg onload=alert(1)>")));
+    expect(r.ok).toBe(false);
+  });
+
+  it("PHP 웹셸을 이미지로 위장해도 거부한다", async () => {
+    const r = await saveImageUpload(
+      asFile("shell.png", "image/png", ascii("<?php system($_GET[0]); ?>")),
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("내용은 PDF 인데 image/png 로 선언하면 거부한다", async () => {
+    const r = await saveImageUpload(asFile("a.png", "image/png", REAL_PDF));
+    expect(r.ok).toBe(false);
+  });
+
+  it("허용 목록에 없는 MIME(SVG)은 애초에 거부한다", async () => {
+    const r = await saveImageUpload(asFile("a.svg", "image/svg+xml", ascii("<svg/>")));
+    expect(r.ok).toBe(false);
+  });
+
+  it("정상 PNG 는 저장된다", async () => {
+    const r = await saveImageUpload(asFile("real.png", "image/png", REAL_PNG));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.url).toMatch(/^\/uploads\/.+\.png$/);
+      await deleteImageUpload(r.url);
+    }
+  });
+});
+
+describe("saveBizCertUpload — 사업자등록증", () => {
+  it("가짜 PDF 는 거부한다", async () => {
+    const r = await saveBizCertUpload(asFile("cert.pdf", "application/pdf", ascii("not a pdf")));
+    expect(r.ok).toBe(false);
   });
 });

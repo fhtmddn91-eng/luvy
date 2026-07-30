@@ -1,13 +1,33 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { db } from "@/lib/db";
 import { createSession, destroySession, hashPassword, verifyPassword } from "@/lib/auth";
 import { isValidBizNumber, isValidEmail, normalizeBizNumber, safeNextPath } from "@/lib/validation";
 import { saveBizCertUpload } from "@/lib/storage";
+import {
+  hit,
+  reset,
+  retryMessage,
+  LOGIN_PER_ACCOUNT,
+  LOGIN_PER_IP,
+  SIGNUP_PER_IP,
+} from "@/lib/rateLimit";
 
 export type AuthState = { error?: string };
+
+/**
+ * 요청 IP. 프록시(Railway/Cloudflare) 뒤에 있으므로 x-forwarded-for 를 본다.
+ * 헤더는 위조 가능하지만, 위조하면 자기 카운터만 흩뜨리므로 계정 단위 제한과
+ * 함께 쓰면 실효가 있다.
+ */
+async function clientIp(): Promise<string> {
+  const h = await headers();
+  const fwd = h.get("x-forwarded-for");
+  if (fwd) return fwd.split(",")[0].trim();
+  return h.get("x-real-ip") ?? "unknown";
+}
 
 export async function signupAction(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const email = String(formData.get("email") ?? "").trim();
@@ -17,6 +37,12 @@ export async function signupAction(_prev: AuthState, formData: FormData): Promis
   const businessNumber = String(formData.get("businessNumber") ?? "");
   const ownerName = String(formData.get("ownerName") ?? "").trim();
   const phone = String(formData.get("phone") ?? "").trim();
+
+  const ip = await clientIp();
+  const gate = hit(`signup:${ip}`, SIGNUP_PER_IP);
+  if (!gate.ok) {
+    return { error: `가입 시도가 너무 많습니다. ${retryMessage(gate.retryAfterSec)}` };
+  }
 
   if (!isValidEmail(email)) return { error: "올바른 이메일을 입력해주세요." };
   if (password.length < 8) return { error: "비밀번호는 8자 이상이어야 합니다." };
@@ -59,11 +85,32 @@ export async function loginAction(_prev: AuthState, formData: FormData): Promise
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
   const next = String(formData.get("next") ?? "/");
+  const ip = await clientIp();
+
+  // 계정 단위 + IP 단위 두 겹으로 막는다.
+  // 계정만 막으면 여러 계정을 훑는 공격이 통하고, IP만 막으면 분산 공격에
+  // 특정 계정이 계속 노려진다.
+  const accountKey = `login:acct:${email.toLowerCase()}`;
+  const ipKey = `login:ip:${ip}`;
+
+  const byAccount = hit(accountKey, LOGIN_PER_ACCOUNT);
+  const byIp = hit(ipKey, LOGIN_PER_IP);
+  if (!byAccount.ok || !byIp.ok) {
+    const sec = Math.max(byAccount.retryAfterSec, byIp.retryAfterSec);
+    return {
+      error: `로그인 시도가 너무 많습니다. ${retryMessage(sec)} 비밀번호를 잊으셨다면 고객센터로 문의해주세요.`,
+    };
+  }
 
   const user = await db.user.findUnique({ where: { email } });
   if (!user || !(await verifyPassword(password, user.passwordHash))) {
+    // 계정 존재 여부를 노출하지 않도록 메시지는 하나로 유지
     return { error: "이메일 또는 비밀번호가 올바르지 않습니다." };
   }
+
+  // 정상 로그인했으면 실패 카운터를 비워 다음 로그인에 불이익이 없게 한다
+  reset(accountKey);
+  reset(ipKey);
 
   await createSession(user.id);
 

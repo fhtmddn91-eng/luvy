@@ -2,6 +2,7 @@ import "server-only";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { sniffImage, matchesMime } from "@/lib/imageSniff";
 
 /**
  * 업로드 저장 드라이버. dev/데모는 public/uploads 로컬 저장.
@@ -29,9 +30,14 @@ export async function saveImageUpload(file: File): Promise<UploadResult> {
   if (file.size <= 0) return { ok: false, error: "빈 파일입니다." };
   if (file.size > MAX_BYTES) return { ok: false, error: "이미지는 5MB 이하만 가능합니다." };
 
+  const buffer = Buffer.from(await file.arrayBuffer());
+  // 내용으로 한 번 더 확인 — file.type 은 브라우저가 보내는 값이라 위조 가능하다
+  if (!matchesMime(sniffImage(buffer), file.type)) {
+    return { ok: false, error: "이미지 파일이 아니거나 형식이 확장자와 다릅니다." };
+  }
+
   const name = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${ext}`;
   await mkdir(UPLOAD_DIR, { recursive: true });
-  const buffer = Buffer.from(await file.arrayBuffer());
   await writeFile(path.join(UPLOAD_DIR, name), buffer);
   return { ok: true, url: `/uploads/${name}` };
 }
@@ -50,6 +56,10 @@ export async function saveImageBuffer(
   if (data.byteLength <= 0) return { ok: false, error: "빈 파일입니다." };
   if (data.byteLength > maxBytes) {
     return { ok: false, error: `이미지가 너무 큽니다 (${Math.round(data.byteLength / 1024)}KB).` };
+  }
+
+  if (!matchesMime(sniffImage(data), mime)) {
+    return { ok: false, error: "내려받은 파일이 이미지가 아닙니다." };
   }
 
   const name = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${ext}`;
@@ -93,9 +103,14 @@ export async function saveBizCertUpload(file: File): Promise<BizCertResult> {
   if (file.size <= 0) return { ok: false, error: "빈 파일입니다." };
   if (file.size > BIZCERT_MAX_BYTES) return { ok: false, error: "사업자등록증은 10MB 이하만 가능합니다." };
 
+  const buffer = Buffer.from(await file.arrayBuffer());
+  if (!matchesMime(sniffImage(buffer), file.type)) {
+    return { ok: false, error: "이미지 또는 PDF 파일이 아닙니다. 원본 파일로 다시 첨부해주세요." };
+  }
+
   const name = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}.${ext}`;
   await mkdir(BIZCERT_DIR, { recursive: true });
-  await writeFile(path.join(BIZCERT_DIR, name), Buffer.from(await file.arrayBuffer()));
+  await writeFile(path.join(BIZCERT_DIR, name), buffer);
   return { ok: true, name };
 }
 

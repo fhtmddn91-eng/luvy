@@ -3,7 +3,7 @@
 import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, createSession } from "@/lib/auth";
 import { saveShippingPolicy } from "@/lib/settings";
 
 export type SettingsFormState = { error?: string; ok?: boolean };
@@ -53,7 +53,11 @@ export async function changeAdminPassword(
 
   await db.user.update({
     where: { id: admin.id },
-    data: { passwordHash: await bcrypt.hash(next, 10) },
+    // sessionVersion 을 올려 다른 기기에 남아 있는 세션을 모두 끊는다
+    data: { passwordHash: await bcrypt.hash(next, 10), sessionVersion: { increment: 1 } },
   });
+
+  // 방금 바꾼 본인은 로그아웃되지 않도록 새 버전으로 세션을 재발급한다
+  await createSession(admin.id);
   return { ok: true };
 }

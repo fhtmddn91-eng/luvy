@@ -47,7 +47,8 @@ export async function issueTempPassword(
   const password = generateTempPassword();
   await db.user.update({
     where: { id: memberId },
-    data: { passwordHash: await bcrypt.hash(password, 10) },
+    // 계정을 탈취당해 발급 요청이 들어온 경우를 대비해 기존 세션을 모두 끊는다
+    data: { passwordHash: await bcrypt.hash(password, 10), sessionVersion: { increment: 1 } },
   });
 
   return { password };

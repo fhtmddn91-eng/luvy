@@ -15,6 +15,11 @@ model User {
   businessNumber String
   /** 사업자등록증 첨부 파일명 (private-uploads/bizcert/ 아래, 관리자만 열람) */
   bizCertFile    String     @default("")
+  /**
+   * 세션 무효화 카운터. 비밀번호가 바뀌면 +1 하고, 발급된 토큰에 이 값을 넣어
+   * 불일치하는(= 예전 비밀번호로 로그인한) 세션을 즉시 끊는다.
+   */
+  sessionVersion Int        @default(0)
   ownerName      String
   phone          String
   status         String     @default("APPROVED")
