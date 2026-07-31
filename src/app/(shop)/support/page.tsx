@@ -1,4 +1,5 @@
-import { CONTACT_POINT } from "@/lib/company";
+import { contactPoint } from "@/lib/company";
+import { getCompany } from "@/lib/companyInfo";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { Icon } from "@/components/ui/Icon";
@@ -79,7 +80,7 @@ export default async function SupportPage() {
         <aside className="rounded-2xl border border-line bg-cream p-5 sm:p-6">
           <h2 className="text-[16px] font-bold text-ink">고객센터 운영 안내</h2>
           <p className="mt-3 break-all text-[20px] font-extrabold tracking-tight text-brand-600 sm:text-[24px]">
-            {CONTACT_POINT}
+            {contactPoint(await getCompany())}
           </p>
           <dl className="mt-3 space-y-1.5 text-[13px] text-ink-soft">
             <div className="flex gap-2">

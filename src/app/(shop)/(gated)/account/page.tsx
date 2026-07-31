@@ -1,4 +1,5 @@
-import { CONTACT_POINT } from "@/lib/company";
+import { contactPoint } from "@/lib/company";
+import { getCompany } from "@/lib/companyInfo";
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -26,6 +27,7 @@ const shortcuts = [
 
 export default async function AccountPage() {
   const session = await requireUser();
+  const company = await getCompany();
 
   const [user, orders, inProgress, spent, openInquiries] = await Promise.all([
     db.user.findUnique({
@@ -221,7 +223,7 @@ export default async function AccountPage() {
               ))}
             </dl>
             <p className="mt-5 border-t border-hairline-soft pt-4 text-[12px] text-muted">
-              계정 정보 변경이 필요하시면 고객센터 {CONTACT_POINT} 또는 1:1 문의로 요청해주세요.
+              계정 정보 변경이 필요하시면 고객센터 {contactPoint(company)} 또는 1:1 문의로 요청해주세요.
             </p>
           </Panel>
         </div>

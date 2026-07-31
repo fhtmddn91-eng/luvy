@@ -1,15 +1,29 @@
 import { requireAdmin } from "@/lib/auth";
 import { getShippingPolicy, getLogoUrl } from "@/lib/settings";
-import { ShippingSettingsForm, AdminPasswordForm, LogoForm } from "@/components/admin/SettingsForms";
+import { getCompany } from "@/lib/companyInfo";
+import {
+  ShippingSettingsForm,
+  AdminPasswordForm,
+  LogoForm,
+  CompanyInfoForm,
+} from "@/components/admin/SettingsForms";
 import { PageHeader, Panel } from "@/components/ui/Panel";
 
 export default async function AdminSettingsPage() {
   await requireAdmin();
-  const [policy, logo] = await Promise.all([getShippingPolicy(), getLogoUrl()]);
+  const [policy, logo, company] = await Promise.all([
+    getShippingPolicy(),
+    getLogoUrl(),
+    getCompany(),
+  ]);
 
   return (
     <div className="max-w-[560px]">
-      <PageHeader eyebrow="System" title="설정" description="로고 · 배송비 정책 · 관리자 계정" />
+      <PageHeader
+        eyebrow="System"
+        title="설정"
+        description="로고 · 사업자 정보 · 배송비 정책 · 관리자 계정"
+      />
 
       <div className="space-y-4">
         <div className="rise rise-1">
@@ -19,6 +33,17 @@ export default async function AdminSettingsPage() {
         </div>
 
         <div className="rise rise-2">
+          <Panel title="사업자 · 고객센터 정보">
+            <p className="mb-4 text-[12.5px] leading-relaxed text-muted">
+              푸터, 이용약관, 개인정보처리방침, 로그인·가입 안내에 그대로 들어갑니다.
+              전자상거래법상 표시 의무 항목이라 상호·대표자·사업자등록번호·이메일은
+              비울 수 없습니다.
+            </p>
+            <CompanyInfoForm current={company} />
+          </Panel>
+        </div>
+
+        <div className="rise rise-3">
           <Panel title="배송비">
             <ShippingSettingsForm fee={policy.fee} freeThreshold={policy.freeThreshold} />
           </Panel>

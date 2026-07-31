@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Logo } from "./Logo";
-import { COMPANY, companyLine, contactLine } from "@/lib/company";
+import { companyLine, contactLine } from "@/lib/company";
+import { getCompany } from "@/lib/companyInfo";
 
 const footerColumns = [
   {
@@ -32,7 +33,8 @@ const footerColumns = [
   },
 ];
 
-export function Footer() {
+export async function Footer() {
+  const company = await getCompany();
   return (
     <footer className="border-t border-line bg-cream">
       <div className="mx-auto max-w-[1280px] px-6 py-14">
@@ -45,7 +47,7 @@ export function Footer() {
               검증된 제품과 파트너십으로 당신의 비즈니스 성공을 함께합니다.
             </p>
             <div className="mt-6 inline-flex items-center gap-2 rounded-pill bg-white px-4 py-2 text-[13px] font-semibold text-brand-600 shadow-[var(--shadow-soft)]">
-              {contactLine()}
+              {contactLine(company)}
             </div>
           </div>
 
@@ -72,8 +74,8 @@ export function Footer() {
 
         <div className="mt-12 flex flex-col gap-3 border-t border-line pt-6 text-[12px] text-muted md:flex-row md:items-center md:justify-between">
           <div className="space-y-1">
-            <p>{companyLine()}</p>
-            <p>{COMPANY.address}</p>
+            <p>{companyLine(company)}</p>
+            <p>{company.address}</p>
           </div>
           <div className="flex items-center gap-4">
             <Link href="/terms" className="hover:text-brand-500">

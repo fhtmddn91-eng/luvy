@@ -15,7 +15,14 @@ export interface HeroBannerData {
   primaryHref: string;
   secondaryLabel: string;
   secondaryHref: string;
+  /** 슬라이드별 배경. 비어 있으면 아래 기본 이미지를 쓴다 */
+  image?: string;
+  imageMobile?: string;
 }
+
+/** 배너를 아직 안 만들었거나 이미지를 안 올렸을 때 쓰는 기본 배경 */
+const DEFAULT_DESKTOP = "/hero/hero-desktop.png";
+const DEFAULT_MOBILE = "/hero/hero-mobile.png";
 
 const FALLBACK: HeroBannerData = {
   id: "fallback",
@@ -55,6 +62,9 @@ export function HeroBanner({
   }, [index, paused, go]);
 
   const banner = banners[index] ?? banners[0];
+  // 모바일 전용 이미지가 없으면 PC 이미지를, 그것도 없으면 기본 배경을 쓴다
+  const desktopSrc = banner.image || DEFAULT_DESKTOP;
+  const mobileSrc = banner.imageMobile || banner.image || DEFAULT_MOBILE;
 
   return (
     <section
@@ -64,9 +74,10 @@ export function HeroBanner({
     >
       {/* Hero visual area — provided background image (desktop / mobile) */}
       <div className="relative">
-        <div className="absolute inset-0">
+        {/* key: 슬라이드가 넘어갈 때 배경도 함께 바뀐다 */}
+        <div key={banner.id} className="absolute inset-0">
           <Image
-            src="/hero/hero-desktop.png"
+            src={desktopSrc}
             alt=""
             fill
             priority
@@ -74,7 +85,7 @@ export function HeroBanner({
             className="hidden object-cover object-right lg:block"
           />
           <Image
-            src="/hero/hero-mobile.png"
+            src={mobileSrc}
             alt=""
             fill
             priority

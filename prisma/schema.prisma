@@ -63,6 +63,7 @@ model Product {
   cartItems    CartItem[]
   assets       ProductAsset[]
   categories   ProductCategory[]
+  homePicks    HomePick[]
 
   @@index([categorySlug])
 }
@@ -235,6 +236,13 @@ model Banner {
   eyebrow        String
   title          String
   subtitle       String
+  /**
+   * 슬라이드 배경 이미지. 비어 있으면 코드에 있는 기본 히어로 이미지를 쓴다 —
+   * 배너를 추가했는데 배경이 비어 보이는 일이 없도록.
+   */
+  image          String   @default("")
+  /** 모바일 전용 배경. 비어 있으면 image 를, 그것도 없으면 기본 이미지를 쓴다. */
+  imageMobile    String   @default("")
   primaryLabel   String
   primaryHref    String
   secondaryLabel String
@@ -306,6 +314,33 @@ model AuditLog {
  * 상단 메뉴(GNB) — 이번주 추천 / 신상품 / 인기상품 / 기획전 / 고객지원.
  * 코드에 박아두면 문구 하나 바꾸는 데도 배포가 필요해 DB 로 옮겼다.
  */
+/**
+ * 메인 상품 탭 (HOT / 이번주 추천 / 입문 추천 / 재구매 높은 …).
+ *
+ * mode 가 자동이면 규칙으로 뽑고, MANUAL 이면 운영자가 고른 picks 를 그대로 쓴다.
+ * 주문이 없는 초기에는 자동 탭이 비므로, 조회 쪽에서 신상품으로 메꾼다.
+ */
+model HomeSection {
+  id        String     @id @default(cuid())
+  label     String
+  /** AUTO_NEW | AUTO_POPULAR | AUTO_REPEAT | MANUAL */
+  mode      String     @default("AUTO_NEW")
+  sortOrder Int        @default(0)
+  active    Boolean    @default(true)
+  picks     HomePick[]
+}
+
+model HomePick {
+  sectionId String
+  productId String
+  sortOrder Int         @default(0)
+  section   HomeSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  product   Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([sectionId, productId])
+  @@index([sectionId])
+}
+
 model NavLink {
   id        String  @id @default(cuid())
   label     String

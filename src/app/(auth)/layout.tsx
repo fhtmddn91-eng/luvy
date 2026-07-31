@@ -1,4 +1,5 @@
 import { companyLine, contactLine } from "@/lib/company";
+import { getCompany } from "@/lib/companyInfo";
 
 /**
  * 인증 페이지 전용 레이아웃.
@@ -6,7 +7,8 @@ import { companyLine, contactLine } from "@/lib/company";
  * 폐쇄몰이므로 비회원에게는 카탈로그 구조(검색창·카테고리·GNB)를 일절 노출하지 않는다.
  * 상점 레이아웃을 상속하지 않도록 (shop) 그룹 바깥에 둔 이유가 이것이다.
  */
-export default function AuthLayout({ children }: { children: React.ReactNode }) {
+export default async function AuthLayout({ children }: { children: React.ReactNode }) {
+  const company = await getCompany();
   return (
     <div className="flex min-h-screen flex-col bg-cream">
       <main className="flex flex-1 items-center justify-center px-4 py-10 sm:py-16">
@@ -14,7 +16,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       </main>
       <footer className="px-4 pb-8 text-center text-[12px] text-muted">
         <p>
-          {companyLine()} · {contactLine()}
+          {companyLine(company)} · {contactLine(company)}
         </p>
         <p className="mt-1.5">
           <a href="/terms" className="hover:text-brand-500">

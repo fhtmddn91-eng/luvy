@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
-import { CONTACT_POINT } from "@/lib/company";
+import { contactPoint } from "@/lib/company";
+import { getCompany } from "@/lib/companyInfo";
 
 const STATUS_LABEL: Record<string, string> = { PENDING: "승인 대기", REJECTED: "반려" };
 
@@ -16,7 +17,7 @@ const STATUS_MESSAGE: Record<string, { title: string; desc: string }> = {
 };
 
 export default async function PendingPage() {
-  const user = await requireUser();
+  const [user, company] = await Promise.all([requireUser(), getCompany()]);
   // 이미 승인된 회원이면 안내가 필요 없음
   if (user.status === "APPROVED") {
     return (
@@ -55,8 +56,8 @@ export default async function PendingPage() {
             신청 순서대로 확인하고 있어 시간이 걸릴 수 있습니다. 아래로 연락 주시면 즉시
             확인해 처리해 드립니다.
           </p>
-          <p className="mt-2 text-[14px] font-bold text-ink">{CONTACT_POINT}</p>
-          <p className="text-[12px] text-muted">평일 10:00 ~ 17:00</p>
+          <p className="mt-2 text-[14px] font-bold text-ink">{contactPoint(company)}</p>
+          <p className="text-[12px] text-muted">{company.hours}</p>
         </div>
       )}
       {/* 승인 전에는 몰이 열리지 않으므로 '메인으로'는 이 화면으로 되돌아올 뿐이다 */}

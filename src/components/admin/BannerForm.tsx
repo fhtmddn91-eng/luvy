@@ -5,7 +5,7 @@ import { useFormStatus } from "react-dom";
 import Link from "next/link";
 import type { BannerFormState } from "@/lib/actions/admin-banners";
 import { btnPrimary } from "@/components/ui/Panel";
-import { fieldCls, labelCls } from "@/components/ui/form";
+import { fieldCls, labelCls, helpCls } from "@/components/ui/form";
 
 export interface BannerFormData {
  id: string;
@@ -18,6 +18,60 @@ export interface BannerFormData {
  secondaryHref: string;
  sortOrder: number;
  active: boolean;
+ image?: string;
+ imageMobile?: string;
+}
+
+/** 배경 이미지 한 칸 — 현재 이미지 미리보기 + 교체 + 기본으로 되돌리기 */
+function ImageField({
+ label,
+ fileName,
+ clearName,
+ current,
+ help,
+}: {
+ label: string;
+ fileName: string;
+ clearName: string;
+ current?: string;
+ help: string;
+}) {
+ return (
+ <div>
+ <label className={labelCls}>{label}</label>
+ <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+ <div className="shrink-0">
+ {current ? (
+ // eslint-disable-next-line @next/next/no-img-element
+ <img
+ src={current}
+ alt="현재 배경"
+ className="h-20 w-32 border border-hairline object-cover"
+ />
+ ) : (
+ <div className="flex h-20 w-32 items-center justify-center border border-dashed border-hairline text-center text-[11px] leading-tight text-muted">
+ 기본 이미지
+ </div>
+ )}
+ </div>
+ <div className="min-w-0 flex-1">
+ <input
+ name={fileName}
+ type="file"
+ accept="image/jpeg,image/png,image/webp,image/avif"
+ className="block w-full text-[13px] text-ink-soft file:mr-3 file:border file:border-hairline file:bg-white file:px-4 file:py-2 file:text-[13px] file:font-semibold file:text-ink-deep hover:file:border-ink-deep"
+ />
+ <p className={helpCls}>{help}</p>
+ {current && (
+ <label className="mt-2 flex items-center gap-2 text-[13px] text-ink-deep">
+ <input name={clearName} type="checkbox" className="h-4 w-4 accent-brand-500" />
+ 기본 이미지로 되돌리기
+ </label>
+ )}
+ </div>
+ </div>
+ </div>
+ );
 }
 
 type Action = (prev: BannerFormState, formData: FormData) => Promise<BannerFormState>;
@@ -71,7 +125,24 @@ export function BannerForm({ action, banner }: { action: Action; banner?: Banner
  <input name="secondaryHref" defaultValue={banner?.secondaryHref ?? "/"} className={inputCls} />
  </div>
  </div>
- <div className="flex items-end gap-6">
+ <div className="space-y-5 border-t border-hairline pt-5">
+ <ImageField
+ label="배경 이미지 (PC)"
+ fileName="imageFile"
+ clearName="imageClear"
+ current={banner?.image}
+ help="JPG · PNG · WebP · AVIF / 5MB 이하. 가로로 넓은 이미지(예: 2000×760)를 권합니다. 글자는 왼쪽에 겹쳐지므로 오른쪽에 그림이 오게 만드세요. 넣지 않으면 기본 배경을 씁니다."
+ />
+ <ImageField
+ label="배경 이미지 (모바일)"
+ fileName="imageMobileFile"
+ clearName="imageMobileClear"
+ current={banner?.imageMobile}
+ help="세로로 긴 이미지(예: 780×900). 넣지 않으면 PC 이미지를, 그것도 없으면 기본 배경을 씁니다."
+ />
+ </div>
+
+ <div className="flex items-end gap-6 border-t border-hairline pt-5">
  <div>
  <label className={labelCls}>정렬 순서</label>
  <input name="sortOrder" type="number" defaultValue={banner?.sortOrder ?? 0} className={`${inputCls} w-28`} />

@@ -1,9 +1,11 @@
 import Link from "next/link";
-import { CONTACT_POINT } from "@/lib/company";
+import { contactPoint } from "@/lib/company";
+import { getCompany } from "@/lib/companyInfo";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { SignupForm } from "./SignupForm";
 
-export default function SignupPage() {
+export default async function SignupPage() {
+  const company = await getCompany();
   return (
     <AuthCard
       title="사업자 회원가입"
@@ -28,7 +30,7 @@ export default function SignupPage() {
         <p className="mt-1 text-[12.5px] leading-relaxed text-ink-soft">
           신청은 순서대로 확인하지만, 연락을 주시면 바로 확인해 처리해 드립니다.
           <br />
-          <span className="font-semibold text-ink">{CONTACT_POINT}</span> · 평일 10:00 ~ 17:00
+          <span className="font-semibold text-ink">{contactPoint(company)}</span> · {company.hours}
         </p>
       </div>
 

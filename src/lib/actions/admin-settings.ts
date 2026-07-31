@@ -7,6 +7,8 @@ import { requireAdmin, createSession } from "@/lib/auth";
 import { saveShippingPolicy, saveLogoUrl, getLogoUrl } from "@/lib/settings";
 import { saveImageUpload, deleteImageUpload } from "@/lib/storage";
 import { audit } from "@/lib/audit";
+import { COMPANY_FIELDS } from "@/lib/company";
+import { saveCompany, resetCompany } from "@/lib/companyInfo";
 
 export type SettingsFormState = { error?: string; ok?: boolean };
 
@@ -114,4 +116,51 @@ export async function updateLogo(
   await audit({ action: "BRANDING_UPDATE", target: "setting", targetId: "logo", summary: "로고 이미지 교체" });
   revalidatePath("/", "layout");
   return { ok: true };
+}
+
+/**
+ * 사업자·고객센터 정보. 전자상거래법상 표시 항목이라 푸터·약관·개인정보처리방침이
+ * 전부 이 값을 본다 — 저장 후 전 페이지를 갱신한다.
+ */
+export async function updateCompanyInfo(
+  _prev: SettingsFormState,
+  formData: FormData,
+): Promise<SettingsFormState> {
+  await requireAdmin();
+
+  const values: Record<string, string> = {};
+  for (const { key } of COMPANY_FIELDS) values[key] = String(formData.get(key) ?? "");
+
+  // 상호·대표자·사업자등록번호는 법정 표시 항목이라 비울 수 없다
+  for (const key of ["name", "ceo", "businessNumber", "email"] as const) {
+    if (values[key].trim() === "") {
+      const label = COMPANY_FIELDS.find((f) => f.key === key)?.label ?? key;
+      return { error: `${label}은(는) 비워둘 수 없습니다.` };
+    }
+  }
+
+  await saveCompany(values);
+  await audit({
+    action: "COMPANY_UPDATE",
+    target: "setting",
+    targetId: "company",
+    summary: `사업자·고객센터 정보 수정 (${values.name})`,
+  });
+  revalidatePath("/", "layout");
+  revalidatePath("/admin/settings");
+  return { ok: true };
+}
+
+/** 저장한 값을 지우고 코드 기본값으로 되돌린다 */
+export async function resetCompanyInfo(): Promise<void> {
+  await requireAdmin();
+  await resetCompany();
+  await audit({
+    action: "COMPANY_UPDATE",
+    target: "setting",
+    targetId: "company",
+    summary: "사업자·고객센터 정보 기본값으로 되돌림",
+  });
+  revalidatePath("/", "layout");
+  revalidatePath("/admin/settings");
 }

@@ -35,6 +35,8 @@ export const AUDIT_ACTIONS = {
   SETTING_SHIPPING: "배송비 정책 변경",
   NAV_UPDATE: "상단 메뉴 변경",
   BRANDING_UPDATE: "로고 변경",
+  HOME_UPDATE: "메인 상품 탭 변경",
+  COMPANY_UPDATE: "사업자·고객센터 정보 변경",
   ADMIN_PASSWORD: "관리자 비밀번호 변경",
 
   // 인증
@@ -73,7 +75,10 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
   {
     key: "system",
     label: "설정·인증",
-    actions: ["SETTING_SHIPPING", "NAV_UPDATE", "BRANDING_UPDATE", "ADMIN_PASSWORD", "LOGIN_BLOCKED"],
+    actions: [
+      "SETTING_SHIPPING", "NAV_UPDATE", "BRANDING_UPDATE", "HOME_UPDATE",
+      "COMPANY_UPDATE", "ADMIN_PASSWORD", "LOGIN_BLOCKED",
+    ],
   },
 ];
 

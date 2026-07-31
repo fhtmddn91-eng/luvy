@@ -6,8 +6,11 @@ import {
   updateShippingSettings,
   changeAdminPassword,
   updateLogo,
+  updateCompanyInfo,
+  resetCompanyInfo,
   type SettingsFormState,
 } from "@/lib/actions/admin-settings";
+import { COMPANY_FIELDS, type CompanyInfo } from "@/lib/company";
 import { fieldCls, labelCls, helpCls, errorCls } from "@/components/ui/form";
 import { btnPrimary } from "@/components/ui/Panel";
 
@@ -180,5 +183,59 @@ export function LogoForm({ current }: { current: string }) {
         </div>
       </form>
     </div>
+  );
+}
+
+/**
+ * 사업자·고객센터 정보.
+ * 이 값들이 푸터·이용약관·개인정보처리방침·가입 안내에 그대로 들어간다.
+ */
+export function CompanyInfoForm({ current }: { current: CompanyInfo }) {
+  const [state, formAction] = useActionState<SettingsFormState, FormData>(
+    updateCompanyInfo,
+    {},
+  );
+
+  return (
+    <form action={formAction} className="space-y-3.5">
+      {COMPANY_FIELDS.map(({ key, label, help }) => (
+        <div key={key}>
+          <label htmlFor={`company-${key}`} className={labelCls}>
+            {label}
+          </label>
+          <input
+            id={`company-${key}`}
+            name={key}
+            defaultValue={current[key]}
+            maxLength={200}
+            autoComplete="off"
+            className={fieldCls}
+          />
+          {help && <p className={helpCls}>{help}</p>}
+        </div>
+      ))}
+
+      {state.error && <p className={errorCls}>{state.error}</p>}
+      {state.ok && !state.error && (
+        <p className="border border-hairline bg-canvas px-4 py-3 text-[13px] font-semibold text-ink-deep">
+          저장되었습니다. 푸터·약관·개인정보처리방침에 바로 반영됩니다.
+        </p>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        <SubmitButton label="사업자 정보 저장" />
+        <button
+          type="button"
+          onClick={() => {
+            if (confirm("저장한 값을 지우고 기본값으로 되돌립니다. 계속할까요?")) {
+              void resetCompanyInfo();
+            }
+          }}
+          className="h-11 border border-hairline bg-white px-5 text-[13px] font-bold text-ink-soft hover:border-ink-deep hover:text-ink-deep"
+        >
+          기본값으로 되돌리기
+        </button>
+      </div>
+    </form>
   );
 }

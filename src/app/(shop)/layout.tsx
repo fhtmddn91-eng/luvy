@@ -6,13 +6,14 @@ import { UtilBar } from "@/components/layout/UtilBar";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { companyLine, contactLine } from "@/lib/company";
+import { getCompany } from "@/lib/companyInfo";
 
 export default async function ShopLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const user = await getSession();
+  const [user, company] = await Promise.all([getSession(), getCompany()]);
 
   /**
    * 폐쇄몰: 검색창·카테고리·GNB가 들어간 정식 헤더는 카탈로그 구조 자체를 노출한다.
@@ -56,7 +57,7 @@ export default async function ShopLayout({
         <main className="flex-1">{children}</main>
         <footer className="px-4 py-8 text-center text-[12px] text-muted">
           <p>
-            {companyLine()} · {contactLine()}
+            {companyLine(company)} · {contactLine(company)}
           </p>
           <p className="mt-1.5">
             <Link href="/terms" className="hover:text-brand-500">

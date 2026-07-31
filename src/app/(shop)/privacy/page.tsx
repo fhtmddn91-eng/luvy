@@ -1,7 +1,9 @@
 
-import { COMPANY, CONTACT_POINT } from "@/lib/company";
+import { contactPoint, type CompanyInfo } from "@/lib/company";
+import { getCompany } from "@/lib/companyInfo";
 
-const sections: { title: string; body: string }[] = [
+// 사업자 정보가 관리자에서 바뀔 수 있으므로 모듈 로드 시점이 아니라 요청마다 만든다
+const buildSections = (c: CompanyInfo): { title: string; body: string }[] => [
   {
     title: "1. 수집하는 개인정보 항목",
     body: "회사는 회원 가입, 주문·배송, 고객 상담을 위해 아래 정보를 수집합니다.\n· 필수: 이메일, 비밀번호, 상호명, 사업자등록번호, 대표자명, 연락처\n· 주문 시: 수령인, 배송지 주소, 연락처, 결제 기록\n· 자동 수집: 접속 로그, 쿠키, 접속 IP",
@@ -24,7 +26,7 @@ const sections: { title: string; body: string }[] = [
   },
   {
     title: "6. 정보주체의 권리",
-    body: `회원은 언제든지 자신의 개인정보를 조회·수정하거나 삭제(탈퇴)를 요청할 수 있습니다. 고객센터(${CONTACT_POINT}) 또는 1:1 문의를 통해 요청하시면 지체 없이 조치합니다.`,
+    body: `회원은 언제든지 자신의 개인정보를 조회·수정하거나 삭제(탈퇴)를 요청할 수 있습니다. 고객센터(${contactPoint(c)}) 또는 1:1 문의를 통해 요청하시면 지체 없이 조치합니다.`,
   },
   {
     title: "7. 개인정보의 파기 절차 및 방법",
@@ -32,11 +34,12 @@ const sections: { title: string; body: string }[] = [
   },
   {
     title: "8. 개인정보 보호책임자",
-    body: `· 성명: ${COMPANY.privacyOfficer}\n· 직책: 개인정보 보호책임자\n· 연락처: ${[COMPANY.tel, COMPANY.privacyEmail].filter(Boolean).join(", ")}\n개인정보 관련 문의·불만·피해구제는 위 연락처로 접수할 수 있습니다.`,
+    body: `· 성명: ${c.privacyOfficer}\n· 직책: 개인정보 보호책임자\n· 연락처: ${[c.tel, c.privacyEmail].filter(Boolean).join(", ")}\n개인정보 관련 문의·불만·피해구제는 위 연락처로 접수할 수 있습니다.`,
   },
 ];
 
-export default function PrivacyPage() {
+export default async function PrivacyPage() {
+  const sections = buildSections(await getCompany());
   return (
     <div className="mx-auto max-w-[880px] px-4 py-10 sm:px-6">
       <h1 className="text-[26px] font-extrabold text-ink sm:text-[28px]">개인정보처리방침</h1>

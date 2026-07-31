@@ -5,15 +5,18 @@ import { HeroBanner } from "@/components/home/HeroBanner";
 import { HeroGreeting } from "@/components/home/HeroGreeting";
 import { QuickMenu } from "@/components/home/QuickMenu";
 import { NewProducts } from "@/components/home/NewProducts";
+import { ProductTabs } from "@/components/home/ProductTabs";
 import { NoticeStrip } from "@/components/home/NoticeStrip";
 import { FeatureGrid } from "@/components/home/FeatureGrid";
+import { getHomeTabs } from "@/lib/homeTabs";
 
 export default async function HomePage() {
-  const [banners, notices, user, stats] = await Promise.all([
+  const [banners, notices, user, stats, tabs] = await Promise.all([
     db.banner.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
     db.notice.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" }, take: 3 }),
     getSession(),
     getHomeStats(),
+    getHomeTabs(),
   ]);
 
   return (
@@ -25,6 +28,7 @@ export default async function HomePage() {
         widget={<HeroGreeting companyName={user?.companyName ?? "LUVY"} rows={stats} />}
       />
       <QuickMenu />
+      <ProductTabs tabs={tabs} />
       <NewProducts />
       <NoticeStrip notices={notices} />
       <FeatureGrid />
