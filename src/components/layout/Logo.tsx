@@ -1,12 +1,22 @@
 import Link from "next/link";
+import { getLogoUrl } from "@/lib/settings";
 
 /**
- * LUVY wordmark — the "L" is drawn as a soft pink monogram tile.
+ * 로고.
+ *
+ * 관리자가 설정에서 이미지를 올렸으면 그 이미지를, 없으면 기본 LUVY 워드마크를 쓴다.
+ * ("로고를 바꾸려면?" 의 답이 배포가 아니라 관리자 화면이 되도록)
+ *
  * href={null} 이면 링크 없이 로고만 표시한다 (비로그인 인증 페이지에서 사용:
  * 폐쇄몰이라 "/" 로 보내면 다시 로그인으로 튕겨 루프가 된다).
  */
-export function Logo({ href = "/" }: { href?: string | null }) {
-  const inner = (
+export async function Logo({ href = "/" }: { href?: string | null }) {
+  const custom = await getLogoUrl();
+
+  const inner = custom ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={custom} alt="LUVY" className="h-9 w-auto max-w-[190px] object-contain" />
+  ) : (
     <>
       <span className="relative inline-flex h-9 w-9 items-center justify-center">
         <svg viewBox="0 0 36 36" className="h-9 w-9" aria-hidden>
@@ -26,9 +36,7 @@ export function Logo({ href = "/" }: { href?: string | null }) {
           />
         </svg>
       </span>
-      <span className="text-[26px] font-extrabold tracking-[0.14em] text-ink">
-        LUVY
-      </span>
+      <span className="text-[26px] font-extrabold tracking-[0.14em] text-ink">LUVY</span>
     </>
   );
 

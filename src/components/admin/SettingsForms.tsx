@@ -5,6 +5,7 @@ import { useFormStatus } from "react-dom";
 import {
   updateShippingSettings,
   changeAdminPassword,
+  updateLogo,
   type SettingsFormState,
 } from "@/lib/actions/admin-settings";
 import { fieldCls, labelCls, helpCls, errorCls } from "@/components/ui/form";
@@ -126,5 +127,58 @@ export function AdminPasswordForm() {
       <Result state={state} okText="변경되었습니다. 다음 로그인부터 새 비밀번호를 쓰세요." />
       <SubmitButton label="비밀번호 변경" />
     </form>
+  );
+}
+
+/** 로고 교체 — 업로드하면 헤더·로그인·푸터에 바로 반영된다 */
+export function LogoForm({ current }: { current: string }) {
+  const [state, formAction] = useActionState<SettingsFormState, FormData>(updateLogo, {});
+
+  return (
+    <div className="space-y-3">
+      {current ? (
+        <div className="flex items-center gap-3 border border-hairline bg-canvas px-4 py-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={current} alt="현재 로고" className="h-9 w-auto max-w-[190px] object-contain" />
+          <span className="text-[12px] text-muted">현재 로고</span>
+        </div>
+      ) : (
+        <p className="text-[13px] text-muted">
+          지금은 기본 LUVY 로고를 쓰고 있습니다. 이미지를 올리면 교체됩니다.
+        </p>
+      )}
+
+      <form action={formAction} className="space-y-2">
+        <input
+          type="file"
+          name="logo"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          className="block w-full text-[13px] text-ink-soft file:mr-3 file:border file:border-hairline file:bg-white file:px-4 file:py-2 file:text-[12px] file:font-bold file:text-ink-deep hover:file:border-ink-deep"
+        />
+        <p className={helpCls}>
+          PNG·JPG·WebP, 5MB 이하. 헤더에서 <strong>높이 36px</strong>로 표시되므로 가로로 긴
+          이미지(예: 360×72)에 배경이 투명한 PNG를 권장합니다.
+        </p>
+        {state.error && <p className={errorCls}>{state.error}</p>}
+        {state.ok && !state.error && (
+          <p className="border border-hairline bg-canvas px-4 py-3 text-[13px] font-semibold text-ink-deep">
+            저장되었습니다.
+          </p>
+        )}
+        <div className="flex gap-2">
+          <SubmitButton label="로고 저장" />
+          {current && (
+            <button
+              type="submit"
+              name="reset"
+              value="1"
+              className="h-11 border border-hairline bg-white px-5 text-[13px] font-bold text-ink-soft hover:border-ink-deep hover:text-ink-deep"
+            >
+              기본 로고로 되돌리기
+            </button>
+          )}
+        </div>
+      </form>
+    </div>
   );
 }

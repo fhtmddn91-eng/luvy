@@ -85,7 +85,11 @@ export function HeroBanner({
 
         {/* Copy overlaid on the empty (left / top) area of the image */}
         <div className="relative z-10 mx-auto max-w-[1280px] px-6">
-          <div className="flex min-h-[540px] flex-col justify-start pt-12 lg:min-h-[460px] lg:justify-center lg:pt-0">
+          {/*
+           * 모바일 배너 높이. 예전 540px 는 화면(844px)의 82% 를 먹어서
+           * 첫 화면에 상품이 하나도 안 보였다 → 절반 수준으로 낮춘다.
+           */}
+          <div className="flex min-h-[300px] flex-col justify-start pt-7 sm:min-h-[440px] sm:pt-10 lg:min-h-[460px] lg:justify-center lg:pt-0">
             <div key={banner.id} className="hero-enter max-w-full lg:max-w-[520px] lg:pl-4">
               <p className="text-[13px] font-bold uppercase tracking-[0.22em] text-brand-500">
                 {banner.eyebrow}

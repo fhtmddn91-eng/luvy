@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { Icon } from "@/components/ui/Icon";
-import { gnbLinks } from "@/lib/mock/nav";
+import { getNavLinks } from "@/lib/navLinks";
 
-export function Gnb() {
+export async function Gnb() {
+  const gnbLinks = await getNavLinks();
+
   return (
-    <nav className="no-scrollbar mx-auto flex max-w-[1280px] items-center gap-2 overflow-x-auto px-4 pb-2.5 pt-1.5 sm:px-6">
+    // 카테고리 줄과 같은 이유로 모바일에서는 줄바꿈 — 가로 스크롤이면 끝 메뉴가 잘린 채 숨는다
+    <nav className="mx-auto flex max-w-[1280px] flex-wrap items-center justify-center gap-2 px-4 pb-2.5 pt-1.5 sm:px-6 md:flex-nowrap md:justify-start">
       <button
         type="button"
         className="hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-line bg-white px-3.5 py-2 text-[14px] font-bold text-ink transition-colors hover:border-brand-300 hover:text-brand-600 md:flex"
@@ -14,7 +17,7 @@ export function Gnb() {
         <Icon name="chevronDown" className="h-4 w-4 text-muted" strokeWidth={2} />
       </button>
 
-      <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center justify-center gap-1">
         {gnbLinks.map((link, i) => (
           <Link
             key={`${link.href}-${i}`}

@@ -1,24 +1,30 @@
 import { requireAdmin } from "@/lib/auth";
-import { getShippingPolicy } from "@/lib/settings";
-import { ShippingSettingsForm, AdminPasswordForm } from "@/components/admin/SettingsForms";
+import { getShippingPolicy, getLogoUrl } from "@/lib/settings";
+import { ShippingSettingsForm, AdminPasswordForm, LogoForm } from "@/components/admin/SettingsForms";
 import { PageHeader, Panel } from "@/components/ui/Panel";
 
 export default async function AdminSettingsPage() {
   await requireAdmin();
-  const policy = await getShippingPolicy();
+  const [policy, logo] = await Promise.all([getShippingPolicy(), getLogoUrl()]);
 
   return (
     <div className="max-w-[560px]">
-      <PageHeader eyebrow="System" title="설정" description="배송비 정책과 관리자 계정" />
+      <PageHeader eyebrow="System" title="설정" description="로고 · 배송비 정책 · 관리자 계정" />
 
       <div className="space-y-4">
         <div className="rise rise-1">
+          <Panel title="로고">
+            <LogoForm current={logo} />
+          </Panel>
+        </div>
+
+        <div className="rise rise-2">
           <Panel title="배송비">
             <ShippingSettingsForm fee={policy.fee} freeThreshold={policy.freeThreshold} />
           </Panel>
         </div>
 
-        <div className="rise rise-2">
+        <div className="rise rise-3">
           <Panel title="관리자 비밀번호">
             <AdminPasswordForm />
             <p className="mt-3 border-t border-hairline-soft pt-3 text-[12px] leading-relaxed text-muted">

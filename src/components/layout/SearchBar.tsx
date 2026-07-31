@@ -38,10 +38,15 @@ export function SearchBar({
         </button>
       </form>
 
-      {/* 카테고리 바로가기 — 좁은 화면에서는 가로 스크롤 */}
+      {/*
+       * 카테고리 바로가기.
+       * 예전에는 좁은 화면에서 가로 스크롤이었는데, 스크롤바를 숨겨둬서(no-scrollbar)
+       * 화면 밖 카테고리가 있다는 신호가 전혀 없었다. 390px에서 8개 중 3개가 잘렸다.
+       * → 모바일에서는 줄바꿈으로 전부 보여주고, 넓은 화면에서만 한 줄로 유지한다.
+       */}
       <nav
         aria-label="상품 카테고리"
-        className="no-scrollbar mt-2 flex items-center gap-x-4 overflow-x-auto sm:justify-center sm:gap-x-5"
+        className="mt-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 sm:flex-nowrap sm:gap-x-5"
       >
         {categories.map((cat) => (
           <Link

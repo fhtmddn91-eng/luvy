@@ -4,7 +4,8 @@ import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin, createSession } from "@/lib/auth";
-import { saveShippingPolicy } from "@/lib/settings";
+import { saveShippingPolicy, saveLogoUrl, getLogoUrl } from "@/lib/settings";
+import { saveImageUpload, deleteImageUpload } from "@/lib/storage";
 import { audit } from "@/lib/audit";
 
 export type SettingsFormState = { error?: string; ok?: boolean };
@@ -74,5 +75,43 @@ export async function changeAdminPassword(
 
   // 방금 바꾼 본인은 로그아웃되지 않도록 새 버전으로 세션을 재발급한다
   await createSession(admin.id);
+  return { ok: true };
+}
+
+/**
+ * 로고 교체. 업로드한 이미지는 헤더·로그인·푸터에 즉시 반영된다.
+ * "기본 로고로 되돌리기" 는 파일을 비우고 저장하면 된다.
+ */
+export async function updateLogo(
+  _prev: SettingsFormState,
+  formData: FormData,
+): Promise<SettingsFormState> {
+  await requireAdmin();
+
+  const reset = formData.get("reset") === "1";
+  const previous = await getLogoUrl();
+
+  if (reset) {
+    await saveLogoUrl("");
+    if (previous) await deleteImageUpload(previous);
+    await audit({ action: "BRANDING_UPDATE", target: "setting", targetId: "logo", summary: "기본 로고로 되돌림" });
+    revalidatePath("/", "layout");
+    return { ok: true };
+  }
+
+  const file = formData.get("logo");
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: "로고 이미지 파일을 선택해주세요." };
+  }
+
+  const saved = await saveImageUpload(file);
+  if (!saved.ok) return { error: saved.error };
+
+  await saveLogoUrl(saved.url);
+  // 이전 로고 파일은 정리 (디스크에 고아 파일이 쌓이지 않게)
+  if (previous) await deleteImageUpload(previous);
+
+  await audit({ action: "BRANDING_UPDATE", target: "setting", targetId: "logo", summary: "로고 이미지 교체" });
+  revalidatePath("/", "layout");
   return { ok: true };
 }

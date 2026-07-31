@@ -39,3 +39,24 @@ export async function saveShippingPolicy(policy: ShippingPolicy): Promise<void> 
     }),
   ]);
 }
+
+/* ── 로고 ────────────────────────────────────────────
+ * 업로드한 이미지가 있으면 그것을, 없으면 코드에 있는 기본 LUVY 마크를 쓴다.
+ * "로고를 어떻게 바꾸나요"에 대한 답이 배포가 아니라 관리자 화면이 되도록.
+ */
+const KEY_LOGO = "brand_logo_url";
+
+export const getLogoUrl = cache(async (): Promise<string> => {
+  const row = await db.setting.findUnique({ where: { key: KEY_LOGO } });
+  const v = row?.value?.trim() ?? "";
+  // 업로드 경로만 신뢰한다 (외부 URL 을 넣어 헤더가 남의 서버를 부르게 하지 않는다)
+  return v.startsWith("/uploads/") ? v : "";
+});
+
+export async function saveLogoUrl(url: string): Promise<void> {
+  await db.setting.upsert({
+    where: { key: KEY_LOGO },
+    create: { key: KEY_LOGO, value: url },
+    update: { value: url },
+  });
+}

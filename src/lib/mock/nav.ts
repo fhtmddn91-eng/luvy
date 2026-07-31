@@ -8,11 +8,4 @@ export const utilLinks: NavLink[] = [
   { label: "고객센터", href: "/support" },
 ];
 
-export const gnbLinks: (NavLink & { badge?: string })[] = [
-  { label: "이번주 추천", href: "/new", badge: "NEW" },
-  { label: "신상품", href: "/new" },
-  { label: "인기상품", href: "/best" },
-  { label: "기획전", href: "/events" },
-  { label: "고객지원", href: "/support" },
-];
 

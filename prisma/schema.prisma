@@ -261,3 +261,17 @@ model AuditLog {
   @@index([action])
   @@index([target, targetId])
 }
+
+/**
+ * 상단 메뉴(GNB) — 이번주 추천 / 신상품 / 인기상품 / 기획전 / 고객지원.
+ * 코드에 박아두면 문구 하나 바꾸는 데도 배포가 필요해 DB 로 옮겼다.
+ */
+model NavLink {
+  id        String  @id @default(cuid())
+  label     String
+  href      String
+  /** NEW 같은 작은 배지. 비우면 표시하지 않는다 */
+  badge     String  @default("")
+  sortOrder Int     @default(0)
+  active    Boolean @default(true)
+}
