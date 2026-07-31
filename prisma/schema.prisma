@@ -34,7 +34,17 @@ model Product {
   id           String      @id @default(cuid())
   name         String
   brand        String
+  /**
+   * 대표 카테고리. 상세 페이지 위치와 관리자 목록 표기에 쓴다.
+   * 실제 "이 상품이 어느 목록에 뜨는가"는 ProductCategory 를 본다 —
+   * 대표 카테고리도 거기에 항상 한 줄로 들어간다.
+   */
   categorySlug String
+  /**
+   * 자체 품번. 운영자가 원하는 규칙으로 붙인다(예: LV-2601).
+   * 안 쓰는 상품은 null — 빈 문자열로 두면 여러 상품이 unique 에 걸린다.
+   */
+  sku          String?     @unique
   description  String
   image        String      @default("")
   basePrice    Int
@@ -52,7 +62,23 @@ model Product {
   priceTiers   PriceTier[]
   cartItems    CartItem[]
   assets       ProductAsset[]
+  categories   ProductCategory[]
 
+  @@index([categorySlug])
+}
+
+/**
+ * 상품 ↔ 카테고리 다대다. 한 상품을 여러 매대에 올리기 위한 것으로,
+ * 대표 카테고리(Product.categorySlug)도 여기에 반드시 포함된다.
+ * 그래야 목록 조회가 이 테이블 하나만 보면 된다.
+ */
+model ProductCategory {
+  productId    String
+  categorySlug String
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category     Category @relation(fields: [categorySlug], references: [slug], onDelete: Cascade)
+
+  @@id([productId, categorySlug])
   @@index([categorySlug])
 }
 
@@ -159,6 +185,8 @@ model OrderItem {
   productId String
   name      String
   brand     String
+  /** 주문 시점의 품번 스냅샷. 나중에 상품 품번이 바뀌어도 주문서는 그대로 남아야 한다. */
+  sku       String @default("")
   unitPrice Int
   quantity  Int
   lineTotal Int
@@ -188,6 +216,18 @@ model Category {
   icon      String  @default("sparkle")
   sortOrder Int     @default(0)
   active    Boolean @default(true)
+  /**
+   * 상위 카테고리. null 이면 대분류(헤더에 노출되는 줄)이고,
+   * 값이 있으면 그 대분류 아래의 세부 카테고리다. 2단까지만 쓴다 —
+   * 3단부터는 운영자가 관리하기 어렵고 매장 화면도 감당이 안 된다.
+   */
+  parentSlug String?
+  parent     Category?  @relation("CategoryTree", fields: [parentSlug], references: [slug], onDelete: SetNull)
+  children   Category[] @relation("CategoryTree")
+
+  products ProductCategory[]
+
+  @@index([parentSlug])
 }
 
 model Banner {

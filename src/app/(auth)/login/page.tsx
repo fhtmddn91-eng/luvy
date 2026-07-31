@@ -11,7 +11,7 @@ export default async function LoginPage({
   const { next } = await searchParams;
   return (
     <AuthCard
-      title="파트너 로그인"
+      title="러비 로그인"
       subtitle="로그인 후 상품 열람 및 구매가 가능합니다."
       footer={
         <>

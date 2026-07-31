@@ -91,6 +91,8 @@ async function main() {
         description: p.description,
         basePrice: p.basePrice,
         priceTiers: { create: p.tiers },
+        // 매장 목록은 조인 테이블을 보므로 대표 카테고리도 반드시 여기 들어가야 한다
+        categories: { create: [{ categorySlug: p.categorySlug }] },
       },
     });
   }

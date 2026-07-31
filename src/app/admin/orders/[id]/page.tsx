@@ -54,6 +54,12 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
                 <li key={i.id} className="flex justify-between gap-3">
                   <span className="min-w-0">
                     <span className="text-[12px] font-semibold text-brand-500">{i.brand}</span>
+                    {/* 품번 — 창고에서 물건을 집을 때 보는 값이라 상품명 옆에 붙인다 */}
+                    {i.sku && (
+                      <span className="ml-2 font-display text-[11px] tracking-[0.04em] text-muted">
+                        {i.sku}
+                      </span>
+                    )}
                     <span className="block truncate text-ink-soft">
                       {i.name} × {i.quantity} ({won(i.unitPrice)})
                     </span>

@@ -105,11 +105,20 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
       i.url.endsWith(".gif"),
     ).length;
 
+    // 번역이 찍어준 카테고리가 실제로 있는 것인지 확인한다.
+    // 없는 slug 를 그대로 쓰면 조인 테이블 저장이 FK 로 터져 수집 전체가 실패한다.
+    const guessed = translation.categorySlug || "idea";
+    const known = await db.category.findUnique({ where: { slug: guessed }, select: { slug: true } });
+    const categorySlug = known?.slug ?? (await db.category.findFirst({ orderBy: { sortOrder: "asc" }, select: { slug: true } }))?.slug;
+
     const product = await db.product.create({
       data: {
         name: translation.name,
         brand: "미정",
-        categorySlug: translation.categorySlug || "idea",
+        categorySlug: categorySlug ?? guessed,
+        // 카테고리를 못 찾으면 링크 없이 만든다 — 상품은 어차피 HIDDEN 이고
+        // 운영자가 가격을 넣을 때 카테고리도 함께 고르게 된다
+        ...(categorySlug ? { categories: { create: [{ categorySlug }] } } : {}),
         description: translation.description,
         image: mainReport.images[0]?.url ?? detailReport.images[0]?.url ?? "",
         basePrice: 0,

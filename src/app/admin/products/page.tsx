@@ -28,11 +28,24 @@ export default async function AdminProductsPage({
  const query = (q ?? "").trim();
 
  const cats = await getAllCategories();
- const categoryName = (slug: string) => cats.find((c) => c.slug === slug)?.name ?? slug;
+ /** 세부 카테고리는 "남성용품 › 오나홀" 로 상위까지 보여준다 */
+ const categoryName = (slug: string) => {
+ const self = cats.find((c) => c.slug === slug);
+ if (!self) return slug;
+ const parent = self.parentSlug ? cats.find((c) => c.slug === self.parentSlug) : undefined;
+ return parent ? `${parent.name} › ${self.name}` : self.name;
+ };
 
  const products = await db.product.findMany({
  where: query
- ? { OR: [{ name: { contains: query } }, { brand: { contains: query } }] }
+ ? {
+ OR: [
+ { name: { contains: query } },
+ { brand: { contains: query } },
+ // 품번은 대문자로 저장되므로 소문자로 쳐도 찾히게 한다
+ { sku: { contains: query.toUpperCase() } },
+ ],
+ }
  : undefined,
  include: { priceTiers: true },
  orderBy: { createdAt: "desc" },
@@ -112,7 +125,14 @@ export default async function AdminProductsPage({
  tone="neutral"
  className="h-11 w-11 shrink-0 text-[7px]"
  />
+ <span className="min-w-0">
  <span className="line-clamp-2">{p.name}</span>
+ {p.sku && (
+ <span className="mt-0.5 block font-display text-[11px] tracking-[0.04em] text-muted">
+ {p.sku}
+ </span>
+ )}
+ </span>
  </Link>
  </td>
  <td className="px-5 py-3 text-[13px] text-ink-soft sm:px-6">{p.brand}</td>

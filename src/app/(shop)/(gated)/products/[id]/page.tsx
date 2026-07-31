@@ -34,6 +34,12 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             {product.brand}{category ? ` · ${category.name}` : ""}
           </p>
           <h1 className="mt-2 text-[26px] font-extrabold leading-snug text-ink">{product.name}</h1>
+          {/* 품번 — 거래처가 발주서에 적는 값이라 상세에 노출한다 */}
+          {product.sku && (
+            <p className="mt-1.5 text-[13px] text-muted">
+              품번 <span className="font-semibold text-ink-soft">{product.sku}</span>
+            </p>
+          )}
           <p className="mt-4 text-[15px] leading-relaxed text-ink-soft">{product.description}</p>
 
           <div className="mt-8">

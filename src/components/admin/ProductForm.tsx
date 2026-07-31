@@ -12,6 +12,9 @@ export interface ProductFormData {
  name: string;
  brand: string;
  categorySlug: string;
+ sku: string | null;
+ /** 대표 포함, 이 상품이 걸린 모든 카테고리 slug */
+ categorySlugs: string[];
  description: string;
  basePrice: number;
  status: string;
@@ -19,6 +22,13 @@ export interface ProductFormData {
  stock?: number;
  image?: string;
  priceTiers: { minQty: number; unitPrice: number }[];
+}
+
+/** 선택 상자·체크박스에 넘길 카테고리 (2단) */
+export interface CategoryChoice {
+ slug: string;
+ name: string;
+ parentSlug: string | null;
 }
 
 type Action = (prev: ProductFormState, formData: FormData) => Promise<ProductFormState>;
@@ -39,7 +49,7 @@ export function ProductForm({
 }: {
  action: Action;
  product?: ProductFormData;
- categories: { slug: string; name: string }[];
+ categories: CategoryChoice[];
 }) {
  const [state, formAction] = useActionState<ProductFormState, FormData>(action, {});
  const [tiers, setTiers] = useState<{ minQty: string; unitPrice: string }[]>(
@@ -48,8 +58,21 @@ export function ProductForm({
  : [{ minQty: "", unitPrice: "" }],
  );
 
+ // 대표 카테고리는 "추가로 넣을 카테고리" 목록에서 빼야 하므로 상태로 들고 있는다
+ const [primary, setPrimary] = useState(product?.categorySlug ?? "");
+ const [extras, setExtras] = useState<string[]>(
+ (product?.categorySlugs ?? []).filter((s) => s !== (product?.categorySlug ?? "")),
+ );
+
  const setTier = (i: number, key: "minQty" | "unitPrice", value: string) =>
  setTiers((rows) => rows.map((r, idx) => (idx === i ? { ...r, [key]: value } : r)));
+
+ const toggleExtra = (slug: string) =>
+ setExtras((cur) => (cur.includes(slug) ? cur.filter((s) => s !== slug) : [...cur, slug]));
+
+ const tops = categories.filter((c) => c.parentSlug === null);
+ const childrenOf = (slug: string) => categories.filter((c) => c.parentSlug === slug);
+ const nameOf = (slug: string) => categories.find((c) => c.slug === slug)?.name ?? slug;
 
  return (
  <form action={formAction} className="max-w-[760px] space-y-4">
@@ -65,21 +88,52 @@ export function ProductForm({
  <input name="brand" defaultValue={product?.brand} className={fieldCls} />
  </div>
  <div>
- <label className={labelCls}>카테고리</label>
+ <label className={labelCls}>대표 카테고리</label>
  <select
  name="categorySlug"
- defaultValue={product?.categorySlug ?? ""}
+ value={primary}
+ onChange={(e) => setPrimary(e.target.value)}
  className={fieldCls}
  >
  <option value="" disabled>
  선택
  </option>
- {categories.map((c) => (
- <option key={c.slug} value={c.slug}>
- {c.name}
+ {tops.map((top) => {
+ const kids = childrenOf(top.slug);
+ if (kids.length === 0) {
+ return (
+ <option key={top.slug} value={top.slug}>
+ {top.name}
+ </option>
+ );
+ }
+ return (
+ <optgroup key={top.slug} label={top.name}>
+ <option value={top.slug}>{top.name} (전체)</option>
+ {kids.map((k) => (
+ <option key={k.slug} value={k.slug}>
+ {k.name}
  </option>
  ))}
+ </optgroup>
+ );
+ })}
  </select>
+ <p className={helpCls}>상세 페이지에 표시되고, 목록에서 이 상품의 소속으로 잡힙니다.</p>
+ </div>
+ <div>
+ <label className={labelCls}>품번 (선택)</label>
+ <input
+ name="sku"
+ defaultValue={product?.sku ?? ""}
+ maxLength={32}
+ autoComplete="off"
+ placeholder="예) LV-2601"
+ className={fieldCls}
+ />
+ <p className={helpCls}>
+ 자체 관리 번호입니다. 주문서·엑셀에 함께 나옵니다. 비워두면 쓰지 않습니다.
+ </p>
  </div>
  <div>
  <label className={labelCls}>정가 (참고용)</label>
@@ -124,6 +178,45 @@ export function ProductForm({
  />
  <p className={helpCls}>재고 관리를 끄면 이 값은 사용되지 않습니다.</p>
  </div>
+ </div>
+ <div className="sm:col-span-2 border-t border-hairline pt-4">
+ <label className={labelCls}>추가로 노출할 카테고리 (선택)</label>
+ <p className="mb-2.5 text-[12px] leading-relaxed text-muted">
+ 한 상품을 여러 매대에 함께 올릴 때 씁니다. 대표 카테고리
+ {primary ? ` (${nameOf(primary)})` : ""}는 자동으로 포함되므로 고르지 않아도 됩니다.
+ </p>
+ <div className="space-y-2.5">
+ {tops.map((top) => {
+ const group = [top, ...childrenOf(top.slug)].filter((c) => c.slug !== primary);
+ if (group.length === 0) return null;
+ return (
+ <div key={top.slug} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+ <span className="w-[92px] shrink-0 text-[12px] font-semibold text-ink-soft">
+ {top.name}
+ </span>
+ {group.map((c) => (
+ <label
+ key={c.slug}
+ className="flex cursor-pointer items-center gap-1.5 text-[13px] text-ink-deep"
+ >
+ <input
+ type="checkbox"
+ name="extraCategories"
+ value={c.slug}
+ checked={extras.includes(c.slug)}
+ onChange={() => toggleExtra(c.slug)}
+ className="h-3.5 w-3.5 accent-ink-deep"
+ />
+ {c.slug === top.slug ? `${c.name} (전체)` : c.name}
+ </label>
+ ))}
+ </div>
+ );
+ })}
+ </div>
+ <p className={helpCls}>
+ 신상품·인기상품은 여기서 지정하지 않습니다 — 등록일과 판매량으로 자동 계산됩니다.
+ </p>
  </div>
  <div className="sm:col-span-2">
  <label className={labelCls}>상세 설명</label>

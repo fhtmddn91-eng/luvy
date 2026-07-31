@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
     [
       "주문번호", "일시", "상태", "회원사", "이메일",
       "수령인", "연락처", "주소", "배송메모",
-      "상품", "총수량", "상품합계", "배송비", "합계",
+      "상품", "품번", "총수량", "상품합계", "배송비", "합계",
       "택배사", "운송장번호", "취소사유",
     ],
     ...orders.map((o) => [
@@ -56,6 +56,8 @@ export async function GET(req: NextRequest) {
       o.address,
       o.memo ?? "",
       o.items.map((i) => `${i.name} x${i.quantity}`).join(" / "),
+      // 품번을 쓰지 않는 상품이 섞여 있어도 상품 순서와 자리가 어긋나지 않도록 빈 칸을 유지한다
+      o.items.map((i) => i.sku).join(" / "),
       o.items.reduce((s, i) => s + i.quantity, 0),
       o.subtotal,
       o.shippingFee,

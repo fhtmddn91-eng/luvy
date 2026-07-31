@@ -132,6 +132,12 @@ async function main() {
       console.log(`created: ${p.name}`);
     }
 
+    // 이미 있던 상품에도 빠진 카테고리 링크를 채운다 (재실행해도 안전)
+    await db.productCategory.createMany({
+      data: [{ productId: product.id, categorySlug: p.categorySlug }],
+      skipDuplicates: true,
+    });
+
     // 썸네일·상세 이미지 연결 (이미 있으면 건드리지 않음 — 어드민 수정 보호)
     if (!product.image) {
       await db.product.update({ where: { id: product.id }, data: { image: p.image } });

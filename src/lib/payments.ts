@@ -10,6 +10,8 @@ export interface OrderDraft {
     productId: string;
     name: string;
     brand: string;
+    /** 주문 시점 품번 스냅샷. 안 쓰는 상품은 빈 문자열 */
+    sku: string;
     unitPrice: number;
     quantity: number;
     lineTotal: number;
@@ -39,6 +41,7 @@ export async function buildOrderDraft(userId: string): Promise<OrderDraft | null
       productId: it.productId,
       name: it.product.name,
       brand: it.product.brand,
+      sku: it.product.sku ?? "",
       unitPrice,
       quantity: it.quantity,
       lineTotal: unitPrice * it.quantity,

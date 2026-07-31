@@ -12,7 +12,11 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
   const { id } = await params;
   const product = await db.product.findUnique({
     where: { id },
-    include: { priceTiers: true, assets: { orderBy: { sortOrder: "asc" } } },
+    include: {
+      priceTiers: true,
+      assets: { orderBy: { sortOrder: "asc" } },
+      categories: { select: { categorySlug: true } },
+    },
   });
   if (!product) notFound();
 
@@ -29,6 +33,8 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
           name: product.name,
           brand: product.brand,
           categorySlug: product.categorySlug,
+          sku: product.sku,
+          categorySlugs: product.categories.map((c) => c.categorySlug),
           description: product.description,
           basePrice: product.basePrice,
           status: product.status,

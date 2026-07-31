@@ -13,7 +13,12 @@ export default async function SearchPage({
     ? await db.product.findMany({
         where: {
           status: "ACTIVE",
-          OR: [{ name: { contains: query } }, { brand: { contains: query } }],
+          OR: [
+            { name: { contains: query } },
+            { brand: { contains: query } },
+            // 거래처가 품번으로 찾는 경우. 품번은 대문자로 저장된다
+            { sku: { contains: query.toUpperCase() } },
+          ],
         },
         include: { priceTiers: true },
         orderBy: { createdAt: "desc" },

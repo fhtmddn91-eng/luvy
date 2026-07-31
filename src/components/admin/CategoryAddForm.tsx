@@ -15,11 +15,30 @@ function SubmitButton() {
   );
 }
 
-export function CategoryAddForm() {
+export function CategoryAddForm({
+  parents,
+}: {
+  /** 상위로 고를 수 있는 대분류 목록 (세부 카테고리는 여기 들어오지 않는다) */
+  parents: { slug: string; name: string }[];
+}) {
   const [state, formAction] = useActionState<CategoryFormState, FormData>(createCategory, {});
 
   return (
     <form action={formAction} className="space-y-3">
+      <div>
+        <label htmlFor="cat-parent" className={labelCls}>
+          위치
+        </label>
+        <select id="cat-parent" name="parentSlug" defaultValue="" className={fieldCls}>
+          <option value="">대분류로 추가 (헤더에 노출)</option>
+          {parents.map((p) => (
+            <option key={p.slug} value={p.slug}>
+              {p.name} 아래 세부 카테고리로
+            </option>
+          ))}
+        </select>
+        <p className={helpCls}>세부 카테고리는 대분류 페이지 안에서 버튼으로 보입니다.</p>
+      </div>
       <div>
         <label htmlFor="cat-name" className={labelCls}>
           이름

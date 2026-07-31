@@ -6,8 +6,23 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { saveImageUpload, deleteImageUpload } from "@/lib/storage";
+import { normalizeSku, skuError } from "@/lib/sku";
+import { categorySetFor, keepKnown } from "@/lib/productCategories";
 
 export type ProductFormState = { error?: string };
+
+/**
+ * 대표 + 추가 카테고리를 조인 테이블에 통째로 다시 쓴다.
+ * 존재하지 않는 slug 는 버린다 — 폼이 오래된 상태로 제출돼도 저장 자체는 살린다.
+ */
+async function categoryRows(
+  primary: string,
+  extras: string[],
+): Promise<{ categorySlug: string }[]> {
+  const known = (await db.category.findMany({ select: { slug: true } })).map((c) => c.slug);
+  const slugs = keepKnown(categorySetFor(primary, extras), known);
+  return slugs.map((categorySlug) => ({ categorySlug }));
+}
 
 /**
  * 업로드 파일이 있으면 저장하고 URL을, 없으면 undefined(기존 유지)를 반환.
@@ -40,6 +55,7 @@ function parseFields(formData: FormData) {
     name: String(formData.get("name") ?? "").trim(),
     brand: String(formData.get("brand") ?? "").trim(),
     categorySlug: String(formData.get("categorySlug") ?? "").trim(),
+    sku: normalizeSku(String(formData.get("sku") ?? "")),
     description: String(formData.get("description") ?? "").trim(),
     basePrice: parseInt(String(formData.get("basePrice") ?? "0"), 10) || 0,
     status: String(formData.get("status") ?? "ACTIVE"),
@@ -48,13 +64,31 @@ function parseFields(formData: FormData) {
   };
 }
 
+/** 추가 카테고리 체크박스. 대표 카테고리는 여기 없어도 categorySetFor 가 채운다. */
+function parseExtraCategories(formData: FormData): string[] {
+  return formData.getAll("extraCategories").map((v) => String(v).trim()).filter(Boolean);
+}
+
 function validate(f: ReturnType<typeof parseFields>, tiers: { minQty: number }[]): string | null {
   if (!f.name) return "상품명을 입력해주세요.";
   if (!f.brand) return "브랜드를 입력해주세요.";
-  if (!f.categorySlug) return "카테고리를 선택해주세요.";
+  if (!f.categorySlug) return "대표 카테고리를 선택해주세요.";
+  const sku = skuError(f.sku);
+  if (sku) return sku;
   if (f.basePrice <= 0) return "정가를 올바르게 입력해주세요.";
   if (tiers.length === 0) return "수량별 도매가를 최소 1개 입력해주세요.";
   return null;
+}
+
+/**
+ * 품번 중복. DB unique 제약이 최종 방어선이지만, 그대로 터뜨리면
+ * 운영자에게 Prisma 예외 화면이 뜨므로 먼저 걸러 문구로 알려준다.
+ */
+async function duplicateSkuError(sku: string | null, selfId?: string): Promise<string | null> {
+  if (sku === null) return null;
+  const owner = await db.product.findUnique({ where: { sku }, select: { id: true, name: true } });
+  if (!owner || owner.id === selfId) return null;
+  return `품번 ${sku} 은(는) 이미 "${owner.name}" 에 쓰이고 있습니다.`;
 }
 
 export async function createProduct(_prev: ProductFormState, formData: FormData): Promise<ProductFormState> {
@@ -63,19 +97,27 @@ export async function createProduct(_prev: ProductFormState, formData: FormData)
   const tiers = parseTiers(formData);
   const err = validate(fields, tiers);
   if (err) return { error: err };
+  const dup = await duplicateSkuError(fields.sku);
+  if (dup) return { error: dup };
 
   const image = await handleImage(formData);
   if ("error" in image) return { error: image.error };
 
+  const cats = await categoryRows(fields.categorySlug, parseExtraCategories(formData));
   const created = await db.product.create({
-    data: { ...fields, image: image.url ?? "", priceTiers: { create: tiers } },
+    data: {
+      ...fields,
+      image: image.url ?? "",
+      priceTiers: { create: tiers },
+      categories: { create: cats },
+    },
   });
   await audit({
     action: "PRODUCT_CREATE",
     target: "product",
     targetId: created.id,
     summary: `${created.name} 등록 (${created.status === "ACTIVE" ? "판매중" : "숨김"})`,
-    meta: { tiers: tiers.length },
+    meta: { tiers: tiers.length, sku: created.sku ?? "", categories: cats.length },
   });
   revalidatePath("/admin/products");
   revalidatePath("/");
@@ -88,6 +130,8 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
   const tiers = parseTiers(formData);
   const err = validate(fields, tiers);
   if (err) return { error: err };
+  const dup = await duplicateSkuError(fields.sku, id);
+  if (dup) return { error: dup };
 
   const image = await handleImage(formData);
   if ("error" in image) return { error: image.error };
@@ -98,11 +142,19 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
     if (prev?.image) await deleteImageUpload(prev.image);
   }
 
+  // 티어와 카테고리는 매번 통째로 갈아끼운다 (부분 수정이면 지운 항목이 남는다)
+  const cats = await categoryRows(fields.categorySlug, parseExtraCategories(formData));
   await db.$transaction([
     db.priceTier.deleteMany({ where: { productId: id } }),
+    db.productCategory.deleteMany({ where: { productId: id } }),
     db.product.update({
       where: { id },
-      data: { ...fields, ...(image.url ? { image: image.url } : {}), priceTiers: { create: tiers } },
+      data: {
+        ...fields,
+        ...(image.url ? { image: image.url } : {}),
+        priceTiers: { create: tiers },
+        categories: { create: cats },
+      },
     }),
   ]);
   await audit({
@@ -110,7 +162,14 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
     target: "product",
     targetId: id,
     summary: `${fields.name} 수정`,
-    meta: { status: fields.status, trackStock: fields.trackStock, stock: fields.stock, tiers: tiers.length },
+    meta: {
+      status: fields.status,
+      trackStock: fields.trackStock,
+      stock: fields.stock,
+      tiers: tiers.length,
+      sku: fields.sku ?? "",
+      categories: cats.length,
+    },
   });
   revalidatePath("/admin/products");
   revalidatePath(`/products/${id}`);
