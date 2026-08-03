@@ -47,10 +47,17 @@ export async function saveShippingPolicy(policy: ShippingPolicy): Promise<void> 
 const KEY_LOGO = "brand_logo_url";
 
 export const getLogoUrl = cache(async (): Promise<string> => {
-  const row = await db.setting.findUnique({ where: { key: KEY_LOGO } });
-  const v = row?.value?.trim() ?? "";
-  // 업로드 경로만 신뢰한다 (외부 URL 을 넣어 헤더가 남의 서버를 부르게 하지 않는다)
-  return v.startsWith("/uploads/") ? v : "";
+  try {
+    const row = await db.setting.findUnique({ where: { key: KEY_LOGO } });
+    const v = row?.value?.trim() ?? "";
+    // 업로드 경로만 신뢰한다 (외부 URL 을 넣어 헤더가 남의 서버를 부르게 하지 않는다)
+    return v.startsWith("/uploads/") ? v : "";
+  } catch (e) {
+    // 로고 하나 때문에 헤더가 있는 페이지 전체가 죽으면 안 된다.
+    // 실제로 이걸 안 잡아서 배포 빌드가 통째로 실패한 적이 있다.
+    console.error("[logo] 조회 실패 — 기본 로고 사용:", e);
+    return "";
+  }
 });
 
 export async function saveLogoUrl(url: string): Promise<void> {

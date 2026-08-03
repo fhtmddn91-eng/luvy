@@ -18,13 +18,19 @@ export const FALLBACK_NAV: { label: string; href: string; badge: string }[] = [
 ];
 
 export const getNavLinks = cache(async () => {
-  const rows = await db.navLink.findMany({
-    where: { active: true },
-    orderBy: { sortOrder: "asc" },
-  });
-  return rows.length > 0
-    ? rows.map((r) => ({ label: r.label, href: r.href, badge: r.badge }))
-    : FALLBACK_NAV;
+  try {
+    const rows = await db.navLink.findMany({
+      where: { active: true },
+      orderBy: { sortOrder: "asc" },
+    });
+    return rows.length > 0
+      ? rows.map((r) => ({ label: r.label, href: r.href, badge: r.badge }))
+      : FALLBACK_NAV;
+  } catch (e) {
+    // 조회가 실패해도 헤더는 떠야 한다 — 위 폴백을 둔 취지가 예외로 무력화되면 안 된다
+    console.error("[nav] 조회 실패 — 기본 메뉴 사용:", e);
+    return FALLBACK_NAV;
+  }
 });
 
 /** 어드민용 — 숨긴 항목 포함 전체 */
