@@ -1,21 +1,22 @@
 import Link from "next/link";
-import { Icon } from "@/components/ui/Icon";
 import { getNavLinks } from "@/lib/navLinks";
+import { getCategoryTree } from "@/lib/categories";
+import { CategoryMenu } from "./CategoryMenu";
 
 export async function Gnb() {
-  const gnbLinks = await getNavLinks();
+  const [gnbLinks, tree] = await Promise.all([getNavLinks(), getCategoryTree()]);
 
   return (
     // 카테고리 줄과 같은 이유로 모바일에서는 줄바꿈 — 가로 스크롤이면 끝 메뉴가 잘린 채 숨는다
     <nav className="mx-auto flex max-w-[1280px] flex-wrap items-center justify-center gap-2 px-4 pb-2.5 pt-1.5 sm:px-6 md:flex-nowrap md:justify-start">
-      <button
-        type="button"
-        className="hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-line bg-white px-3.5 py-2 text-[14px] font-bold text-ink transition-colors hover:border-brand-300 hover:text-brand-600 md:flex"
-      >
-        <Icon name="menu" className="h-4.5 w-4.5 h-[18px] w-[18px]" strokeWidth={2} />
-        전체 카테고리
-        <Icon name="chevronDown" className="h-4 w-4 text-muted" strokeWidth={2} />
-      </button>
+      {/* 예전에는 클릭해도 아무 일 없는 장식 버튼이었다 — 드롭다운으로 교체 */}
+      <CategoryMenu
+        tree={tree.map((t) => ({
+          slug: t.slug,
+          name: t.name,
+          children: t.children.map((c) => ({ slug: c.slug, name: c.name })),
+        }))}
+      />
 
       <div className="flex flex-wrap items-center justify-center gap-1">
         {gnbLinks.map((link, i) => (

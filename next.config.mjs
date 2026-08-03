@@ -42,6 +42,16 @@ const nextConfig = {
   outputFileTracingRoot: __dirname,
   // 서버 종류를 알려주는 헤더 제거
   poweredByHeader: false,
+  experimental: {
+    serverActions: {
+      /**
+       * 서버 액션 본문 한도. 기본 1MB 라서 상품·배너 이미지 업로드가
+       * 전송 단계에서 500 으로 잘렸다 (앱 정책은 이미지 5MB·GIF 20MB·
+       * 등록증 10MB — 검증은 storage.ts 가 한다. 여기는 통로만 연다).
+       */
+      bodySizeLimit: "25mb",
+    },
+  },
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },

@@ -1,16 +1,21 @@
 import "server-only";
-import { mkdir, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { db } from "@/lib/db";
 import { sniffImage, matchesMime } from "@/lib/imageSniff";
 
 /**
- * 업로드 저장 드라이버. dev/데모는 public/uploads 로컬 저장.
- * 배포 환경에서 영구 보관이 필요하면 이 모듈만 S3 등으로 교체한다.
- * (Railway 기본 파일시스템은 재배포 시 초기화됨 — DEPLOY.md 참고)
+ * 업로드 저장 드라이버 — **DB(StoredFile) 저장**.
+ *
+ * 파일시스템에 저장하지 않는 이유 (실서버에서 셋 다 실제로 겪었다):
+ *  1. Railway 컨테이너 디스크는 재배포마다 초기화된다 → 파일 유실
+ *  2. next start 는 빌드 이후 생긴 public/ 파일을 서빙하지 않는다 → 저장돼도 404
+ *  3. 백업이 DB 하나로 끝난다
+ *
+ * URL 형태는 그대로 /uploads/{name} — 서빙만 정적 파일이 아니라
+ * app/uploads/[name]/route.ts 가 DB에서 읽어 응답한다.
  */
 
-const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads");
 const MAX_BYTES = 5 * 1024 * 1024; // 5MB
 
 const EXT_BY_MIME: Record<string, string> = {
@@ -22,6 +27,15 @@ const EXT_BY_MIME: Record<string, string> = {
 };
 
 export type UploadResult = { ok: true; url: string } | { ok: false; error: string };
+
+const newName = (ext: string) =>
+  `${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${ext}`;
+
+async function insertPublic(name: string, mime: string, data: Buffer): Promise<void> {
+  await db.storedFile.create({
+    data: { name, mime, access: "public", bytes: data.byteLength, data: new Uint8Array(data) },
+  });
+}
 
 /** 이미지 파일을 저장하고 공개 URL 경로(/uploads/..)를 반환. */
 export async function saveImageUpload(file: File): Promise<UploadResult> {
@@ -36,9 +50,8 @@ export async function saveImageUpload(file: File): Promise<UploadResult> {
     return { ok: false, error: "이미지 파일이 아니거나 형식이 확장자와 다릅니다." };
   }
 
-  const name = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${ext}`;
-  await mkdir(UPLOAD_DIR, { recursive: true });
-  await writeFile(path.join(UPLOAD_DIR, name), buffer);
+  const name = newName(ext);
+  await insertPublic(name, file.type, buffer);
   return { ok: true, url: `/uploads/${name}` };
 }
 
@@ -62,9 +75,8 @@ export async function saveImageBuffer(
     return { ok: false, error: "내려받은 파일이 이미지가 아닙니다." };
   }
 
-  const name = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${ext}`;
-  await mkdir(UPLOAD_DIR, { recursive: true });
-  await writeFile(path.join(UPLOAD_DIR, name), data);
+  const name = newName(ext);
+  await insertPublic(name, mime, data);
   return { ok: true, url: `/uploads/${name}` };
 }
 
@@ -72,19 +84,46 @@ export async function saveImageBuffer(
 export async function deleteImageUpload(url: string): Promise<void> {
   if (!url.startsWith("/uploads/")) return;
   const name = path.basename(url); // 경로 탈출 방지
+  await db.storedFile.deleteMany({ where: { name, access: "public" } });
+  // 디스크 시절 파일이 남아 있으면 같이 정리 (로컬 개발 환경)
   try {
-    await unlink(path.join(UPLOAD_DIR, name));
+    const { unlink } = await import("node:fs/promises");
+    await unlink(path.join(process.cwd(), "public", "uploads", name));
   } catch {
-    // 이미 없으면 무시
+    // 없으면 무시
+  }
+}
+
+/** 공개 파일 읽기 — /uploads/[name] 라우트 전용 */
+export async function readPublicUpload(
+  name: string,
+): Promise<{ data: Buffer; contentType: string } | null> {
+  const safe = path.basename(name);
+  if (safe !== name || !safe) return null;
+
+  const row = await db.storedFile.findUnique({ where: { name: safe } });
+  if (row && row.access === "public") {
+    return { data: Buffer.from(row.data), contentType: row.mime };
+  }
+
+  // 디스크 시절 업로드(로컬 개발) 폴백 — DB에 없을 때만
+  const ext = safe.split(".").pop() ?? "";
+  const mime = Object.entries(EXT_BY_MIME).find(([, e]) => e === ext)?.[0];
+  if (!mime) return null;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const data = await readFile(path.join(process.cwd(), "public", "uploads", safe));
+    return { data, contentType: mime };
+  } catch {
+    return null;
   }
 }
 
 /* ── 사업자등록증 (비공개 저장) ─────────────────────────────────────
- * 민감 서류이므로 public/ 이 아닌 비공개 디렉터리에 저장하고,
- * 관리자 전용 API 라우트를 통해서만 읽는다.
+ * 민감 서류이므로 access="bizcert" 로 저장하고, 공개 라우트에서는
+ * 절대 조회되지 않는다. 관리자 전용 API 라우트만 읽는다.
  */
 
-const BIZCERT_DIR = path.join(process.cwd(), "private-uploads", "bizcert");
 const BIZCERT_MAX_BYTES = 10 * 1024 * 1024; // 10MB
 
 const BIZCERT_EXT_BY_MIME: Record<string, string> = {
@@ -109,8 +148,15 @@ export async function saveBizCertUpload(file: File): Promise<BizCertResult> {
   }
 
   const name = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}.${ext}`;
-  await mkdir(BIZCERT_DIR, { recursive: true });
-  await writeFile(path.join(BIZCERT_DIR, name), buffer);
+  await db.storedFile.create({
+    data: {
+      name,
+      mime: file.type,
+      access: "bizcert",
+      bytes: buffer.byteLength,
+      data: new Uint8Array(buffer),
+    },
+  });
   return { ok: true, name };
 }
 
@@ -120,13 +166,22 @@ export async function readBizCert(
 ): Promise<{ data: Buffer; contentType: string } | null> {
   const safe = path.basename(name);
   if (safe !== name || !safe) return null;
+
+  const row = await db.storedFile.findUnique({ where: { name: safe } });
+  if (row && row.access === "bizcert") {
+    return { data: Buffer.from(row.data), contentType: row.mime };
+  }
+
+  // 디스크 시절 저장분 폴백 (로컬 개발)
   const ext = safe.split(".").pop() ?? "";
   const contentType =
     { jpg: "image/jpeg", png: "image/png", webp: "image/webp", pdf: "application/pdf" }[ext];
   if (!contentType) return null;
   try {
     const { readFile } = await import("node:fs/promises");
-    const data = await readFile(path.join(BIZCERT_DIR, safe));
+    const data = await readFile(
+      path.join(process.cwd(), "private-uploads", "bizcert", safe),
+    );
     return { data, contentType };
   } catch {
     return null;

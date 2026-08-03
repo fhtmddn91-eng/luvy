@@ -1,7 +1,13 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { readFile, unlink } from "node:fs/promises";
-import path from "node:path";
-import { saveImageBuffer, saveImageUpload, saveBizCertUpload, deleteImageUpload } from "./storage";
+import { db } from "@/lib/db";
+import {
+  saveImageBuffer,
+  saveImageUpload,
+  saveBizCertUpload,
+  deleteImageUpload,
+  readBizCert,
+  readPublicUpload,
+} from "./storage";
 
 /**
  * 1688 상세이미지에는 움직이는 GIF가 섞여 있다.
@@ -18,10 +24,16 @@ const ANIMATED_GIF = Buffer.from(
 const written: string[] = [];
 
 afterAll(async () => {
-  await Promise.all(
-    written.map((url) => unlink(path.join(process.cwd(), "public", url)).catch(() => {})),
-  );
+  await Promise.all(written.map((url) => deleteImageUpload(url)));
 });
+
+/** 저장은 이제 디스크가 아니라 DB(StoredFile)다 — 거기서 꺼내 비교한다 */
+async function readStored(url: string): Promise<Buffer> {
+  const name = url.replace("/uploads/", "");
+  const row = await db.storedFile.findUnique({ where: { name } });
+  if (!row) throw new Error("저장된 파일이 DB에 없음: " + url);
+  return Buffer.from(row.data);
+}
 
 describe("saveImageBuffer", () => {
   it("애니메이션 GIF를 .gif 로 저장하고 바이트를 그대로 보존한다", async () => {
@@ -32,7 +44,7 @@ describe("saveImageBuffer", () => {
 
     expect(res.url.endsWith(".gif")).toBe(true);
 
-    const disk = await readFile(path.join(process.cwd(), "public", res.url));
+    const disk = await readStored(res.url);
     // 원본과 완전히 동일해야 한다 (재인코딩·정적화 없음)
     expect(disk.equals(ANIMATED_GIF)).toBe(true);
     // GIF89a 헤더와 루프 확장이 살아 있는지
@@ -117,5 +129,20 @@ describe("saveBizCertUpload — 사업자등록증", () => {
   it("가짜 PDF 는 거부한다", async () => {
     const r = await saveBizCertUpload(asFile("cert.pdf", "application/pdf", ascii("not a pdf")));
     expect(r.ok).toBe(false);
+  });
+
+  it("저장한 서류는 관리자 경로로만 읽히고, 공개 이미지 라우트로는 절대 안 나온다", async () => {
+    const r = await saveBizCertUpload(asFile("cert.pdf", "application/pdf", REAL_PDF));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    try {
+      const admin = await readBizCert(r.name);
+      expect(admin?.contentType).toBe("application/pdf");
+      expect(admin && Buffer.from(REAL_PDF).equals(admin.data)).toBe(true);
+      // 심사 서류가 /uploads/{name} 으로 유출되면 안 된다
+      expect(await readPublicUpload(r.name)).toBeNull();
+    } finally {
+      await db.storedFile.deleteMany({ where: { name: r.name } });
+    }
   });
 });
