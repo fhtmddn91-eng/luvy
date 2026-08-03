@@ -4,6 +4,7 @@ import {
   fillTab,
   rankIds,
   orderByIds,
+  marginRate,
   DEFAULT_SECTIONS,
   HOME_TAB_SIZE,
   type HomeMode,
@@ -69,6 +70,22 @@ async function repeatIds(): Promise<string[]> {
 }
 
 /**
+ * 마진율 순위 — 소비자가(basePrice) 대비 최저 도매 단가의 남는 비율.
+ * 주문 데이터가 필요 없어서 오픈 직후에도 실제 값으로 정렬된다.
+ */
+async function marginIds(): Promise<string[]> {
+  const rows = await db.product.findMany({
+    where: { status: "ACTIVE" },
+    select: { id: true, basePrice: true, priceTiers: { select: { unitPrice: true } } },
+  });
+  const scored = rows.map((p) => ({
+    productId: p.id,
+    value: marginRate(p.basePrice, Math.min(...p.priceTiers.map((t) => t.unitPrice), Infinity)),
+  }));
+  return rankIds(scored);
+}
+
+/**
  * 메인 상품 탭. 관리자가 설정한 게 없으면 기본 4탭으로 보여준다
  * (마이그레이션만 돌고 설정 전인 상태에서 메인이 비지 않도록).
  */
@@ -96,15 +113,18 @@ export async function getHomeTabs(): Promise<HomeTab[]> {
   // 순위 계산은 탭마다 필요한 것만 (주문이 많아지면 매번 다 도는 게 아깝다)
   const needsPopular = configured.some((s) => s.mode === "AUTO_POPULAR");
   const needsRepeat = configured.some((s) => s.mode === "AUTO_REPEAT");
-  const [popular, repeat] = await Promise.all([
+  const needsMargin = configured.some((s) => s.mode === "AUTO_MARGIN");
+  const [popular, repeat, margin] = await Promise.all([
     needsPopular ? popularIds() : Promise.resolve([]),
     needsRepeat ? repeatIds() : Promise.resolve([]),
+    needsMargin ? marginIds() : Promise.resolve([]),
   ]);
 
   // 순위·수동 선택에 등장하는 상품을 한 번에 가져온다
   const wanted = new Set<string>([
     ...popular,
     ...repeat,
+    ...margin,
     ...configured.flatMap((s) => s.picks.map((p) => p.productId)),
   ]);
   const pool =
@@ -123,7 +143,9 @@ export async function getHomeTabs(): Promise<HomeTab[]> {
           ? orderByIds(pool, popular)
           : mode === "AUTO_REPEAT"
             ? orderByIds(pool, repeat)
-            : newest;
+            : mode === "AUTO_MARGIN"
+              ? orderByIds(pool, margin)
+              : newest;
     // 규칙 결과가 모자라면 신상품으로 채운다
     return fillTab(ranked as TabProduct[], newest as TabProduct[]);
   };

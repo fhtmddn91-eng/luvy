@@ -10,6 +10,7 @@ export const HOME_MODES = {
   AUTO_NEW: "신상품 (등록일순)",
   AUTO_POPULAR: "인기 (판매수량순)",
   AUTO_REPEAT: "재구매 높은 (재구매 회원수순)",
+  AUTO_MARGIN: "마진 높은 (소비자가 대비 도매가)",
   MANUAL: "직접 고르기",
 } as const;
 
@@ -61,10 +62,25 @@ export function orderByIds<T extends { id: string }>(products: readonly T[], ids
   return ids.map((id) => byId.get(id)).filter((p): p is T => p !== undefined);
 }
 
-/** 기본 4탭 — 관리자가 아직 설정하지 않았을 때 쓴다 */
+/**
+ * 판매자(소매상) 입장의 마진율. 소비자가(basePrice) 대비, 가장 좋은
+ * 도매 단가로 샀을 때 남는 비율이다.
+ *
+ * 절대액이 아니라 비율로 잰다 — 절대액으로 재면 비싼 상품이 항상 이겨서
+ * "마진 좋은 저가 상품"이 묻힌다. 값이 이상하면(0 이하, 역마진) 0.
+ */
+export function marginRate(basePrice: number, bestUnitPrice: number): number {
+  if (basePrice <= 0 || bestUnitPrice <= 0 || bestUnitPrice >= basePrice) return 0;
+  return (basePrice - bestUnitPrice) / basePrice;
+}
+
+/**
+ * 기본 4탭 — 관리자가 아직 설정하지 않았을 때 쓴다.
+ * 요청사항 PDF p7 시안의 구성 그대로: 이번주 HOT · 입문 추천 · 마진 높은 · 재구매 높은.
+ */
 export const DEFAULT_SECTIONS: { label: string; mode: HomeMode }[] = [
-  { label: "HOT", mode: "AUTO_POPULAR" },
-  { label: "이번주 추천", mode: "MANUAL" },
+  { label: "이번주 HOT", mode: "AUTO_POPULAR" },
   { label: "입문 추천", mode: "MANUAL" },
-  { label: "재구매 높은", mode: "AUTO_REPEAT" },
+  { label: "마진 높은 상품", mode: "AUTO_MARGIN" },
+  { label: "재구매 높은 상품", mode: "AUTO_REPEAT" },
 ];
