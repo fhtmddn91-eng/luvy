@@ -17,8 +17,14 @@ export async function Logo({ href = "/" }: { href?: string | null }) {
   const src = custom || "/brand/logo.png";
 
   const inner = (
+    // 워드마크가 가로로 길어서(≈6.5:1) 모바일에서 210px를 차지하면
+    // 우측 아이콘들이 아랫줄로 밀려 헤더 전체가 어그러진다 → 폰에서는 축소
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={src} alt="LUVY" className="h-8 w-auto max-w-[210px] object-contain sm:h-9" />
+    <img
+      src={src}
+      alt="LUVY"
+      className="h-6 w-auto max-w-[150px] object-contain sm:h-8 sm:max-w-[210px] lg:h-9"
+    />
   );
 
   if (href === null) {
