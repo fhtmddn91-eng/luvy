@@ -1,7 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
-import { useFormStatus } from "react-dom";
+import { useActionState, useState, startTransition } from "react";
 import Link from "next/link";
 import type { ProductFormState } from "@/lib/actions/admin-products";
 import { Panel, btnPrimary } from "@/components/ui/Panel";
@@ -33,8 +32,7 @@ export interface CategoryChoice {
 
 type Action = (prev: ProductFormState, formData: FormData) => Promise<ProductFormState>;
 
-function SaveButton() {
- const { pending } = useFormStatus();
+function SaveButton({ pending }: { pending: boolean }) {
  return (
  <button type="submit" disabled={pending} className={btnPrimary}>
  {pending ? "저장 중…" : "저장"}
@@ -51,7 +49,9 @@ export function ProductForm({
  product?: ProductFormData;
  categories: CategoryChoice[];
 }) {
- const [state, formAction] = useActionState<ProductFormState, FormData>(action, {});
+ const [state, formAction, pending] = useActionState<ProductFormState, FormData>(action, {});
+ // 첨부한 썸네일 미리보기 — "첨부가 됐는지" 눈으로 확인할 수 있게
+ const [preview, setPreview] = useState<string | null>(null);
  const [tiers, setTiers] = useState<{ minQty: string; unitPrice: string }[]>(
  product?.priceTiers.length
  ? product.priceTiers.map((t) => ({ minQty: String(t.minQty), unitPrice: String(t.unitPrice) }))
@@ -74,8 +74,16 @@ export function ProductForm({
  const childrenOf = (slug: string) => categories.filter((c) => c.parentSlug === slug);
  const nameOf = (slug: string) => categories.find((c) => c.slug === slug)?.name ?? slug;
 
+ // form action={} 대신 직접 dispatch — React 19는 <form action> 제출이 끝나면
+ // 폼을 자동 리셋해서, 검증 에러가 떠도 입력값과 첨부 파일이 전부 사라진다.
+ const submit = (e: React.FormEvent<HTMLFormElement>) => {
+ e.preventDefault();
+ const fd = new FormData(e.currentTarget);
+ startTransition(() => formAction(fd));
+ };
+
  return (
- <form action={formAction} className="max-w-[760px] space-y-4">
+ <form onSubmit={submit} className="max-w-[760px] space-y-4">
  <div className="rise rise-1">
  <Panel title="기본 정보">
  <div className="grid gap-4 sm:grid-cols-2">
@@ -235,11 +243,11 @@ export function ProductForm({
  <Panel title="상품 이미지">
  <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
  <div className="shrink-0">
- {product?.image ? (
+ {preview || product?.image ? (
  // eslint-disable-next-line @next/next/no-img-element
  <img
- src={product.image}
- alt="현재 등록된 이미지"
+ src={preview ?? product?.image}
+ alt={preview ? "첨부한 이미지 미리보기" : "현재 등록된 이미지"}
  className="h-24 w-24 border border-hairline object-cover"
  />
  ) : (
@@ -247,13 +255,23 @@ export function ProductForm({
  없음
  </div>
  )}
+ {preview && (
+ <p className="mt-1 w-24 text-center text-[10px] font-bold text-ink-deep">첨부됨</p>
+ )}
  </div>
  <div className="min-w-0 flex-1">
  <input
  name="imageFile"
  type="file"
- accept="image/jpeg,image/png,image/webp,image/avif"
- className="block w-full text-[13px] text-ink-soft file:mr-3 file: file:border file:border-hairline file:bg-white file:px-4 file:py-2 file:text-[13px] file:font-semibold file:text-ink-deep hover:file:border-ink-deep"
+ accept="image/*"
+ onChange={(e) => {
+ const f = e.target.files?.[0] ?? null;
+ setPreview((prev) => {
+ if (prev) URL.revokeObjectURL(prev);
+ return f ? URL.createObjectURL(f) : null;
+ });
+ }}
+ className="block w-full text-[13px] text-ink-soft file:mr-3 file:border file:border-hairline file:bg-white file:px-4 file:py-2 file:text-[13px] file:font-semibold file:text-ink-deep hover:file:border-ink-deep"
  />
  <p className={helpCls}>
  JPG · PNG · WebP · AVIF / 5MB 이하.{" "}
@@ -322,7 +340,7 @@ export function ProductForm({
  {state.error && <p className={errorCls}>{state.error}</p>}
 
  <div className="flex items-center gap-4 pt-1">
- <SaveButton />
+ <SaveButton pending={pending} />
  <Link
  href="/admin/products"
  className="text-[13.5px] text-muted transition-colors hover:text-ink-deep"

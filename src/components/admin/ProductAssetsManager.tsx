@@ -1,8 +1,7 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef, useState, startTransition } from "react";
 import { useActionState } from "react";
-import { useFormStatus } from "react-dom";
 import {
   addProductAssets,
   deleteProductAsset,
@@ -21,8 +20,7 @@ export interface AssetRow {
 
 const kb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
 
-function UploadButton() {
-  const { pending } = useFormStatus();
+function UploadButton({ pending }: { pending: boolean }) {
   return (
     <button type="submit" disabled={pending} className={btnPrimary}>
       {pending ? "업로드 중…" : "선택한 파일 업로드"}
@@ -43,8 +41,26 @@ export function ProductAssetsManager({
   assets: AssetRow[];
 }) {
   const bound = addProductAssets.bind(null, productId);
-  const [state, formAction] = useActionState<AssetFormState, FormData>(bound, {});
+  const [state, formAction, pending] = useActionState<AssetFormState, FormData>(bound, {});
   const fileRef = useRef<HTMLInputElement>(null);
+  // 몇 장 골랐는지 즉시 보여준다 — "첨부가 됐는지" 확인용
+  const [picked, setPicked] = useState(0);
+
+  // form action={} 대신 직접 dispatch — React 19는 <form action> 제출이 끝나면
+  // 폼을 자동 리셋해서, 한 장이라도 실패하면 고른 파일이 전부 사라진다.
+  const submit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    startTransition(() => formAction(fd));
+  };
+
+  // 성공했을 때만 선택을 비운다 (실패 시엔 남겨서 바로 재시도 가능)
+  useEffect(() => {
+    if (state.ok !== undefined && !state.error && fileRef.current) {
+      fileRef.current.value = "";
+      setPicked(0);
+    }
+  }, [state]);
 
   return (
     <div>
@@ -88,7 +104,7 @@ export function ProductAssetsManager({
         </ul>
       )}
 
-      <form action={formAction} className="mt-4 space-y-2 border-t border-hairline-soft pt-4">
+      <form onSubmit={submit} className="mt-4 space-y-2 border-t border-hairline-soft pt-4">
         <label htmlFor="asset-files" className={labelCls}>
           상세 이미지 추가 (여러 장 선택 가능)
         </label>
@@ -98,9 +114,13 @@ export function ProductAssetsManager({
           type="file"
           name="files"
           multiple
-          accept="image/jpeg,image/png,image/webp,image/gif"
+          accept="image/*"
+          onChange={(e) => setPicked(e.target.files?.length ?? 0)}
           className="block w-full text-[13px] text-ink-soft file:mr-3 file:border file:border-hairline file:bg-white file:px-4 file:py-2 file:text-[12px] file:font-bold file:text-ink-deep hover:file:border-ink-deep"
         />
+        {picked > 0 && (
+          <p className="text-[12px] font-bold text-ink-deep">{picked}장 선택됨 — 아래 버튼을 눌러야 업로드됩니다.</p>
+        )}
         <p className={helpCls}>
           JPG·PNG·WebP·GIF, 장당 5MB 이하. 위에서부터 순서대로 상세페이지에 이어 붙습니다.
           움직이는 GIF 는 그대로 움직입니다.
@@ -111,7 +131,7 @@ export function ProductAssetsManager({
             {state.ok}장 업로드되었습니다.
           </p>
         )}
-        <UploadButton />
+        <UploadButton pending={pending} />
       </form>
     </div>
   );

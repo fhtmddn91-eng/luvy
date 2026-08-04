@@ -121,7 +121,9 @@ export async function createProduct(_prev: ProductFormState, formData: FormData)
   });
   revalidatePath("/admin/products");
   revalidatePath("/");
-  redirect("/admin/products");
+  // 등록 화면 안내문("저장 직후 열리는 상품 수정 화면")대로 수정 화면으로 —
+  // 상세페이지 이미지를 이어서 올릴 수 있어야 한다.
+  redirect(`/admin/products/${created.id}`);
 }
 
 export async function updateProduct(id: string, _prev: ProductFormState, formData: FormData): Promise<ProductFormState> {
