@@ -28,36 +28,41 @@ const products: Seed[] = [
   { name: "아이디어 방수 파우치", brand: "LUVY", categorySlug: "idea", description: "제품 보관용 지퍼 방수 파우치. 매장 사은품용.", basePrice: 4000, tiers: [{ minQty: 20, unitPrice: 1900 }, { minQty: 100, unitPrice: 1500 }] },
 ];
 
+/**
+ * 배너 카피 원칙: 폰에서는 부제가 숨고 제목만 보인다 → 제목 두 줄이 혼자서도
+ * 말이 되게. 막연한 수식어("프리미엄", "특별한") 대신 셀러의 실제 고민
+ * (상세페이지 제작, 신상 소싱 타이밍, 배송 속도)을 구체적으로 찌른다.
+ */
 const banners = [
   {
     eyebrow: "LOVE YOUR BUSINESS",
-    title: "판매는 당신이,\n준비는 LUVY가.",
-    subtitle: "상세페이지부터 썸네일까지\n판매에 필요한 모든 자료를 제공합니다.",
-    primaryLabel: "회원가입하고 시작하기", primaryHref: "/signup",
-    secondaryLabel: "판매자료 다운로드", secondaryHref: "/partner",
+    title: "상세페이지 만들 시간에\n하나 더 파세요",
+    subtitle: "썸네일·상세페이지·GIF까지 완성된 판매자료를 드립니다.\n내려받아 그대로 올리면 판매 준비 끝.",
+    primaryLabel: "가입하고 판매자료 받기", primaryHref: "/signup",
+    secondaryLabel: "판매자료 미리보기", secondaryHref: "/partner",
     sortOrder: 1,
   },
   {
     eyebrow: "NEW ARRIVALS",
-    title: "이번 주 입고된\n프리미엄 신상품",
-    subtitle: "엄선된 글로벌 브랜드의 신상품을\n합리적인 도매가로 가장 먼저 만나보세요.",
-    primaryLabel: "신상품 보러가기", primaryHref: "/new",
+    title: "잘 팔릴 신상은\n먼저 본 사람이 팝니다",
+    subtitle: "글로벌 브랜드 신상품이 매주 도매가로 입고됩니다.\n이번 주 입고분, 지금 확인하세요.",
+    primaryLabel: "이번 주 신상 보기", primaryHref: "/new",
     secondaryLabel: "브랜드관 둘러보기", secondaryHref: "/brands",
     sortOrder: 2,
   },
   {
     eyebrow: "PARTNER BENEFIT",
-    title: "전담 파트너가\n1:1로 함께합니다",
-    subtitle: "재고 관리부터 빠른 배송까지,\n안정적인 물류 시스템으로 매출을 키우세요.",
+    title: "오늘 발주하면\n내일 팔 수 있습니다",
+    subtitle: "전국 당일·익일 발송에 전담 파트너 1:1 상담까지.\n사장님은 파는 데만 집중하세요.",
     primaryLabel: "파트너 신청하기", primaryHref: "/partner",
     secondaryLabel: "혜택 자세히 보기", secondaryHref: "/events",
     sortOrder: 3,
   },
   {
     eyebrow: "WELCOME OFFER",
-    title: "신규 가입 시\n10,000P 즉시 지급",
-    subtitle: "지금 LUVY의 파트너가 되고\n첫 주문부터 특별한 혜택을 받아보세요.",
-    primaryLabel: "지금 가입하기", primaryHref: "/signup",
+    title: "시작하는 사장님께\n10,000P 먼저 드립니다",
+    subtitle: "가입 즉시 지급, 첫 주문부터 바로 사용.\n복잡한 조건 없습니다.",
+    primaryLabel: "10,000P 받고 가입하기", primaryHref: "/signup",
     secondaryLabel: "이벤트 전체 보기", secondaryHref: "/events",
     sortOrder: 4,
   },

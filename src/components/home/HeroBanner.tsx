@@ -27,11 +27,11 @@ const DEFAULT_MOBILE = "/hero/hero-mobile.png";
 const FALLBACK: HeroBannerData = {
   id: "fallback",
   eyebrow: "LOVE YOUR BUSINESS",
-  title: "판매는 당신이,\n준비는 LUVY가.",
-  subtitle: "상세페이지부터 썸네일까지\n판매에 필요한 모든 자료를 제공합니다.",
-  primaryLabel: "회원가입하고 시작하기",
+  title: "상세페이지 만들 시간에\n하나 더 파세요",
+  subtitle: "썸네일·상세페이지·GIF까지 완성된 판매자료를 드립니다.\n내려받아 그대로 올리면 판매 준비 끝.",
+  primaryLabel: "가입하고 판매자료 받기",
   primaryHref: "/signup",
-  secondaryLabel: "판매자료 다운로드",
+  secondaryLabel: "판매자료 미리보기",
   secondaryHref: "/partner",
 };
 
