@@ -23,7 +23,7 @@ export async function Logo({ href = "/" }: { href?: string | null }) {
     <img
       src={src}
       alt="LUVY"
-      className="h-6 w-auto max-w-[150px] object-contain sm:h-8 sm:max-w-[210px] lg:h-9"
+      className="h-5 w-auto max-w-[120px] object-contain sm:h-8 sm:max-w-[210px] lg:h-9"
     />
   );
 

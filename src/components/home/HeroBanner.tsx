@@ -115,7 +115,7 @@ export function HeroBanner({
               <div className="mt-7 flex flex-wrap items-center gap-3 lg:mt-9">
                 <Link
                   href={banner.primaryHref}
-                  className="group inline-flex items-center gap-2 rounded-pill bg-brand-500 px-7 py-3.5 text-[15px] font-bold text-white shadow-[var(--shadow-card)] transition-all hover:bg-brand-600 hover:shadow-lg"
+                  className="group inline-flex items-center gap-1.5 rounded-pill bg-brand-500 px-5 py-2.5 text-[13px] font-bold text-white shadow-[var(--shadow-card)] transition-all hover:bg-brand-600 hover:shadow-lg sm:gap-2 sm:px-7 sm:py-3.5 sm:text-[15px]"
                 >
                   {banner.primaryLabel}
                   <Icon
@@ -127,7 +127,7 @@ export function HeroBanner({
                 {banner.secondaryLabel && (
                   <Link
                     href={banner.secondaryHref || "/"}
-                    className="group inline-flex items-center gap-2 rounded-pill border border-brand-300 bg-white/70 px-7 py-3.5 text-[15px] font-bold text-brand-600 transition-all hover:border-brand-400 hover:bg-white"
+                    className="group inline-flex items-center gap-1.5 rounded-pill border border-brand-300 bg-white/70 px-5 py-2.5 text-[13px] font-bold text-brand-600 transition-all hover:border-brand-400 hover:bg-white sm:gap-2 sm:px-7 sm:py-3.5 sm:text-[15px]"
                   >
                     {banner.secondaryLabel}
                     <Icon
