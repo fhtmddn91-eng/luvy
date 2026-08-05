@@ -94,6 +94,17 @@ export function HeroBanner({
           />
         </div>
 
+        {/*
+         * 카피 뒤에 깔리는 흰 그라데이션.
+         * 배경 사진의 왼쪽 위가 비어 있지 않으면(물건이 가운데까지 차 있는 컷)
+         * 제목 두 번째 줄이 사진에 묻혀 안 읽힌다 → 글자가 놓이는 쪽만 덮는다.
+         * 모바일은 카피가 위쪽, 데스크톱은 왼쪽에 있으므로 방향을 달리한다.
+         */}
+        <div
+          aria-hidden
+          className="absolute inset-0 bg-gradient-to-b from-white/85 via-white/40 to-transparent lg:bg-gradient-to-r lg:from-white/85 lg:via-white/35 lg:to-transparent"
+        />
+
         {/* Copy overlaid on the empty (left / top) area of the image */}
         <div className="relative z-10 mx-auto max-w-[1280px] px-6">
           {/*

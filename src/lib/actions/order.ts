@@ -14,6 +14,7 @@ import {
   formatCancelReason,
   orderStatusLabel,
 } from "@/lib/orderStatus";
+import { isSelectableMethod } from "@/lib/paymentMethods";
 
 export type OrderState = { error?: string };
 
@@ -27,6 +28,15 @@ function parseShipping(formData: FormData) {
 }
 
 /**
+ * 결제 수단. 화면에서 '준비 중'을 못 고르게 막아뒀지만, 폼 값은 조작할 수 있으므로
+ * 서버에서 다시 확인한다 — 연동도 안 된 PG로 주문이 들어오면 대사할 방법이 없다.
+ */
+function parsePaymentMethod(formData: FormData): string | null {
+  const value = String(formData.get("paymentMethod") ?? "").trim();
+  return isSelectableMethod(value) ? value : null;
+}
+
+/**
  * 모의 결제(포트원 미설정) 플로우: 주문을 바로 접수 처리하고 장바구니를 비운다.
  */
 export async function placeOrder(_prev: OrderState, formData: FormData): Promise<OrderState> {
@@ -34,6 +44,11 @@ export async function placeOrder(_prev: OrderState, formData: FormData): Promise
   const s = parseShipping(formData);
   if (!s.recipient || !s.phone || !s.address) {
     return { error: "수령인, 연락처, 주소를 모두 입력해주세요." };
+  }
+
+  const paymentMethod = parsePaymentMethod(formData);
+  if (!paymentMethod) {
+    return { error: "지금 이용할 수 있는 결제 수단을 선택해주세요." };
   }
 
   const draft = await buildOrderDraft(user.id);
@@ -53,6 +68,7 @@ export async function placeOrder(_prev: OrderState, formData: FormData): Promise
           phone: s.phone,
           address: s.address,
           memo: s.memo,
+          paymentMethod,
           subtotal: draft.subtotal,
           shippingFee: draft.shippingFee,
           total: draft.total,

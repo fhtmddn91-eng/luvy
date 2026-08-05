@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import { placeOrder, type OrderState } from "@/lib/actions/order";
 import { AuthField } from "@/components/auth/AuthField";
 import { SubmitButton } from "@/components/auth/SubmitButton";
+import { PaymentMethodPicker } from "@/components/checkout/PaymentMethodPicker";
 
 export function CheckoutForm() {
   const [state, action] = useActionState<OrderState, FormData>(placeOrder, {});
@@ -22,10 +23,11 @@ export function CheckoutForm() {
           placeholder="예) 부재 시 문 앞에 놓아주세요"
         />
       </label>
+      <div className="border-t border-line pt-4">
+        <PaymentMethodPicker />
+      </div>
+
       {state.error && <p className="text-[13px] font-medium text-brand-600">{state.error}</p>}
-      <p className="rounded-xl bg-brand-50 px-4 py-3 text-[12px] text-brand-600">
-        실제 결제(PG) 연동은 데모 범위에서 제외되며, ‘주문 접수’로 처리됩니다.
-      </p>
       <SubmitButton>주문 접수하기</SubmitButton>
     </form>
   );

@@ -7,6 +7,7 @@ import { FULFILLMENT_STATUSES, orderStatusLabel, orderStatusTone } from "@/lib/o
 import { setOrderStatus, cancelOrderPayment } from "@/lib/actions/admin-orders";
 import { courierName, hasShipment, trackingUrl } from "@/lib/shipping";
 import { ShippingForm } from "@/components/admin/ShippingForm";
+import { paymentMethodLabel } from "@/lib/paymentMethods";
 
 const dateFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(d);
@@ -139,6 +140,18 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
                 <div className="flex justify-between">
                   <dt className="text-muted">금액</dt>
                   <dd className="font-semibold">{won(order.payment.amount)}</dd>
+                </div>
+              </dl>
+            ) : order.paymentMethod ? (
+              // PG 연동 전 주문 — 회원이 주문서에서 고른 수단만 남는다
+              <dl className="space-y-1.5 text-[13px] text-ink-soft">
+                <div className="flex justify-between">
+                  <dt className="text-muted">선택한 수단</dt>
+                  <dd className="font-semibold">{paymentMethodLabel(order.paymentMethod)}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted">금액</dt>
+                  <dd className="font-semibold">{won(order.total)}</dd>
                 </div>
               </dl>
             ) : (

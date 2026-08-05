@@ -146,6 +146,8 @@ model Order {
   phone       String
   address     String
   memo        String?
+  /** 주문 시 고른 결제 수단 (src/lib/paymentMethods.ts PAYMENT_METHODS 의 value) */
+  paymentMethod String    @default("")
   subtotal    Int
   shippingFee Int
   total       Int
