@@ -45,6 +45,12 @@ export default function RootLayout({
   return (
     <html lang="ko">
       <head>
+        {/*
+         * 이 사이트는 밝은 테마 전용이다. 이 선언이 없으면 삼성 인터넷·크롬의
+         * "웹사이트 어둡게" 기능이 흰 배경을 강제로 검게 뒤집어
+         * 검정 로고가 파묻히고 배너 색이 깨진다 (실기기에서 실제 발생).
+         */}
+        <meta name="color-scheme" content="only light" />
         <link
           rel="stylesheet"
           as="style"
