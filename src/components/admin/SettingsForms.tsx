@@ -8,9 +8,11 @@ import {
   updateLogo,
   updateCompanyInfo,
   resetCompanyInfo,
+  updateBankAccount,
   type SettingsFormState,
 } from "@/lib/actions/admin-settings";
 import { COMPANY_FIELDS, type CompanyInfo } from "@/lib/company";
+import { BANK_FIELDS, type BankAccount } from "@/lib/bankAccount";
 import { fieldCls, labelCls, helpCls, errorCls } from "@/components/ui/form";
 import { btnPrimary } from "@/components/ui/Panel";
 
@@ -236,6 +238,38 @@ export function CompanyInfoForm({ current }: { current: CompanyInfo }) {
           기본값으로 되돌리기
         </button>
       </div>
+    </form>
+  );
+}
+
+/**
+ * 무통장입금 계좌. 계좌가 바뀔 때 배포를 기다리지 않도록 설정으로 뺐다.
+ * 저장하면 주문서·주문 완료·주문 상세의 계좌 안내가 한꺼번에 바뀐다.
+ */
+export function BankAccountForm({ current }: { current: BankAccount }) {
+  const [state, formAction] = useActionState<SettingsFormState, FormData>(updateBankAccount, {});
+
+  return (
+    <form action={formAction} className="space-y-3.5">
+      {BANK_FIELDS.map(({ key, label, help }) => (
+        <div key={key}>
+          <label htmlFor={`bank-${key}`} className={labelCls}>
+            {label}
+          </label>
+          <input
+            id={`bank-${key}`}
+            name={key}
+            defaultValue={current[key]}
+            maxLength={100}
+            autoComplete="off"
+            className={fieldCls}
+          />
+          {help && <p className={helpCls}>{help}</p>}
+        </div>
+      ))}
+
+      <Result state={state} okText="저장되었습니다. 주문서와 주문 완료 화면에 바로 반영됩니다." />
+      <SubmitButton label="입금 계좌 저장" />
     </form>
   );
 }

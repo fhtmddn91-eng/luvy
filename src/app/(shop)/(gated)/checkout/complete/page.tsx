@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { won } from "@/lib/format";
+import { getBankAccount } from "@/lib/bankAccountInfo";
+import { formatBankAccount } from "@/lib/bankAccount";
 
 export default async function CheckoutCompletePage({
   searchParams,
@@ -15,6 +17,10 @@ export default async function CheckoutCompletePage({
 
   const order = await db.order.findUnique({ where: { id: orderId }, include: { items: true } });
   if (!order || order.userId !== user.id) notFound();
+
+  // 무통장입금은 여기서 계좌를 못 보면 입금할 방법이 없다 → 완료 화면에 크게 띄운다
+  const bankAccount =
+    order.paymentMethod === "BANK_TRANSFER" ? formatBankAccount(await getBankAccount()) : "";
 
   return (
     <div className="mx-auto max-w-[560px] px-6 py-16 text-center">
@@ -37,6 +43,17 @@ export default async function CheckoutCompletePage({
           <span className="font-bold text-ink">결제 예정 금액</span>
           <span className="text-[18px] font-extrabold text-brand-600">{won(order.total)}</span>
         </div>
+
+        {bankAccount && (
+          <div className="mt-4 rounded-xl bg-brand-50 px-4 py-4">
+            <p className="text-[12px] font-bold text-brand-600">입금 계좌</p>
+            <p className="mt-1 text-[15px] font-extrabold text-ink">{bankAccount}</p>
+            <p className="mt-2 text-[12px] leading-relaxed text-ink-soft">
+              위 계좌로 <strong className="text-ink">{won(order.total)}</strong> 을(를) 입금해주세요.
+              입금이 확인되면 발송이 시작됩니다.
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="mt-8 flex justify-center gap-3">

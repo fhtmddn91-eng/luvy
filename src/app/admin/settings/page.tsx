@@ -6,15 +6,18 @@ import {
   AdminPasswordForm,
   LogoForm,
   CompanyInfoForm,
+  BankAccountForm,
 } from "@/components/admin/SettingsForms";
+import { getBankAccount } from "@/lib/bankAccountInfo";
 import { PageHeader, Panel } from "@/components/ui/Panel";
 
 export default async function AdminSettingsPage() {
   await requireAdmin();
-  const [policy, logo, company] = await Promise.all([
+  const [policy, logo, company, bank] = await Promise.all([
     getShippingPolicy(),
     getLogoUrl(),
     getCompany(),
+    getBankAccount(),
   ]);
 
   return (
@@ -22,7 +25,7 @@ export default async function AdminSettingsPage() {
       <PageHeader
         eyebrow="System"
         title="설정"
-        description="로고 · 사업자 정보 · 배송비 정책 · 관리자 계정"
+        description="로고 · 사업자 정보 · 입금 계좌 · 배송비 정책 · 관리자 계정"
       />
 
       <div className="space-y-4">
@@ -40,6 +43,15 @@ export default async function AdminSettingsPage() {
               비울 수 없습니다.
             </p>
             <CompanyInfoForm current={company} />
+          </Panel>
+        </div>
+
+        <div className="rise rise-3">
+          <Panel title="무통장입금 계좌">
+            <p className="mb-4 text-[12.5px] leading-relaxed text-muted">
+              주문서와 주문 완료 화면의 입금 안내에 그대로 들어갑니다.
+            </p>
+            <BankAccountForm current={bank} />
           </Panel>
         </div>
 

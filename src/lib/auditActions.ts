@@ -33,6 +33,7 @@ export const AUDIT_ACTIONS = {
 
   // 설정·시스템
   SETTING_SHIPPING: "배송비 정책 변경",
+  SETTING_BANK: "입금 계좌 변경",
   NAV_UPDATE: "상단 메뉴 변경",
   BRANDING_UPDATE: "로고 변경",
   HOME_UPDATE: "메인 상품 탭 변경",
@@ -76,7 +77,7 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
     key: "system",
     label: "설정·인증",
     actions: [
-      "SETTING_SHIPPING", "NAV_UPDATE", "BRANDING_UPDATE", "HOME_UPDATE",
+      "SETTING_SHIPPING", "SETTING_BANK", "NAV_UPDATE", "BRANDING_UPDATE", "HOME_UPDATE",
       "COMPANY_UPDATE", "ADMIN_PASSWORD", "LOGIN_BLOCKED",
     ],
   },
@@ -86,6 +87,8 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
 const CRITICAL: AuditAction[] = [
   "ORDER_CANCEL_ADMIN", "ORDER_REFUND_FAILED", "MEMBER_TEMP_PASSWORD",
   "ADMIN_PASSWORD", "PRODUCT_DELETE",
+  // 입금 계좌 바꿔치기는 곧바로 돈이 새는 사고다 — 눈에 띄게
+  "SETTING_BANK",
 ];
 
 export const isCritical = (action: string): boolean =>

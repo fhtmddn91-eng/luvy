@@ -10,7 +10,14 @@ import { PAYMENT_METHODS } from "@/lib/paymentMethods";
  * 생길지 미리 알리되, 골랐다가 결제가 안 되는 사고는 막는다.
  * 선택값은 hidden input 으로 폼에 실려 서버에서 한 번 더 검증된다.
  */
-export function PaymentMethodPicker({ name = "paymentMethod" }: { name?: string }) {
+export function PaymentMethodPicker({
+  name = "paymentMethod",
+  bankAccount,
+}: {
+  name?: string;
+  /** 무통장입금 안내에 띄울 계좌 한 줄. 비어 있으면 계좌 없이 안내만 나간다 */
+  bankAccount?: string;
+}) {
   const first = PAYMENT_METHODS.find((m) => m.ready);
   const [selected, setSelected] = useState(first?.value ?? "");
 
@@ -49,9 +56,19 @@ export function PaymentMethodPicker({ name = "paymentMethod" }: { name?: string 
         })}
       </div>
       {selected === "BANK_TRANSFER" && (
-        <p className="mt-2 rounded-xl bg-brand-50 px-4 py-3 text-[12px] leading-relaxed text-brand-600">
-          주문 접수 후 입금 계좌를 안내해 드립니다. 입금이 확인되면 발송이 시작됩니다.
-        </p>
+        <div className="mt-2 rounded-xl bg-brand-50 px-4 py-3 text-[12px] leading-relaxed text-brand-600">
+          {bankAccount ? (
+            <>
+              <span className="block font-bold text-ink">{bankAccount}</span>
+              <span className="mt-1 block">
+                주문 후 위 계좌로 입금해주세요. 입금이 확인되면 발송이 시작됩니다.
+              </span>
+            </>
+          ) : (
+            // 계좌가 설정에서 비워진 경우 — 없는 계좌를 지어내지 않는다
+            <span>주문 접수 후 입금 계좌를 안내해 드립니다. 입금이 확인되면 발송이 시작됩니다.</span>
+          )}
+        </div>
       )}
     </div>
   );

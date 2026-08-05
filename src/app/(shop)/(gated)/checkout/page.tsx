@@ -7,6 +7,8 @@ import { isPortOneConfigured, PORTONE_STORE_ID, PORTONE_CHANNEL_KEY_KCP } from "
 import { won } from "@/lib/format";
 import { resolveUnitPrice, shippingFor, type Tier } from "@/lib/pricing";
 import { getShippingPolicy } from "@/lib/settings";
+import { getBankAccount } from "@/lib/bankAccountInfo";
+import { formatBankAccount } from "@/lib/bankAccount";
 
 export default async function CheckoutPage() {
   const user = await requireApprovedUser();
@@ -36,7 +38,7 @@ export default async function CheckoutPage() {
             customerEmail={user.email}
           />
         ) : (
-          <CheckoutForm />
+          <CheckoutForm bankAccount={formatBankAccount(await getBankAccount())} />
         )}
         <div className="rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-soft)]">
           <h2 className="text-[16px] font-bold text-ink">주문 상품</h2>

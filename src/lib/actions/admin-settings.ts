@@ -9,6 +9,8 @@ import { saveImageUpload, deleteImageUpload } from "@/lib/storage";
 import { audit } from "@/lib/audit";
 import { COMPANY_FIELDS } from "@/lib/company";
 import { saveCompany, resetCompany } from "@/lib/companyInfo";
+import { BANK_FIELDS } from "@/lib/bankAccount";
+import { saveBankAccount } from "@/lib/bankAccountInfo";
 
 export type SettingsFormState = { error?: string; ok?: boolean };
 
@@ -163,4 +165,35 @@ export async function resetCompanyInfo(): Promise<void> {
   });
   revalidatePath("/", "layout");
   revalidatePath("/admin/settings");
+}
+
+/**
+ * 무통장입금 계좌. 계좌가 바뀔 때 배포 없이 여기서 고친다.
+ * 주문서·주문 완료·주문 상세 안내가 전부 이 값을 본다.
+ */
+export async function updateBankAccount(
+  _prev: SettingsFormState,
+  formData: FormData,
+): Promise<SettingsFormState> {
+  await requireAdmin();
+
+  const values: Record<string, string> = {};
+  for (const { key } of BANK_FIELDS) values[key] = String(formData.get(key) ?? "");
+
+  // 셋 중 하나만 비어도 "하나은행 (예금주: )" 같은 반쪽 안내가 나간다 → 전부 필수
+  for (const { key, label } of BANK_FIELDS) {
+    if (values[key].trim() === "") return { error: `${label}을(를) 입력해주세요.` };
+  }
+
+  await saveBankAccount(values);
+  await audit({
+    action: "SETTING_BANK",
+    target: "setting",
+    targetId: "bank",
+    summary: `입금 계좌 변경 — ${values.bank} ${values.number} (${values.holder})`,
+  });
+  // 주문서·완료·주문 상세가 이 값을 쓴다
+  revalidatePath("/", "layout");
+  revalidatePath("/admin/settings");
+  return { ok: true };
 }

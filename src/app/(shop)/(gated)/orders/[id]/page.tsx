@@ -8,6 +8,9 @@ import { courierName, hasShipment, trackingUrl } from "@/lib/shipping";
 import { AccountShell } from "@/components/account/AccountShell";
 import { CancelOrderForm } from "@/components/account/CancelOrderForm";
 import { Panel, StatusPill } from "@/components/ui/Panel";
+import { getBankAccount } from "@/lib/bankAccountInfo";
+import { formatBankAccount } from "@/lib/bankAccount";
+import { paymentMethodLabel } from "@/lib/paymentMethods";
 
 const dateTimeFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", {
@@ -28,6 +31,11 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
   const shipped = hasShipment(shipment);
   const trackUrl = trackingUrl(shipment);
   const cancelable = isMemberCancelable(order);
+  // 무통장입금 + 아직 입금 확인 전(접수 상태)일 때만 계좌를 다시 보여준다
+  const bankAccount =
+    order.paymentMethod === "BANK_TRANSFER" && order.status === "RECEIVED"
+      ? formatBankAccount(await getBankAccount())
+      : "";
 
   return (
     <AccountShell
@@ -159,6 +167,12 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                 <dt>배송비</dt>
                 <dd>{order.shippingFee === 0 ? "무료" : won(order.shippingFee)}</dd>
               </div>
+              {order.paymentMethod && (
+                <div className="flex justify-between text-ink-soft">
+                  <dt>결제 수단</dt>
+                  <dd>{paymentMethodLabel(order.paymentMethod)}</dd>
+                </div>
+              )}
               <div className="flex items-baseline justify-between border-t border-hairline pt-3">
                 <dt className="font-bold text-ink-deep">총 결제 금액</dt>
                 <dd className="font-display text-[24px] leading-none tracking-[-0.01em] text-ink-deep">
@@ -167,6 +181,16 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                 </dd>
               </div>
             </dl>
+            {/* 입금 전이면 계좌를 다시 찾아볼 수 있어야 한다 — 발송 이후엔 노이즈라 감춘다 */}
+            {bankAccount && (
+              <div className="mt-3 rounded-xl bg-brand-50 px-4 py-3">
+                <p className="text-[11.5px] font-bold text-brand-600">입금 계좌</p>
+                <p className="mt-0.5 text-[14px] font-extrabold text-ink-deep">{bankAccount}</p>
+                <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-soft">
+                  입금이 확인되면 발송이 시작됩니다.
+                </p>
+              </div>
+            )}
           </Panel>
         </div>
 

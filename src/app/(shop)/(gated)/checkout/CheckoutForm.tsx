@@ -6,7 +6,7 @@ import { AuthField } from "@/components/auth/AuthField";
 import { SubmitButton } from "@/components/auth/SubmitButton";
 import { PaymentMethodPicker } from "@/components/checkout/PaymentMethodPicker";
 
-export function CheckoutForm() {
+export function CheckoutForm({ bankAccount }: { bankAccount: string }) {
   const [state, action] = useActionState<OrderState, FormData>(placeOrder, {});
   return (
     <form action={action} className="space-y-4 rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-soft)]">
@@ -24,7 +24,7 @@ export function CheckoutForm() {
         />
       </label>
       <div className="border-t border-line pt-4">
-        <PaymentMethodPicker />
+        <PaymentMethodPicker bankAccount={bankAccount} />
       </div>
 
       {state.error && <p className="text-[13px] font-medium text-brand-600">{state.error}</p>}
