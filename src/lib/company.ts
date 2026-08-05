@@ -30,7 +30,8 @@ export const COMPANY: CompanyInfo = {
   name: "러비",
   ceo: "채재민",
   businessNumber: "775-62-00820",
-  mailOrderNumber: "",
+  // 2026-07-30 남양주시(별내동) 신고 수리
+  mailOrderNumber: "제2026-별내-0024호",
   address: "경기도 남양주시 별내3로 326, 1동 6층 601-C16호 (별내동, 불암타워)",
   returnAddress: "경기도 남양주시 별내3로 326, 1동 6층 601-C16호 (별내동, 불암타워)",
   tel: "",
