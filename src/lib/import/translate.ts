@@ -9,7 +9,12 @@ import type { ImportDraft } from "./types";
  * (수집 자체는 성공시키고, 관리자가 어드민에서 직접 번역할 수 있게 한다)
  */
 
-const MODEL = "gemini-2.5-flash";
+/**
+ * 모델: 신규 발급 키는 구세대(2.5) 호출이 막혀 있다(404, 실키로 확인).
+ * 3.6-flash 는 무료 등급에서도 동작 확인됨. thinking 은 이 작업(짧은 번역·분류)에
+ * 불필요한 토큰만 태우므로 minimal 로 끈다.
+ */
+const MODEL = "gemini-3.6-flash";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 const TIMEOUT_MS = 60_000;
 
@@ -96,9 +101,11 @@ ${attrs || "(없음)"}
         systemInstruction: { parts: [{ text: SYSTEM }] },
         contents: [{ role: "user", parts: [{ text: userMsg }] }],
         generationConfig: {
-          maxOutputTokens: 1500,
+          maxOutputTokens: 2000,
           // JSON 강제 — 코드펜스·잡담 없이 객체만 받는다
           responseMimeType: "application/json",
+          // thinking 토큰이 maxOutputTokens 를 갉아먹어 JSON 이 잘리는 것 방지
+          thinkingConfig: { thinkingLevel: "minimal" },
         },
       }),
     });
