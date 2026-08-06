@@ -78,12 +78,21 @@ export const BOOKMARKLET_SOURCE = `(function(){
       if (kv.length >= 2 && kv[0].trim() && kv[1].trim()) attrs.push({ label: kv[0].trim(), value: kv.slice(1).join(':').trim() });
     });
 
-    var titleEl = document.querySelector('.title-text, .d-title, h1');
+    // 상품명. 현재 1688 레이아웃은 h1 이 "판매사 이름"이라 h1 을 먼저 잡으면
+    // 회사명이 상품명으로 들어간다(실제 발생). 상품명 전용 클래스 → 문서 제목
+    // (뒤의 "- 阿里巴巴" 꼬리 제거) → h1 순서로 잡는다.
+    function pickTitle(){
+      var el = document.querySelector('.title-text, .d-title, [class*="offer-title"], [class*="title-first"], [class*="subject"]');
+      var t = el ? (el.innerText || '').trim().split('\\n')[0] : '';
+      if (!t) t = (document.title || '').replace(/\\s*[-|–—]\\s*(阿里巴巴|1688).*$/, '').trim();
+      if (!t) { var h = document.querySelector('h1'); t = h ? (h.innerText || '').trim() : ''; }
+      return t;
+    }
     var payload = {
       url: location.href.split('?')[0],
       extracted: {
         offerId: offer,
-        title: titleEl ? (titleEl.innerText || '').trim() : (document.title || '').trim(),
+        title: pickTitle(),
         mainImages: main.slice(0, 12),
         detailImages: detail.slice(0, 60),
         optionImages: option.slice(0, 40),
