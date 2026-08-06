@@ -3,14 +3,14 @@ import { getCategories } from "@/lib/categories";
 import type { ImportDraft } from "./types";
 
 /**
- * 중국어 상품 정보 → 한국어 번역 + 카테고리 자동 분류 (Claude API).
+ * 중국어 상품 정보 → 한국어 번역 + 카테고리 자동 분류 (Gemini API).
  *
- * ANTHROPIC_API_KEY 가 없으면 번역을 건너뛰고 원문을 그대로 둔다.
+ * GEMINI_API_KEY 가 없으면 번역을 건너뛰고 원문을 그대로 둔다.
  * (수집 자체는 성공시키고, 관리자가 어드민에서 직접 번역할 수 있게 한다)
  */
 
-const MODEL = "claude-sonnet-5";
-const API_URL = "https://api.anthropic.com/v1/messages";
+const MODEL = "gemini-2.5-flash";
+const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 const TIMEOUT_MS = 60_000;
 
 export interface Translation {
@@ -23,7 +23,7 @@ export interface Translation {
 }
 
 export function isTranslatorConfigured(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY);
+  return Boolean(process.env.GEMINI_API_KEY);
 }
 
 /** 카테고리 슬러그가 실제 목록에 있는지 검증 (모델 환각 방지) */
@@ -62,8 +62,8 @@ const SYSTEM = `당신은 한국 성인용품 B2B 도매몰의 상품 등록 담
 - 반드시 JSON 객체만 출력합니다. 코드펜스·설명 금지.`;
 
 export async function translateDraft(draft: ImportDraft): Promise<Translation> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return fallback(draft, "ANTHROPIC_API_KEY 미설정");
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return fallback(draft, "GEMINI_API_KEY 미설정");
 
   const categories = await getCategories();
   const catList = categories.map((c) => `${c.slug} = ${c.name}`).join("\n");
@@ -89,14 +89,17 @@ ${attrs || "(없음)"}
       signal: ctrl.signal,
       headers: {
         "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
+        // 키는 URL 쿼리가 아니라 헤더로 — 로그·프록시에 키가 남지 않게
+        "x-goog-api-key": apiKey,
       },
       body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 1500,
-        system: SYSTEM,
-        messages: [{ role: "user", content: userMsg }],
+        systemInstruction: { parts: [{ text: SYSTEM }] },
+        contents: [{ role: "user", parts: [{ text: userMsg }] }],
+        generationConfig: {
+          maxOutputTokens: 1500,
+          // JSON 강제 — 코드펜스·잡담 없이 객체만 받는다
+          responseMimeType: "application/json",
+        },
       }),
     });
 
@@ -105,8 +108,13 @@ ${attrs || "(없음)"}
       return fallback(draft, `번역 API 오류 ${res.status}${body ? `: ${body.slice(0, 160)}` : ""}`);
     }
 
-    const json = (await res.json()) as { content?: { type: string; text?: string }[] };
-    const text = (json.content ?? []).find((c) => c.type === "text")?.text?.trim() ?? "";
+    const json = (await res.json()) as {
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    const text = (json.candidates?.[0]?.content?.parts ?? [])
+      .map((p) => p.text ?? "")
+      .join("")
+      .trim();
     // 모델이 코드펜스를 붙이는 경우를 대비해 JSON 본문만 추출
     const jsonText = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
     const m = jsonText.match(/\{[\s\S]*\}/);

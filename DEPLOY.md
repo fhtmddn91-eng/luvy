@@ -52,7 +52,7 @@ Railway 프로젝트에서 이 GitHub 저장소를 소스로 연결합니다. `r
 | `AUTH_SECRET` | 아래 명령으로 생성한 랜덤 문자열 | ✅ (없으면 앱이 시작되지 않음) |
 | `ADMIN_ID` | 관리자 로그인 아이디 (예: `luvyb2b`) | 관리자 자동 생성 시 |
 | `ADMIN_PW` | 관리자 비밀번호 | 관리자 자동 생성 시 |
-| `ANTHROPIC_API_KEY` | Claude API 키 | 1688 수집 시 AI 번역·카테고리 자동분류를 쓸 때만 |
+| `GEMINI_API_KEY` | Gemini API 키 | 1688 수집 시 AI 번역·카테고리 자동분류를 쓸 때만 |
 | `PORTONE_STORE_ID` | 포트원 상점코드 | 결제 켤 때만 |
 | `PORTONE_CHANNEL_KEY_KCP` | KCP 채널 키 | 결제 켤 때만 |
 | `PORTONE_API_SECRET` | 포트원 V2 API Secret | 결제 켤 때만 |

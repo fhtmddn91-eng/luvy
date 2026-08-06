@@ -45,7 +45,7 @@ export default async function AdminImportPage() {
         <div className="rise mb-4 border border-brand-500 bg-brand-50 px-5 py-4 text-[13px]">
           <p className="font-bold text-brand-700">AI 번역이 꺼져 있습니다</p>
           <p className="mt-1.5 text-ink-soft">
-            환경변수 <code className="bg-white px-1">ANTHROPIC_API_KEY</code> 를 설정하면 상품명·설명
+            환경변수 <code className="bg-white px-1">GEMINI_API_KEY</code> 를 설정하면 상품명·설명
             중→한 번역과 카테고리 자동 분류가 동작합니다. 지금은 수집은 되지만 원문(중국어)이 그대로
             들어갑니다.
           </p>
