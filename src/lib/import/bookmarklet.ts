@@ -70,12 +70,38 @@ export const BOOKMARKLET_SOURCE = `(function(){
         if (minQty > 0 && price > 0) tiers.push({ minQty: minQty, price: price });
       }
     });
+    // 수량 구간 표가 없는 레이아웃(SKU별 단가): 화면의 ¥ 가격을 모아
+    // 최저~최고를 참고가로 넘긴다. "¥ 1 .28" 처럼 공백이 끼는 표기도 흡수.
+    if (tiers.length === 0) {
+      var prices = [];
+      document.querySelectorAll('.price-info, [class*="item-price"], [class*="price-stock"], [class*="price-text"]').forEach(function(el){
+        var m = (el.innerText || '').replace(/\\s+/g, '').match(/[¥￥](\\d+(?:\\.\\d+)?)/);
+        if (m) { var v = parseFloat(m[1]); if (v > 0 && v < 1000000) prices.push(v); }
+      });
+      if (prices.length) {
+        tiers.push({ minQty: 1, price: Math.min.apply(null, prices) });
+        var hi = Math.max.apply(null, prices);
+        if (hi > Math.min.apply(null, prices)) tiers.push({ minQty: 1, price: hi });
+      }
+    }
 
     var attrs = [];
+    function addAttr(k, v){
+      k = (k || '').trim(); v = (v || '').trim();
+      if (!k || !v || k.length > 30 || v.length > 150) return;
+      for (var i = 0; i < attrs.length; i++) if (attrs[i].label === k) return;
+      attrs.push({ label: k, value: v });
+    }
+    // 현재 레이아웃: ant-descriptions 표 (라벨 셀/값 셀이 번갈아 나온다)
+    document.querySelectorAll('.ant-descriptions-row').forEach(function(row){
+      var cells = row.querySelectorAll('th,td,[class*="item-label"],[class*="item-content"]');
+      for (var i = 0; i + 1 < cells.length; i += 2) addAttr(cells[i].innerText, cells[i + 1].innerText);
+    });
+    // 구 레이아웃 폴백
     document.querySelectorAll('.obj-content .offer-attr-list li, [class*="attribute"] li, .od-pc-attribute-item').forEach(function(li){
       var t = (li.innerText || '').trim();
       var kv = t.split(/[:：]/);
-      if (kv.length >= 2 && kv[0].trim() && kv[1].trim()) attrs.push({ label: kv[0].trim(), value: kv.slice(1).join(':').trim() });
+      if (kv.length >= 2) addAttr(kv[0], kv.slice(1).join(':'));
     });
 
     // 상품명. 현재 1688 레이아웃은 h1 이 "판매사 이름"이라 h1 을 먼저 잡으면
@@ -119,7 +145,21 @@ export const BOOKMARKLET_SOURCE = `(function(){
   }
 })();`;
 
-/** 북마크 주소창에 넣을 javascript: URL */
+/**
+ * 북마크 주소창에 넣을 javascript: URL — 추출 코드를 직접 박제하지 않고,
+ * 클릭할 때마다 서버(/bookmarklet.js)에서 **최신 추출 코드를 내려받아 실행**하는
+ * 로더다. 북마크는 등록 시점 코드가 박제되므로, 예전처럼 소스를 통째로 넣으면
+ * 추출 로직을 고칠 때마다 운영자가 버튼을 다시 드래그해야 했다(실제로 겪음).
+ * 이 방식이면 배포만 하면 등록해 둔 북마크가 항상 최신으로 동작한다.
+ * (1688 상세페이지는 CSP 가 없어 외부 스크립트 주입이 허용됨 — 실페이지 확인)
+ */
 export function bookmarkletHref(): string {
-  return "javascript:" + encodeURIComponent(BOOKMARKLET_SOURCE);
+  const origin = process.env.NEXT_PUBLIC_SITE_URL ?? "https://luvyb2b.com";
+  const loader = `(function(){
+    var s = document.createElement('script');
+    s.src = '${origin}/bookmarklet.js?ts=' + Date.now();
+    s.onerror = function(){ alert('LUVY 수집 스크립트를 불러오지 못했습니다.\\n네트워크 연결을 확인한 뒤 다시 눌러주세요.'); };
+    (document.body || document.documentElement).appendChild(s);
+  })();`;
+  return "javascript:" + encodeURIComponent(loader);
 }
