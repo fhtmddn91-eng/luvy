@@ -34,6 +34,20 @@ describe("normalizeImageUrl — SSRF 차단", () => {
     expect(normalizeImageUrl("https://alicdn.com.evil.io/a.jpg")).toBeNull();
   });
 
+  it("플랫폼 로고·아이콘(-tps-소형)은 상품 이미지가 아니므로 버린다", () => {
+    // 타오바오·JD 로고가 상품 이미지로 등록된 사고(실제 발생)의 재발 방지
+    expect(
+      normalizeImageUrl("https://img.alicdn.com/imgextra/i4/O1CN01a_!!600-2-tps-160-160.png"),
+    ).toBeNull();
+    expect(
+      normalizeImageUrl("https://img.alicdn.com/imgextra/i1/O1CN01b_!!600-2-tps-98-96.png"),
+    ).toBeNull();
+    // 큰 tps 이미지(실제 콘텐츠 이미지)는 허용
+    expect(
+      normalizeImageUrl("https://img.alicdn.com/imgextra/i1/O1CN01c_!!600-2-tps-800-1200.jpg"),
+    ).toBe("https://img.alicdn.com/imgextra/i1/O1CN01c_!!600-2-tps-800-1200.jpg");
+  });
+
   it("내부망·비HTTPS·비이미지를 거부한다", () => {
     expect(normalizeImageUrl("http://169.254.169.254/latest/meta-data")).toBeNull();
     expect(normalizeImageUrl("https://cbu01.alicdn.com/script.js")).toBeNull();

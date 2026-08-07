@@ -24,4 +24,22 @@ describe("bookmarklet", () => {
     // 새 레이아웃 속성 표 추출
     expect(BOOKMARKLET_SOURCE).toContain("ant-descriptions-row");
   });
+
+  it("구조화 데이터(window.context) 우선 추출이 들어 있다", () => {
+    // 대표이미지·상품명·가격·속성은 페이지 전역 데이터에서 먼저 읽는다
+    expect(BOOKMARKLET_SOURCE).toContain("offerImgList");
+    expect(BOOKMARKLET_SOURCE).toContain("offerDetail");
+    expect(BOOKMARKLET_SOURCE).toContain("featureAttributes");
+    expect(BOOKMARKLET_SOURCE).toContain("skuModel");
+    // 상세이미지는 detailUrl JSONP 로 전체를 받는다 (lazy-load 누락 방지)
+    expect(BOOKMARKLET_SOURCE).toContain("detailUrl");
+    expect(BOOKMARKLET_SOURCE).toContain("offer_details");
+  });
+
+  it("DOM 폴백에서 플랫폼 로고·아이콘을 걸러낸다", () => {
+    // 타오바오·JD 로고가 수집된 사고(실제 발생)의 재발 방지
+    expect(BOOKMARKLET_SOURCE).toContain("-tps-");
+    expect(BOOKMARKLET_SOURCE).toContain("consign");
+    expect(BOOKMARKLET_SOURCE).toContain("shop-navigation");
+  });
 });

@@ -162,6 +162,13 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
       },
     });
 
+    // 부분 실패(번역 안 됨·이미지 일부 실패)의 사유를 기록에 남긴다 —
+    // 안 남기면 "왜 번역이 안 됐지?"를 나중에 추적할 방법이 없다(실제 겪음)
+    const partialIssues = [
+      translation.translated ? null : `번역 실패: ${translation.note ?? "사유 미상"}`,
+      failures.length > 0 ? `일부 이미지 실패 ${failures.length}건` : null,
+    ].filter(Boolean);
+
     await db.importJob.update({
       where: { id: job.id },
       data: {
@@ -170,7 +177,7 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
         imageCount:
           mainReport.images.length + detailReport.images.length + optionReport.images.length,
         productId: product.id,
-        error: failures.length > 0 ? `일부 이미지 실패 ${failures.length}건` : null,
+        error: partialIssues.length > 0 ? partialIssues.join(" / ").slice(0, 500) : null,
       },
     });
 

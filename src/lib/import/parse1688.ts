@@ -15,6 +15,14 @@ const ALLOWED_IMAGE_HOST = /(^|\.)alicdn\.com$/i;
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp)$/i;
 
 /**
+ * 알리 CDN UI 에셋(플랫폼 로고·아이콘)은 URL 에 "-tps-가로-세로" 크기가 박혀 있다.
+ * 북마클릿이 페이지 전체 폴백으로 돌 때 타오바오·JD 로고까지 상품 이미지로
+ * 딸려온 사고(실제 발생)의 서버 측 2중 방어 — 한 변이라도 200px 미만이면 버린다.
+ * 실제 상품 이미지(img/ibank/...)에는 이 패턴이 없다.
+ */
+const SMALL_TPS_ASSET = /-tps-(\d+)-(\d+)\.(?:jpe?g|png|gif|webp)$/i;
+
+/**
  * 1688 이미지 URL은 뒤에 리사이즈 접미사가 붙는다.
  *   O1CN01.jpg_220x220.jpg   → O1CN01.jpg
  *   O1CN01.gif_.webp         → O1CN01.gif   ← GIF가 정적 webp로 바뀌는 것을 되돌림
@@ -43,6 +51,8 @@ export function normalizeImageUrl(raw: unknown): string | null {
 
   const original = toOriginalImageUrl(u.origin + u.pathname);
   if (!IMAGE_EXT.test(original)) return null;
+  const tps = original.match(SMALL_TPS_ASSET);
+  if (tps && (Number(tps[1]) < 200 || Number(tps[2]) < 200)) return null;
   return original;
 }
 
