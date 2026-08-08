@@ -2,7 +2,7 @@ import "server-only";
 import path from "node:path";
 import crypto from "node:crypto";
 import sharp from "sharp";
-import { createCanvas, loadImage, GlobalFonts, type SKRSContext2D } from "@napi-rs/canvas";
+import { createCanvas, loadImage, GlobalFonts, type SKRSContext2D, type Canvas } from "@napi-rs/canvas";
 
 /**
  * 상품 이미지 속 중국어 → 한국어 번역.
@@ -487,6 +487,87 @@ ${tlist}
 - 이미지의 가로세로 비율과 구도를 원본 그대로 유지`;
 }
 
+/**
+ * 재생성본에서 "글자 영역만" 오려 원본에 합성한다.
+ *
+ * 재생성은 그림 전체를 다시 그리므로 글자 밖 배경에도 미세한 재생성
+ * 잡음이 남는다(실사용 지적: "글자 뒤가 지글지글"). 글자 박스(여유 포함)
+ * 안쪽만 재생성본을 쓰고 나머지는 원본 픽셀을 그대로 두면, 원본 보존과
+ * 자연스러운 글자를 동시에 얻는다. 경계는 페더링으로 티가 안 나게 섞는다.
+ */
+export function compositeParams(bw: number, bh: number): { padX: number; padY: number; feather: number } {
+  // 한국어가 원문보다 길어질 수 있어 가로 여유를 넉넉히,
+  // 재생성 글자가 원문 박스보다 위아래로 밀릴 수 있어 세로 여유는 더 넉넉히
+  // (여유가 모자라면 글자 끝이 페더링에 잘려 희미해진다 — 실측)
+  const padX = Math.max(18, bw * 0.25);
+  const padY = Math.max(16, bh * 0.5);
+  return { padX, padY, feather: Math.min(12, Math.max(6, Math.min(padX, padY) * 0.5)) };
+}
+
+async function compositeTextRegions(
+  originalData: Buffer,
+  regenData: Buffer,
+  boxes: OcrBox[],
+  W: number,
+  H: number,
+): Promise<Canvas> {
+  const [orig, regen] = await Promise.all([loadImage(originalData), loadImage(regenData)]);
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(orig, 0, 0, W, H);
+
+  const regenCanvas = createCanvas(W, H);
+  const rctx = regenCanvas.getContext("2d");
+  rctx.drawImage(regen, 0, 0, W, H);
+  const rd = rctx.getImageData(0, 0, W, H).data;
+
+  const out = ctx.getImageData(0, 0, W, H);
+  const od = out.data;
+
+  for (const it of boxes) {
+    if (!it.ko.trim()) continue;
+    const b = toPixelBox(it.box, W, H);
+    const { padX, padY, feather } = compositeParams(b.x1 - b.x0, b.y1 - b.y0);
+    const x0 = Math.max(0, Math.round(b.x0 - padX));
+    const y0 = Math.max(0, Math.round(b.y0 - padY));
+    const x1 = Math.min(W, Math.round(b.x1 + padX));
+    const y1 = Math.min(H, Math.round(b.y1 + padY));
+
+    for (let y = y0; y < y1; y++) {
+      // 가장자리로 갈수록 원본 비중을 높인다 (경계 티 제거)
+      const ay = Math.min(1, Math.min(y - y0, y1 - 1 - y) / feather);
+      for (let x = x0; x < x1; x++) {
+        const ax = Math.min(1, Math.min(x - x0, x1 - 1 - x) / feather);
+        const a = Math.max(0, Math.min(ay, ax));
+        if (a <= 0) continue;
+        const i = (y * W + x) * 4;
+        od[i] = Math.round(rd[i] * a + od[i] * (1 - a));
+        od[i + 1] = Math.round(rd[i + 1] * a + od[i + 1] * (1 - a));
+        od[i + 2] = Math.round(rd[i + 2] * a + od[i + 2] * (1 - a));
+      }
+    }
+  }
+  ctx.putImageData(out, 0, 0);
+  return canvas;
+}
+
+/** 원본 + 재생성본 + 좌표로 최종 합성본을 만든다 (기존 번역본 소급 보정에도 사용) */
+export async function compositeTranslatedStill(
+  originalData: Buffer,
+  regenData: Buffer,
+  mime: string,
+  boxes: OcrBox[],
+): Promise<{ data: Buffer; mime: string }> {
+  ensureFonts();
+  const meta = await sharp(originalData).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (!W || !H) throw new Error("이미지 크기를 읽을 수 없습니다.");
+  const canvas = await compositeTextRegions(originalData, regenData, boxes, W, H);
+  if (mime === "image/png") return { data: canvas.toBuffer("image/png"), mime };
+  return { data: canvas.toBuffer("image/jpeg", 95), mime: "image/jpeg" };
+}
+
 async function regenerateStill(
   data: Buffer,
   mime: string,
@@ -520,12 +601,10 @@ async function regenerateStill(
     throw new Error(`재생성 비율 불일치 (${W}x${H} → ${ow}x${oh})`);
   }
 
-  // 원본 크기로 정확히 복원 (모델 출력은 보통 더 큰 해상도)
-  const resized = sharp(out).resize(W, H, { fit: "fill" });
-  if (mime === "image/png") {
-    return { data: await resized.png().toBuffer(), mime: "image/png" };
-  }
-  return { data: await resized.jpeg({ quality: 90 }).toBuffer(), mime: "image/jpeg" };
+  // 원본 크기로 복원한 뒤, 글자 영역만 원본에 합성한다 —
+  // 재생성본을 통째로 쓰면 글자 밖 배경에 재생성 잡음이 남는다(실사용 지적)
+  const resizedRegen = await sharp(out).resize(W, H, { fit: "fill" }).png().toBuffer();
+  return compositeTranslatedStill(data, resizedRegen, mime, boxes);
 }
 
 /** 번역 이미지를 만든다. 문구 수정 후 재생성에도 그대로 쓴다. */
