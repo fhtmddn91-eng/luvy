@@ -42,6 +42,9 @@ const nextConfig = {
   outputFileTracingRoot: __dirname,
   // 서버 종류를 알려주는 헤더 제거
   poweredByHeader: false,
+  // 네이티브 바이너리(.node)는 웹팩이 번들할 수 없다 — 이미지 번역용
+  // (sharp 는 Next 기본 외부 목록에 이미 있음)
+  serverExternalPackages: ["@napi-rs/canvas"],
   experimental: {
     serverActions: {
       /**

@@ -6,9 +6,13 @@ import {
   addProductAssets,
   deleteProductAsset,
   moveProductAsset,
+  translateProductAsset,
+  updateAssetTranslation,
+  revertAssetTranslation,
   type AssetFormState,
+  type TranslateState,
 } from "@/lib/actions/admin-assets";
-import { errorCls, helpCls, labelCls } from "@/components/ui/form";
+import { errorCls, helpCls, labelCls, fieldCls } from "@/components/ui/form";
 import { btnPrimary } from "@/components/ui/Panel";
 
 export interface AssetRow {
@@ -16,6 +20,10 @@ export interface AssetRow {
   kind: string;
   url: string;
   bytes: number;
+  /** 번역 전 원본 — 있으면 "번역된 이미지" */
+  originalUrl?: string | null;
+  /** OCR 문구 JSON — 문구 수정 편집기의 데이터 */
+  ocrData?: string | null;
 }
 
 const kb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
@@ -28,10 +36,65 @@ function UploadButton({ pending }: { pending: boolean }) {
   );
 }
 
+/** 번역된 이미지의 문구별 수정 편집기 — 저장하면 원본에서 다시 렌더된다 */
+function TranslationEditor({ asset, onClose }: { asset: AssetRow; onClose: () => void }) {
+  const bound = updateAssetTranslation.bind(null, asset.id);
+  const [state, formAction, pending] = useActionState<TranslateState, FormData>(bound, {});
+
+  let items: { zh: string; ko: string }[] = [];
+  try {
+    items = JSON.parse(asset.ocrData ?? "[]") as { zh: string; ko: string }[];
+  } catch {
+    items = [];
+  }
+
+  useEffect(() => {
+    if (state.ok) onClose();
+  }, [state.ok, onClose]);
+
+  return (
+    <div className="mt-4 border border-ink-deep bg-white p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-[13px] font-bold text-ink-deep">번역 문구 수정</p>
+          <p className={helpCls}>
+            고친 뒤 저장하면 원본 이미지에서 새로 만들어집니다. 문구를 비우면 그 항목은
+            번역하지 않고 원문 그대로 둡니다.
+          </p>
+        </div>
+        <button type="button" onClick={onClose} className="text-[12px] font-bold text-muted hover:text-ink-deep">
+          닫기 ✕
+        </button>
+      </div>
+
+      <div className="mt-3 grid gap-4 lg:grid-cols-[240px_1fr]">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={asset.url} alt="번역된 이미지" className="w-full border border-hairline bg-canvas object-contain" />
+
+        <form action={formAction} className="space-y-2">
+          {items.map((it, i) => (
+            <div key={i} className="grid gap-1 sm:grid-cols-2 sm:gap-2">
+              <p className="truncate self-center text-[12px] text-muted" title={it.zh}>
+                {it.zh}
+              </p>
+              <input name={`ko-${i}`} defaultValue={it.ko} className={`${fieldCls} h-10 text-[13px]`} />
+            </div>
+          ))}
+          {state.error && <p className={errorCls}>{state.error}</p>}
+          <button type="submit" disabled={pending} className={btnPrimary}>
+            {pending ? "다시 만드는 중…" : "저장하고 다시 만들기"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 /**
  * 상세페이지 이미지/GIF 관리.
  * 여기 올린 이미지는 상품 상세 하단에 순서대로 이어 붙어 렌더되고,
  * 회원의 '판매자료 다운로드' 목록에도 함께 나온다.
+ * 이미지 속 중국어는 골라서 한국어로 번역할 수 있다 (원본 보존, 문구 수정 가능).
  */
 export function ProductAssetsManager({
   productId,
@@ -46,15 +109,46 @@ export function ProductAssetsManager({
   // 몇 장 골랐는지 즉시 보여준다 — "첨부가 됐는지" 확인용
   const [picked, setPicked] = useState(0);
 
-  // form action={} 대신 직접 dispatch — React 19는 <form action> 제출이 끝나면
-  // 폼을 자동 리셋해서, 한 장이라도 실패하면 고른 파일이 전부 사라진다.
-  const submit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-    startTransition(() => formAction(fd));
+  // 번역 대상 선택 + 진행 상태
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [trErrors, setTrErrors] = useState<string[]>([]);
+  const [editing, setEditing] = useState<string | null>(null);
+
+  const toggle = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
-  // 성공했을 때만 선택을 비운다 (실패 시엔 남겨서 바로 재시도 가능)
+  // 순차 실행 — 한 번에 몰아 보내면 OCR API 한도(분당 요청)에 걸린다
+  const runTranslate = async () => {
+    const ids = assets.filter((a) => selected.has(a.id)).map((a) => a.id);
+    if (ids.length === 0) return;
+    setTrErrors([]);
+    setProgress({ done: 0, total: ids.length });
+    const errs: string[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      const idx = assets.findIndex((a) => a.id === ids[i]);
+      try {
+        const r = await translateProductAsset(ids[i]);
+        if (r.error) errs.push(`${idx + 1}번: ${r.error}`);
+      } catch {
+        errs.push(`${idx + 1}번: 요청 실패 (네트워크)`);
+      }
+      setProgress({ done: i + 1, total: ids.length });
+    }
+    setTrErrors(errs);
+    setProgress(null);
+    setSelected(new Set());
+  };
+
+  const editingAsset = assets.find((a) => a.id === editing && a.ocrData) ?? null;
+
+  // 성공했을 때만 파일 선택을 비운다 (실패 시엔 남겨서 바로 재시도 가능)
   useEffect(() => {
     if (state.ok !== undefined && !state.error && fileRef.current) {
       fileRef.current.value = "";
@@ -69,42 +163,130 @@ export function ProductAssetsManager({
           아직 상세 이미지가 없습니다. 아래에서 올리면 상품 상세 하단에 순서대로 표시됩니다.
         </p>
       ) : (
-        <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
-          {assets.map((a, i) => (
-            <li key={a.id} className="border border-hairline bg-white p-1.5">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={a.url}
-                alt={`상세 이미지 ${i + 1}`}
-                loading="lazy"
-                className="aspect-square w-full bg-canvas object-contain"
-              />
-              <div className="mt-1 flex items-center justify-between text-[10px] text-muted">
-                <span className="font-bold">
-                  {i + 1}
-                  {a.kind === "GIF" && <span className="ml-1 bg-ink-deep px-1 py-px font-extrabold text-white">GIF</span>}
-                </span>
-                <span>{kb(a.bytes)}</span>
-              </div>
-              <div className="mt-1 flex items-center justify-between text-[11px]">
-                <span className="flex gap-1">
-                  <form action={moveProductAsset.bind(null, a.id, "up")}>
-                    <button type="submit" disabled={i === 0} aria-label="앞으로" className="px-1 text-muted hover:text-ink-deep disabled:opacity-25">◀</button>
+        <>
+          {/* 번역 도구줄 */}
+          <div className="mb-3 flex flex-wrap items-center gap-3 border border-hairline bg-canvas px-4 py-3">
+            <p className="text-[12px] text-ink-soft">
+              이미지를 체크한 뒤 번역을 누르면 이미지 속 중국어가 한국어로 바뀝니다. 원본은
+              보존되어 언제든 복원할 수 있습니다.
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={runTranslate}
+                disabled={selected.size === 0 || progress !== null}
+                className={btnPrimary}
+              >
+                {progress
+                  ? `번역 중… ${progress.done}/${progress.total}`
+                  : `선택한 ${selected.size}장 한국어로 번역`}
+              </button>
+              {selected.size > 0 && !progress && (
+                <button
+                  type="button"
+                  onClick={() => setSelected(new Set())}
+                  className="text-[12px] font-bold text-muted hover:text-ink-deep"
+                >
+                  선택 해제
+                </button>
+              )}
+            </div>
+            {progress && (
+              <p className="text-[12px] text-muted">
+                장당 10~30초 걸립니다. 화면을 닫지 말고 기다려주세요.
+              </p>
+            )}
+          </div>
+          {trErrors.length > 0 && (
+            <div className="mb-3 border border-brand-500 bg-brand-50 px-4 py-3 text-[12px] text-brand-700">
+              {trErrors.map((e) => (
+                <p key={e}>{e}</p>
+              ))}
+            </div>
+          )}
+
+          <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
+            {assets.map((a, i) => (
+              <li
+                key={a.id}
+                className={`border bg-white p-1.5 ${selected.has(a.id) ? "border-ink-deep" : "border-hairline"}`}
+              >
+                <label className="relative block cursor-pointer">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={a.url}
+                    alt={`상세 이미지 ${i + 1}`}
+                    loading="lazy"
+                    className="aspect-square w-full bg-canvas object-contain"
+                  />
+                  <input
+                    type="checkbox"
+                    checked={selected.has(a.id)}
+                    onChange={() => toggle(a.id)}
+                    disabled={progress !== null}
+                    aria-label={`${i + 1}번 이미지 번역 대상으로 선택`}
+                    className="absolute left-1 top-1 size-4 accent-ink-deep"
+                  />
+                  {a.originalUrl && (
+                    <span className="absolute right-1 top-1 bg-ink-deep px-1.5 py-0.5 text-[9px] font-extrabold tracking-wide text-white">
+                      한글
+                    </span>
+                  )}
+                </label>
+                <div className="mt-1 flex items-center justify-between text-[10px] text-muted">
+                  <span className="font-bold">
+                    {i + 1}
+                    {a.kind === "GIF" && <span className="ml-1 bg-ink-deep px-1 py-px font-extrabold text-white">GIF</span>}
+                  </span>
+                  <span>{kb(a.bytes)}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between text-[11px]">
+                  <span className="flex gap-1">
+                    <form action={moveProductAsset.bind(null, a.id, "up")}>
+                      <button type="submit" disabled={i === 0} aria-label="앞으로" className="px-1 text-muted hover:text-ink-deep disabled:opacity-25">◀</button>
+                    </form>
+                    <form action={moveProductAsset.bind(null, a.id, "down")}>
+                      <button type="submit" disabled={i === assets.length - 1} aria-label="뒤로" className="px-1 text-muted hover:text-ink-deep disabled:opacity-25">▶</button>
+                    </form>
+                  </span>
+                  <form action={deleteProductAsset.bind(null, a.id)}>
+                    <button type="submit" className="px-1 font-semibold text-muted hover:text-ink-deep">삭제</button>
                   </form>
-                  <form action={moveProductAsset.bind(null, a.id, "down")}>
-                    <button type="submit" disabled={i === assets.length - 1} aria-label="뒤로" className="px-1 text-muted hover:text-ink-deep disabled:opacity-25">▶</button>
-                  </form>
-                </span>
-                <form action={deleteProductAsset.bind(null, a.id)}>
-                  <button type="submit" className="px-1 font-semibold text-muted hover:text-ink-deep">삭제</button>
-                </form>
-              </div>
-            </li>
-          ))}
-        </ul>
+                </div>
+                {a.originalUrl && (
+                  <div className="mt-1 flex items-center justify-between border-t border-hairline-soft pt-1 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setEditing(editing === a.id ? null : a.id)}
+                      className="px-1 font-semibold text-ink-deep hover:underline"
+                    >
+                      문구 수정
+                    </button>
+                    <form
+                      action={revertAssetTranslation.bind(null, a.id)}
+                      onSubmit={() => startTransition(() => setEditing(null))}
+                    >
+                      <button type="submit" className="px-1 font-semibold text-muted hover:text-ink-deep">
+                        원본 복원
+                      </button>
+                    </form>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          {editingAsset && (
+            <TranslationEditor asset={editingAsset} onClose={() => setEditing(null)} />
+          )}
+        </>
       )}
 
-      <form onSubmit={submit} className="mt-4 space-y-2 border-t border-hairline-soft pt-4">
+      <form onSubmit={(e) => {
+        e.preventDefault();
+        const fd = new FormData(e.currentTarget);
+        startTransition(() => formAction(fd));
+      }} className="mt-4 space-y-2 border-t border-hairline-soft pt-4">
         <label htmlFor="asset-files" className={labelCls}>
           상세 이미지 추가 (여러 장 선택 가능)
         </label>

@@ -54,6 +54,8 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
               kind: a.kind,
               url: a.url,
               bytes: a.bytes,
+              originalUrl: a.originalUrl,
+              ocrData: a.ocrData,
             }))}
           />
         </Panel>

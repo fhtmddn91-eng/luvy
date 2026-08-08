@@ -97,6 +97,12 @@ model ProductAsset {
   createdAt DateTime @default(now())
   product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
 
+  // 이미지 속 중국어 → 한국어 번역 (어드민에서 선택 실행)
+  // 번역하면 url 은 번역본을 가리키고, 원본은 originalUrl 로 보존한다 —
+  // 문구를 고쳐 다시 렌더하거나 원본으로 되돌릴 수 있어야 하기 때문.
+  originalUrl String? // 번역 전 원본 (/uploads/..) — null 이면 미번역
+  ocrData     String? // OCR 결과+번역 문구 JSON — 어드민에서 문구 수정 시 재렌더 근거
+
   @@index([productId])
 }
 

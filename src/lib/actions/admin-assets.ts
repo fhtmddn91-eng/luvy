@@ -1,9 +1,16 @@
 "use server";
 
+import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
-import { saveImageUpload, deleteImageUpload } from "@/lib/storage";
+import {
+  saveImageUpload,
+  saveImageBuffer,
+  deleteImageUpload,
+  readPublicUpload,
+} from "@/lib/storage";
+import { ocrImage, renderTranslatedImage, parseOcrBoxes, type OcrBox } from "@/lib/imageTranslate";
 import { audit } from "@/lib/audit";
 
 export type AssetFormState = { error?: string; ok?: number };
@@ -78,12 +85,162 @@ export async function deleteProductAsset(assetId: string): Promise<void> {
   await db.productAsset.delete({ where: { id: assetId } });
   // /uploads/ 파일도 정리 (1688 수집분 등 다른 경로면 deleteImageUpload 가 무시)
   await deleteImageUpload(asset.url);
+  // 번역된 이미지면 보존해 둔 원본도 함께 정리
+  if (asset.originalUrl && asset.originalUrl !== asset.url) {
+    await deleteImageUpload(asset.originalUrl);
+  }
   await audit({
     action: "ASSET_DELETE",
     target: "product",
     targetId: asset.productId,
     summary: `상세 이미지 1장 삭제 (${asset.kind})`,
     meta: { url: asset.url },
+  });
+  revalidateProduct(asset.productId);
+}
+
+/* ── 이미지 속 중국어 번역 ──────────────────────────────────
+ * 원본은 originalUrl 로 보존하고 url 만 번역본으로 바꾼다.
+ * ocrData(문구 JSON)를 저장해 두므로, 어드민이 문구를 고치면
+ * 원본에서 다시 렌더할 수 있고 언제든 원본으로 복원할 수 있다.
+ */
+
+export type TranslateState = { error?: string; ok?: boolean };
+
+/** 번역/재렌더 공통 마무리 — 새 파일 저장, 옛 번역본 정리, DB 갱신 */
+async function swapTranslatedFile(
+  asset: { id: string; url: string; productId: string },
+  sourceUrl: string,
+  rendered: { data: Buffer; mime: string },
+  boxes: OcrBox[],
+): Promise<TranslateState> {
+  const saved = await saveImageBuffer(rendered.data, rendered.mime, 15 * 1024 * 1024);
+  if (!saved.ok) return { error: `번역본 저장 실패: ${saved.error}` };
+
+  // 이전 번역본 파일 정리 (원본은 남긴다)
+  if (asset.url !== sourceUrl) await deleteImageUpload(asset.url);
+
+  await db.productAsset.update({
+    where: { id: asset.id },
+    data: {
+      url: saved.url,
+      originalUrl: sourceUrl,
+      ocrData: JSON.stringify(boxes),
+      bytes: rendered.data.byteLength,
+    },
+  });
+  // 대표 썸네일이 이 이미지를 쓰고 있으면 함께 교체
+  await db.product.updateMany({
+    where: { id: asset.productId, image: { in: [sourceUrl, asset.url] } },
+    data: { image: saved.url },
+  });
+  return { ok: true };
+}
+
+/** 이미지 속 중국어를 찾아 한국어로 덮어쓴 번역본을 만든다 */
+export async function translateProductAsset(assetId: string): Promise<TranslateState> {
+  await requireAdmin();
+  if (!process.env.GEMINI_API_KEY) return { error: "GEMINI_API_KEY 미설정 — 번역을 쓸 수 없습니다." };
+
+  const asset = await db.productAsset.findUnique({ where: { id: assetId } });
+  if (!asset) return { error: "이미지를 찾을 수 없습니다." };
+
+  const sourceUrl = asset.originalUrl ?? asset.url;
+  const file = await readPublicUpload(path.basename(sourceUrl));
+  if (!file) return { error: "원본 파일을 읽을 수 없습니다." };
+
+  try {
+    const boxes = await ocrImage(file.data, file.contentType);
+    if (boxes.length === 0) return { error: "번역할 중국어 텍스트를 찾지 못했습니다." };
+
+    const rendered = await renderTranslatedImage(file.data, file.contentType, boxes);
+    const result = await swapTranslatedFile(asset, sourceUrl, rendered, boxes);
+    if (result.error) return result;
+
+    await audit({
+      action: "ASSET_TRANSLATE",
+      target: "product",
+      targetId: asset.productId,
+      summary: `이미지 번역 (${asset.kind}, 문구 ${boxes.length}개)`,
+      meta: { assetId, url: sourceUrl },
+    });
+    revalidateProduct(asset.productId);
+    return { ok: true };
+  } catch (e) {
+    return { error: `번역 실패: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** 어드민이 고친 문구로 원본에서 다시 렌더한다. 빈 문구 = 그 항목은 번역 안 함 */
+export async function updateAssetTranslation(
+  assetId: string,
+  _prev: TranslateState,
+  formData: FormData,
+): Promise<TranslateState> {
+  await requireAdmin();
+
+  const asset = await db.productAsset.findUnique({ where: { id: assetId } });
+  if (!asset?.originalUrl || !asset.ocrData) return { error: "번역된 이미지가 아닙니다." };
+
+  const boxes = parseOcrBoxes(JSON.parse(asset.ocrData));
+  // 폼의 ko-{i} 값으로 문구 교체 (비우면 해당 항목 번역 제외 — parseOcrBoxes 가
+  // 빈 ko 를 버리므로 검증 전에 원본값을 들고 있다가 덮어쓴다)
+  const edited = boxes.map((b, i) => {
+    const v = formData.get(`ko-${i}`);
+    return { ...b, ko: typeof v === "string" ? v.trim().slice(0, 200) : b.ko };
+  });
+  if (edited.every((b) => !b.ko)) return { error: "문구가 전부 비어 있습니다. 원본 복원을 쓰세요." };
+
+  const file = await readPublicUpload(path.basename(asset.originalUrl));
+  if (!file) return { error: "원본 파일을 읽을 수 없습니다." };
+
+  try {
+    const rendered = await renderTranslatedImage(file.data, file.contentType, edited);
+    const result = await swapTranslatedFile(asset, asset.originalUrl, rendered, edited);
+    if (result.error) return result;
+
+    await audit({
+      action: "ASSET_TRANSLATE",
+      target: "product",
+      targetId: asset.productId,
+      summary: `이미지 번역 문구 수정 (${asset.kind})`,
+      meta: { assetId },
+    });
+    revalidateProduct(asset.productId);
+    return { ok: true };
+  } catch (e) {
+    return { error: `재렌더 실패: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** 번역을 버리고 원본 이미지로 되돌린다 */
+export async function revertAssetTranslation(assetId: string): Promise<void> {
+  await requireAdmin();
+  const asset = await db.productAsset.findUnique({ where: { id: assetId } });
+  if (!asset?.originalUrl) return;
+
+  const original = await readPublicUpload(path.basename(asset.originalUrl));
+  if (asset.url !== asset.originalUrl) await deleteImageUpload(asset.url);
+
+  await db.productAsset.update({
+    where: { id: assetId },
+    data: {
+      url: asset.originalUrl,
+      originalUrl: null,
+      ocrData: null,
+      bytes: original?.data.byteLength ?? asset.bytes,
+    },
+  });
+  await db.product.updateMany({
+    where: { id: asset.productId, image: asset.url },
+    data: { image: asset.originalUrl },
+  });
+  await audit({
+    action: "ASSET_TRANSLATE",
+    target: "product",
+    targetId: asset.productId,
+    summary: `이미지 번역 원본 복원 (${asset.kind})`,
+    meta: { assetId },
   });
   revalidateProduct(asset.productId);
 }
