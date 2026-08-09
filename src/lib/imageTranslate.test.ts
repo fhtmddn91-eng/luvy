@@ -9,6 +9,9 @@ import {
   toPixelBox,
   hasHanzi,
   mergeDuplicateFrames,
+  isVerticalBox,
+  isSmallOverlayBox,
+  isForeignSource,
 } from "./imageTranslate";
 
 describe("parseOcrBoxes — 모델 응답 검증", () => {
@@ -99,6 +102,37 @@ describe("mergeDuplicateFrames — GIF 중복 프레임 병합", () => {
     const r = mergeDuplicateFrames(["a", "b", "a"], [50, 60, 70]);
     expect(r.keep).toEqual([0, 1, 2]);
     expect(r.delays).toEqual([50, 60, 70]);
+  });
+});
+
+describe("isForeignSource — 번역 대상 원문 판별", () => {
+  it("중국어·일본어만 통과, 영어 워터마크는 제외 (실측: LAYLA VIBRATOR 덮임 방지)", () => {
+    expect(isForeignSource("内外双激黑科技")).toBe(true);
+    expect(isForeignSource("寮では足挟み")).toBe(true);
+    expect(isForeignSource("ために設計され")).toBe(true); // 가나만 있는 줄
+    expect(isForeignSource("LAYLA VIBRATOR")).toBe(false);
+    expect(isForeignSource("FOREPLAY MOMENT TIDE")).toBe(false);
+    expect(isForeignSource("216g / 56dB")).toBe(false);
+  });
+});
+
+describe("박스 분류 — 재생성 패치 vs 오버레이", () => {
+  // 실사례 (1440x1440): 일본어 장식 문구 box y599-613 → 높이 약 20px
+  const decoBox: [number, number, number, number] = [599, 866, 613, 963];
+  // 세로쓰기 "产品代言人" box y587-680 x396-418 → 높이 134px, 폭 32px
+  const vertBox: [number, number, number, number] = [587, 396, 680, 418];
+  // 큰 제목 box y34-203 → 높이 243px
+  const titleBox: [number, number, number, number] = [34, 308, 203, 977];
+
+  it("작은 가로 글씨는 오버레이 대상 (재생성이 뭉개는 영역 — 실측)", () => {
+    expect(isSmallOverlayBox(decoBox, 1440, 1440)).toBe(true);
+    expect(isSmallOverlayBox(titleBox, 1440, 1440)).toBe(false);
+  });
+
+  it("세로쓰기는 오버레이 금지 (재생성이 잘 그리고 오버레이는 못 그림)", () => {
+    expect(isVerticalBox(vertBox, 1440, 1440)).toBe(true);
+    expect(isSmallOverlayBox(vertBox, 1440, 1440)).toBe(false);
+    expect(isVerticalBox(titleBox, 1440, 1440)).toBe(false);
   });
 });
 
