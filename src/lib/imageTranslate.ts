@@ -219,6 +219,48 @@ export function isForeignSource(s: string): boolean {
   return hasHanzi(s) || /[぀-ゟ゠-ヿ]/.test(s);
 }
 
+/**
+ * 글자 영역의 최소 대비(명암 표준편차).
+ *
+ * 모델이 글자가 없는 매끈한 제품 사진에서 글자를 봤다고 하는 오탐이 있었다
+ * (실사례: 민무늬 핑크 손잡이에 关/开/震 → 제품 몸통에 엉뚱한 글자가 그려짐).
+ * 실측 분포: 진짜 글자 37~92, 오탐 13~15 → 22 로 자른다.
+ */
+const MIN_TEXT_STDDEV = 22;
+
+/** 원본에서 각 박스의 대비를 재 오탐(글자 없는 영역)을 걸러낸다 */
+async function filterByContrast(
+  data: Buffer,
+  mime: string,
+  boxes: OcrBox[],
+): Promise<OcrBox[]> {
+  const src = mime === "image/gif" ? await sharp(data, { page: 0, pages: 1 }).png().toBuffer() : data;
+  const meta = await sharp(src).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (!W || !H) return boxes;
+
+  const kept: OcrBox[] = [];
+  for (const b of boxes) {
+    const [ymin, xmin, ymax, xmax] = b.box;
+    const left = Math.max(0, Math.floor((xmin / 1000) * W));
+    const top = Math.max(0, Math.floor((ymin / 1000) * H));
+    const width = Math.min(W - left, Math.max(1, Math.ceil(((xmax - xmin) / 1000) * W)));
+    const height = Math.min(H - top, Math.max(1, Math.ceil(((ymax - ymin) / 1000) * H)));
+    if (width < 3 || height < 3) continue;
+    try {
+      const stats = await sharp(src)
+        .extract({ left, top, width, height })
+        .greyscale()
+        .stats();
+      if ((stats.channels[0]?.stdev ?? 0) >= MIN_TEXT_STDDEV) kept.push(b);
+    } catch {
+      kept.push(b); // 측정 실패 시엔 살려둔다 (어드민이 문구 수정으로 지울 수 있다)
+    }
+  }
+  return kept;
+}
+
 function translatePrompt(items: string[], strict: boolean): string {
   return `중국 상품 상세페이지 이미지에서 추출한 문구 목록입니다. 각각 한국어로 번역하세요.
 
@@ -282,13 +324,17 @@ export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
   ).filter((b) => isForeignSource(b.zh));
   if (extracted.length === 0) return [];
 
-  let koList = await translateTexts(extracted.map((b) => b.zh));
+  // 글자가 없는 영역을 글자로 착각한 오탐을 대비로 걸러낸다
+  const solid = await filterByContrast(data, mime, extracted);
+  if (solid.length === 0) return [];
+
+  const koList = await translateTexts(solid.map((b) => b.zh));
 
   // 한자가 남은 항목만 한 번 더 강하게 재번역 (남으면 폰트에서 네모로 깨진다)
   const bad = koList.map((ko, i) => (hasHanzi(ko) ? i : -1)).filter((i) => i >= 0);
   if (bad.length > 0) {
     try {
-      const repaired = await translateTexts(bad.map((i) => extracted[i].zh), true);
+      const repaired = await translateTexts(bad.map((i) => solid[i].zh), true);
       bad.forEach((orig, j) => {
         if (!hasHanzi(repaired[j]) && repaired[j]) koList[orig] = repaired[j];
       });
@@ -297,7 +343,7 @@ export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
     }
   }
 
-  return extracted
+  return solid
     .map((b, i) => ({ ...b, ko: koList[i] }))
     .filter((b) => b.ko && b.ko !== b.zh);
 }
