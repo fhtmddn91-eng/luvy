@@ -36,6 +36,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** 박스를 글자 크기의 6% 만큼 바깥으로 — 모델 좌표가 딱 붙어 원문 잔상이 남는다 */
 const BOX_PAD = 0.06;
 
+/**
+ * 문구 처리 방식 — 어드민이 항목별로 고른다.
+ *  translate: 한국어로 바꾼다(기본)
+ *  keep: 손대지 않고 원문 그대로 둔다
+ *  erase: 원문을 지우고 아무것도 쓰지 않는다 (글자가 너무 많을 때 정리용)
+ */
+export type BoxMode = "translate" | "keep" | "erase";
+const BOX_MODES: BoxMode[] = ["translate", "keep", "erase"];
+
 export interface OcrBox {
   /** [ymin, xmin, ymax, xmax] — 0~1000 정규화 좌표 */
   box: [number, number, number, number];
@@ -47,6 +56,27 @@ export interface OcrBox {
   bold?: boolean;
   /** 단색 배경(카드·버튼·띠)이면 true, 사진·그라데이션 위면 false */
   solid_bg?: boolean;
+
+  /* ── 어드민 수동 조정 (없으면 자동) ── */
+  mode?: BoxMode;
+  /** 위치 보정 — 0~1000 정규화 단위 (좌우/상하) */
+  dx?: number;
+  dy?: number;
+  /** 글자 크기 배율 (0.5~2.5) */
+  scale?: number;
+  /** 굵기 고정 — 없으면 원문 굵기·크기로 자동 선택 */
+  weight?: FontWeight;
+}
+
+/** 어드민이 손댄 항목인가 — 재생성 모델이 못 지키므로 오버레이로 그려야 한다 */
+export function hasManualOverride(b: OcrBox): boolean {
+  return (
+    (b.mode !== undefined && b.mode !== "translate") ||
+    (b.dx !== undefined && b.dx !== 0) ||
+    (b.dy !== undefined && b.dy !== 0) ||
+    (b.scale !== undefined && b.scale !== 1) ||
+    b.weight !== undefined
+  );
 }
 
 /* ── 폰트 ──────────────────────────────────────────────── */
@@ -59,6 +89,10 @@ const FONT_FAMILIES = {
   Regular: "Pretendard Regular",
 } as const;
 export type FontWeight = keyof typeof FONT_FAMILIES;
+
+export function isFontWeight(v: unknown): v is FontWeight {
+  return typeof v === "string" && v in FONT_FAMILIES;
+}
 
 let fontsReady = false;
 function ensureFonts(): void {
@@ -99,9 +133,15 @@ export function parseOcrBoxes(raw: unknown): OcrBox[] {
     if (ymax <= ymin || xmax <= xmin) continue;
     const zh = String(r.zh ?? "").trim();
     const ko = String(r.ko ?? "").trim();
-    if (!zh || !ko || ko.length > 200) continue;
+    const mode = BOX_MODES.includes(r.mode as BoxMode) ? (r.mode as BoxMode) : undefined;
+    // 지움(erase)은 번역문이 없어도 성립한다 — 원문만 지우는 항목이라서
+    if (!zh || (!ko && mode !== "erase") || ko.length > 200) continue;
     const bg = String(r.bg ?? "");
     const fg = String(r.fg ?? "");
+    const num = (v: unknown, min: number, max: number): number | undefined => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= min && n <= max ? n : undefined;
+    };
     out.push({
       box: [ymin, xmin, ymax, xmax],
       zh: zh.slice(0, 200),
@@ -110,6 +150,11 @@ export function parseOcrBoxes(raw: unknown): OcrBox[] {
       fg: HEX.test(fg) ? fg : "#000000",
       bold: Boolean(r.bold),
       solid_bg: r.solid_bg !== false, // 불명확하면 단색 취급(사각형 덮기가 더 안전)
+      ...(mode ? { mode } : {}),
+      ...(num(r.dx, -1000, 1000) !== undefined ? { dx: num(r.dx, -1000, 1000) } : {}),
+      ...(num(r.dy, -1000, 1000) !== undefined ? { dy: num(r.dy, -1000, 1000) } : {}),
+      ...(num(r.scale, 0.5, 2.5) !== undefined ? { scale: num(r.scale, 0.5, 2.5) } : {}),
+      ...(isFontWeight(r.weight) ? { weight: r.weight } : {}),
     });
     if (out.length >= 60) break;
   }
@@ -462,22 +507,29 @@ function paintBoxes(
   origPixels?: Uint8ClampedArray,
 ): void {
   for (const it of boxes) {
+    const mode = it.mode ?? "translate";
+    if (mode === "keep") continue; // 손대지 않음 — 원문 그대로
+
     const ko = sanitizeSymbols(it.ko).trim();
-    if (!ko) continue; // 어드민이 비운 문구 = 이 항목은 번역하지 않음
+    // 번역 모드인데 문구가 비어 있으면 건드리지 않는다 (실수로 지워지는 사고 방지)
+    if (mode === "translate" && !ko) continue;
 
     const b = clampedPixelBox(it, width, height, origPixels);
     const bw = b.x1 - b.x0;
     const bh = b.y1 - b.y0;
     if (bw < 4 || bh < 4) continue;
 
+    // 원문 지우기 — erase 모드는 여기까지만 하고 글자를 쓰지 않는다
     if (it.solid_bg !== false) {
       ctx.fillStyle = it.bg;
       ctx.fillRect(b.x0, b.y0, bw, bh);
     } else {
       eraseGradient(ctx, width, height, b);
     }
+    if (mode === "erase") continue;
 
-    const family = FONT_FAMILIES[pickWeight(it.bold, bh)];
+    const family = FONT_FAMILIES[it.weight ?? pickWeight(it.bold, bh)];
+    // 박스에 맞는 크기를 찾은 뒤 배율을 곱한다 (어드민이 키우거나 줄일 수 있게)
     let size = Math.floor(bh);
     let metrics!: TextMetrics;
     while (size > 6) {
@@ -487,14 +539,20 @@ function paintBoxes(
       if (metrics.width <= bw * 0.94 && textH <= bh * 0.82) break;
       size -= 1;
     }
+    size = Math.max(6, Math.round(size * (it.scale ?? 1)));
     ctx.font = `${size}px "${family}"`;
     metrics = ctx.measureText(ko);
     const textH = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+
+    // 위치 보정 — 정규화(0~1000) 단위를 픽셀로 환산해 더한다
+    const offX = ((it.dx ?? 0) / 1000) * width;
+    const offY = ((it.dy ?? 0) / 1000) * height;
+
     ctx.fillStyle = it.fg;
     ctx.fillText(
       ko,
-      b.x0 + (bw - metrics.width) / 2,
-      b.y0 + (bh - textH) / 2 + metrics.actualBoundingBoxAscent,
+      b.x0 + (bw - metrics.width) / 2 + offX,
+      b.y0 + (bh - textH) / 2 + metrics.actualBoundingBoxAscent + offY,
     );
   }
 }
@@ -578,8 +636,9 @@ async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer;
 const IMAGE_MODEL = "gemini-3.1-flash-image";
 
 function regenPrompt(boxes: OcrBox[]): string {
+  // 유지·지움으로 지정한 항목은 재생성 대상에서 빼야 모델이 건드리지 않는다
   const tlist = boxes
-    .filter((b) => b.ko.trim())
+    .filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim())
     .map((b) => `- "${b.zh}" → "${sanitizeSymbols(b.ko)}"`)
     .join("\n");
   return `이 이미지를 다시 생성하되, 이미지 안의 외국어 텍스트를 아래에 지정한 한국어로 정확히 바꿔주세요.
@@ -872,8 +931,14 @@ export async function compositeTranslatedStill(
 
   // 재생성 패치가 위험한 박스(작은 가로 글씨, 옆에 내용이 붙은 문구)는
   // 오버레이로 — 박스 안에서만 정확히 지우고 그린다
-  const active = boxes.filter((b) => b.ko.trim());
+  const active = boxes.filter((b) => {
+    const mode = b.mode ?? "translate";
+    if (mode === "keep") return false; // 손대지 않음
+    return mode === "erase" || b.ko.trim().length > 0;
+  });
   const useOverlay = (b: OcrBox): boolean => {
+    // 어드민이 지움·위치·크기·굵기를 손댄 항목은 재생성이 지킬 수 없다
+    if (hasManualOverride(b)) return true;
     if (isSmallOverlayBox(b.box, W, H)) return true;
     if (isVerticalBox(b.box, W, H)) return false; // 세로쓰기는 오버레이가 못 그린다
     const px = toPixelBox(b.box, W, H);

@@ -29,6 +29,114 @@ export interface AssetRow {
 
 const kb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
 
+interface BoxItem {
+  zh: string;
+  ko: string;
+  mode?: "translate" | "keep" | "erase";
+  dx?: number;
+  dy?: number;
+  scale?: number;
+  weight?: string;
+}
+
+/** 위치 보정 한 칸 = 이미지 폭·높이의 0.5% */
+const NUDGE = 5;
+
+const WEIGHTS = [
+  { v: "", label: "자동" },
+  { v: "Regular", label: "보통" },
+  { v: "SemiBold", label: "중간" },
+  { v: "Bold", label: "굵게" },
+  { v: "ExtraBold", label: "아주 굵게" },
+];
+
+/** 문구 한 줄의 편집 컨트롤 — 처리방식·위치·크기·굵기 */
+function BoxRow({ item, index }: { item: BoxItem; index: number }) {
+  const [mode, setMode] = useState<string>(item.mode ?? "translate");
+  const [dx, setDx] = useState<number>(item.dx ?? 0);
+  const [dy, setDy] = useState<number>(item.dy ?? 0);
+  const [scale, setScale] = useState<number>(item.scale ?? 1);
+  const editable = mode === "translate";
+
+  return (
+    <div className="border-b border-hairline-soft pb-2">
+      <div className="grid gap-1 sm:grid-cols-[1fr_1.4fr] sm:gap-2">
+        <p className="truncate self-center text-[12px] text-muted" title={item.zh}>
+          {item.zh}
+        </p>
+        <input
+          name={`ko-${index}`}
+          defaultValue={item.ko}
+          disabled={!editable}
+          className={`${fieldCls} h-10 text-[13px] disabled:bg-canvas disabled:text-muted`}
+        />
+      </div>
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
+        <select
+          name={`mode-${index}`}
+          value={mode}
+          onChange={(e) => setMode(e.target.value)}
+          className="border border-hairline bg-white px-2 py-1 font-bold text-ink-deep"
+        >
+          <option value="translate">한국어로 번역</option>
+          <option value="keep">원문 그대로</option>
+          <option value="erase">글자 지우기</option>
+        </select>
+
+        {editable && (
+          <>
+            <span className="flex items-center gap-1 text-muted">
+              위치
+              <button type="button" onClick={() => setDx(dx - NUDGE)} className="border border-hairline px-1.5 py-0.5 hover:border-ink-deep">←</button>
+              <button type="button" onClick={() => setDx(dx + NUDGE)} className="border border-hairline px-1.5 py-0.5 hover:border-ink-deep">→</button>
+              <button type="button" onClick={() => setDy(dy - NUDGE)} className="border border-hairline px-1.5 py-0.5 hover:border-ink-deep">↑</button>
+              <button type="button" onClick={() => setDy(dy + NUDGE)} className="border border-hairline px-1.5 py-0.5 hover:border-ink-deep">↓</button>
+              {(dx !== 0 || dy !== 0) && (
+                <button type="button" onClick={() => { setDx(0); setDy(0); }} className="ml-0.5 font-bold text-ink-deep hover:underline">
+                  초기화
+                </button>
+              )}
+            </span>
+
+            <label className="flex items-center gap-1 text-muted">
+              크기
+              <input
+                type="range"
+                min={0.5}
+                max={2.5}
+                step={0.1}
+                value={scale}
+                onChange={(e) => setScale(Number(e.target.value))}
+                className="w-24 accent-ink-deep"
+              />
+              <span className="w-8 font-bold text-ink-deep">{scale.toFixed(1)}x</span>
+            </label>
+
+            <label className="flex items-center gap-1 text-muted">
+              굵기
+              <select
+                name={`weight-${index}`}
+                defaultValue={item.weight ?? ""}
+                className="border border-hairline bg-white px-2 py-1 text-ink-deep"
+              >
+                {WEIGHTS.map((w) => (
+                  <option key={w.v} value={w.v}>{w.label}</option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
+      </div>
+
+      <input type="hidden" name={`dx-${index}`} value={dx} />
+      <input type="hidden" name={`dy-${index}`} value={dy} />
+      <input type="hidden" name={`scale-${index}`} value={scale} />
+      {!editable && <input type="hidden" name={`weight-${index}`} value="" />}
+    </div>
+  );
+}
+
 function UploadButton({ pending }: { pending: boolean }) {
   return (
     <button type="submit" disabled={pending} className={btnPrimary}>
@@ -42,9 +150,9 @@ function TranslationEditor({ asset, onClose }: { asset: AssetRow; onClose: () =>
   const bound = updateAssetTranslation.bind(null, asset.id);
   const [state, formAction, pending] = useActionState<TranslateState, FormData>(bound, {});
 
-  let items: { zh: string; ko: string }[] = [];
+  let items: BoxItem[] = [];
   try {
-    items = JSON.parse(asset.ocrData ?? "[]") as { zh: string; ko: string }[];
+    items = JSON.parse(asset.ocrData ?? "[]") as BoxItem[];
   } catch {
     items = [];
   }
@@ -59,8 +167,8 @@ function TranslationEditor({ asset, onClose }: { asset: AssetRow; onClose: () =>
         <div>
           <p className="text-[13px] font-bold text-ink-deep">번역 문구 수정</p>
           <p className={helpCls}>
-            고친 뒤 저장하면 원본 이미지에서 새로 만들어집니다. 문구를 비우면 그 항목은
-            번역하지 않고 원문 그대로 둡니다.
+            고친 뒤 저장하면 원본 이미지에서 새로 만들어집니다. 항목마다 <b>원문 그대로</b> 두거나
+            <b> 글자 지우기</b>를 고를 수 있고, 위치·크기·굵기도 조절됩니다.
           </p>
         </div>
         <button type="button" onClick={onClose} className="text-[12px] font-bold text-muted hover:text-ink-deep">
@@ -80,14 +188,9 @@ function TranslationEditor({ asset, onClose }: { asset: AssetRow; onClose: () =>
           <span className="mt-1 block text-[11px] text-muted">클릭하면 원래 크기로 열립니다</span>
         </a>
 
-        <form action={formAction} className="space-y-2">
+        <form action={formAction} className="space-y-3">
           {items.map((it, i) => (
-            <div key={i} className="grid gap-1 sm:grid-cols-2 sm:gap-2">
-              <p className="truncate self-center text-[12px] text-muted" title={it.zh}>
-                {it.zh}
-              </p>
-              <input name={`ko-${i}`} defaultValue={it.ko} className={`${fieldCls} h-10 text-[13px]`} />
-            </div>
+            <BoxRow key={i} item={it} index={i} />
           ))}
           {state.error && <p className={errorCls}>{state.error}</p>}
           <button type="submit" disabled={pending} className={btnPrimary}>

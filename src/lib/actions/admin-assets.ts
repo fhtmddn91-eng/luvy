@@ -183,13 +183,30 @@ export async function updateAssetTranslation(
   if (!asset?.originalUrl || !asset.ocrData) return { error: "번역된 이미지가 아닙니다." };
 
   const boxes = parseOcrBoxes(JSON.parse(asset.ocrData));
-  // 폼의 ko-{i} 값으로 문구 교체 (비우면 해당 항목 번역 제외 — parseOcrBoxes 가
-  // 빈 ko 를 버리므로 검증 전에 원본값을 들고 있다가 덮어쓴다)
-  const edited = boxes.map((b, i) => {
-    const v = formData.get(`ko-${i}`);
-    return { ...b, ko: typeof v === "string" ? v.trim().slice(0, 200) : b.ko };
+  // 폼에서 항목별 문구·처리방식·위치·크기·굵기를 받아 덮어쓴다.
+  // (검증은 renderTranslatedImage 앞에서 parseOcrBoxes 가 다시 한다)
+  const numOr = (v: FormDataEntryValue | null, fallback: number): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const edited: OcrBox[] = boxes.map((b, i) => {
+    const ko = formData.get(`ko-${i}`);
+    const mode = String(formData.get(`mode-${i}`) ?? "translate");
+    const weight = String(formData.get(`weight-${i}`) ?? "");
+    return {
+      ...b,
+      ko: typeof ko === "string" ? ko.trim().slice(0, 200) : b.ko,
+      mode: mode === "keep" || mode === "erase" ? mode : "translate",
+      dx: numOr(formData.get(`dx-${i}`), 0),
+      dy: numOr(formData.get(`dy-${i}`), 0),
+      scale: numOr(formData.get(`scale-${i}`), 1),
+      ...(weight ? { weight: weight as OcrBox["weight"] } : {}),
+    };
   });
-  if (edited.every((b) => !b.ko)) return { error: "문구가 전부 비어 있습니다. 원본 복원을 쓰세요." };
+  const willRender = edited.some(
+    (b) => (b.mode === "translate" && b.ko) || b.mode === "erase",
+  );
+  if (!willRender) return { error: "번역하거나 지울 문구가 없습니다. 원본 복원을 쓰세요." };
 
   const file = await readPublicUpload(path.basename(asset.originalUrl));
   if (!file) return { error: "원본 파일을 읽을 수 없습니다." };

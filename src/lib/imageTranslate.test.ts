@@ -15,6 +15,7 @@ import {
   safePad,
   isCrowdedBox,
   extendOverLeftover,
+  hasManualOverride,
 } from "./imageTranslate";
 
 describe("parseOcrBoxes — 모델 응답 검증", () => {
@@ -152,6 +153,40 @@ describe("safePad — 옆 내용 침범 방지", () => {
 
   it("주변이 비어 있으면 최대 여백을 그대로 쓴다", () => {
     expect(safePad(() => false, 18)).toBe(18);
+  });
+});
+
+describe("문구별 수동 조정", () => {
+  const base = { box: [100, 200, 300, 800] as [number, number, number, number], zh: "产品信息", ko: "제품 정보", bg: "#fff", fg: "#000" };
+
+  it("지움·유지·위치·크기·굵기를 손대면 재생성 대신 오버레이로 그린다", () => {
+    expect(hasManualOverride({ ...base, mode: "erase" })).toBe(true);
+    expect(hasManualOverride({ ...base, mode: "keep" })).toBe(true);
+    expect(hasManualOverride({ ...base, dx: 5 })).toBe(true);
+    expect(hasManualOverride({ ...base, scale: 1.4 })).toBe(true);
+    expect(hasManualOverride({ ...base, weight: "Bold" })).toBe(true);
+  });
+
+  it("손대지 않았으면 재생성 패치를 쓴다", () => {
+    expect(hasManualOverride(base)).toBe(false);
+    expect(hasManualOverride({ ...base, mode: "translate", dx: 0, dy: 0, scale: 1 })).toBe(false);
+  });
+
+  it("지움 항목은 번역문이 비어도 유효하다 (원문만 지우는 항목)", () => {
+    const r = parseOcrBoxes([{ ...base, ko: "", mode: "erase" }]);
+    expect(r).toHaveLength(1);
+    expect(r[0].mode).toBe("erase");
+  });
+
+  it("번역 항목은 문구가 비면 버린다 (실수로 지워지는 사고 방지)", () => {
+    expect(parseOcrBoxes([{ ...base, ko: "" }])).toHaveLength(0);
+  });
+
+  it("범위를 벗어난 조정값은 무시한다", () => {
+    const r = parseOcrBoxes([{ ...base, scale: 99, dx: 99999, weight: "Fake" }]);
+    expect(r[0].scale).toBeUndefined();
+    expect(r[0].dx).toBeUndefined();
+    expect(r[0].weight).toBeUndefined();
   });
 });
 
