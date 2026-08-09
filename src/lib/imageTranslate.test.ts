@@ -16,6 +16,7 @@ import {
   isCrowdedBox,
   extendOverLeftover,
   hasManualOverride,
+  borderUniformity,
 } from "./imageTranslate";
 
 describe("parseOcrBoxes — 모델 응답 검증", () => {
@@ -153,6 +154,24 @@ describe("safePad — 옆 내용 침범 방지", () => {
 
   it("주변이 비어 있으면 최대 여백을 그대로 쓴다", () => {
     expect(safePad(() => false, 18)).toBe(18);
+  });
+});
+
+describe("borderUniformity — 배경을 주변에서 추정", () => {
+  it("테두리가 거의 같은 색이면 단색으로 보고 그 색을 쓴다", () => {
+    const s = [[250, 240, 240], [252, 242, 241], [249, 239, 239]];
+    const r = borderUniformity(s);
+    expect(r.uniform).toBe(true);
+    expect(r.color[0]).toBeGreaterThan(245);
+  });
+
+  it("테두리가 크게 변하면 보간으로 처리한다 (사진·그라데이션)", () => {
+    const s = [[255, 255, 255], [20, 20, 20], [130, 90, 200]];
+    expect(borderUniformity(s).uniform).toBe(false);
+  });
+
+  it("표본이 없으면 흰색으로 안전하게 처리한다", () => {
+    expect(borderUniformity([])).toEqual({ uniform: true, color: [255, 255, 255] });
   });
 });
 

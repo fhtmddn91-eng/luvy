@@ -425,30 +425,90 @@ export function toPixelBox(
   return { x0, y0, x1, y1 };
 }
 
-/** 사진·그라데이션 배경: 박스 좌우 바깥 픽셀을 줄마다 읽어 가로 보간으로 지운다 */
-function eraseGradient(ctx: SKRSContext2D, width: number, height: number, b: PxBox): void {
-  const x0 = Math.round(b.x0);
-  const y0 = Math.round(b.y0);
-  const x1 = Math.round(b.x1);
-  const y1 = Math.round(b.y1);
-  const xl = Math.max(0, x0 - 3);
-  const xr = Math.min(width - 1, x1 + 3);
-  const img = ctx.getImageData(0, Math.max(0, y0), width, Math.min(height, y1) - Math.max(0, y0));
-  const d = img.data;
-  const span = Math.max(1, x1 - x0);
-  for (let row = 0; row < img.height; row++) {
-    const li = (row * width + xl) * 4;
-    const ri = (row * width + xr) * 4;
-    for (let x = x0; x < Math.min(width, x1); x++) {
-      const t = (x - x0) / span;
-      const idx = (row * width + x) * 4;
-      d[idx] = Math.round(d[li] * (1 - t) + d[ri] * t);
-      d[idx + 1] = Math.round(d[li + 1] * (1 - t) + d[ri + 1] * t);
-      d[idx + 2] = Math.round(d[li + 2] * (1 - t) + d[ri + 2] * t);
-      d[idx + 3] = 255;
+/**
+ * 지우기 — 배경을 **주변 픽셀에서 직접 읽어** 채운다.
+ *
+ * 예전에는 모델이 알려준 bg 색으로 사각형을 칠했는데, 실제 배경과 조금만
+ * 달라도 "네모 박스를 씌운 듯한" 자국이 남았다(실사용 지적: 배경 없는 제목에
+ * 검은 박스, 사진 위 흰 박스). 모델 값을 믿지 않고 박스 바로 바깥의 테두리
+ * 픽셀을 표본으로 삼는다.
+ *  - 테두리가 거의 균일하면(단색 카드·버튼) 그 색으로 채운다 → 경계가 안 보인다
+ *  - 테두리가 변하면(그라데이션·사진) 네 변에서 이중선형 보간해 결을 잇는다
+ */
+export function borderUniformity(samples: number[][]): { uniform: boolean; color: [number, number, number] } {
+  if (samples.length === 0) return { uniform: true, color: [255, 255, 255] };
+  const mean = [0, 1, 2].map((c) => samples.reduce((s, p) => s + p[c], 0) / samples.length);
+  const dev = Math.sqrt(
+    samples.reduce((s, p) => s + [0, 1, 2].reduce((t, c) => t + (p[c] - mean[c]) ** 2, 0) / 3, 0) /
+      samples.length,
+  );
+  return {
+    // 표준편차 10 이하면 눈으로는 단색 — 그 색으로 칠해도 티가 안 난다
+    uniform: dev <= 10,
+    color: [Math.round(mean[0]), Math.round(mean[1]), Math.round(mean[2])],
+  };
+}
+
+/** 박스 테두리 바로 바깥(1px 링)의 픽셀 표본 */
+function sampleBorder(d: Uint8ClampedArray, W: number, H: number, b: PxBox): number[][] {
+  const x0 = Math.max(0, Math.round(b.x0) - 1);
+  const y0 = Math.max(0, Math.round(b.y0) - 1);
+  const x1 = Math.min(W - 1, Math.round(b.x1));
+  const y1 = Math.min(H - 1, Math.round(b.y1));
+  const out: number[][] = [];
+  const at = (x: number, y: number) => {
+    const i = (y * W + x) * 4;
+    out.push([d[i], d[i + 1], d[i + 2]]);
+  };
+  const stepX = Math.max(1, Math.floor((x1 - x0) / 24));
+  const stepY = Math.max(1, Math.floor((y1 - y0) / 24));
+  for (let x = x0; x <= x1; x += stepX) { at(x, y0); at(x, y1); }
+  for (let y = y0; y <= y1; y += stepY) { at(x0, y); at(x1, y); }
+  return out;
+}
+
+/** 네 변에서 이중선형 보간 — 그라데이션·사진 배경의 결을 잇는다 */
+function eraseBilinear(d: Uint8ClampedArray, W: number, H: number, b: PxBox): void {
+  const x0 = Math.max(1, Math.round(b.x0));
+  const y0 = Math.max(1, Math.round(b.y0));
+  const x1 = Math.min(W - 1, Math.round(b.x1));
+  const y1 = Math.min(H - 1, Math.round(b.y1));
+  const px = (x: number, y: number, c: number) => d[(y * W + x) * 4 + c];
+  const spanX = Math.max(1, x1 - x0);
+  const spanY = Math.max(1, y1 - y0);
+  for (let y = y0; y < y1; y++) {
+    const ty = (y - y0) / spanY;
+    for (let x = x0; x < x1; x++) {
+      const tx = (x - x0) / spanX;
+      const i = (y * W + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        const horiz = px(x0 - 1, y, c) * (1 - tx) + px(x1, y, c) * tx;
+        const vert = px(x, y0 - 1, c) * (1 - ty) + px(x, y1, c) * ty;
+        // 가로·세로 보간의 평균 — 한쪽만 쓰면 반대 방향 결이 뭉개진다
+        d[i + c] = Math.round((horiz + vert) / 2);
+      }
+      d[i + 3] = 255;
     }
   }
-  ctx.putImageData(img, 0, Math.max(0, y0));
+}
+
+/** 박스 영역의 원문을 지운다 (배경을 주변에서 추정해 채움) */
+function eraseRegion(ctx: SKRSContext2D, width: number, height: number, b: PxBox): void {
+  const x0 = Math.max(0, Math.round(b.x0));
+  const y0 = Math.max(0, Math.round(b.y0));
+  const x1 = Math.min(width, Math.round(b.x1));
+  const y1 = Math.min(height, Math.round(b.y1));
+  if (x1 - x0 < 2 || y1 - y0 < 2) return;
+
+  const img = ctx.getImageData(0, 0, width, height);
+  const { uniform, color } = borderUniformity(sampleBorder(img.data, width, height, b));
+  if (uniform) {
+    ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
+    ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    return;
+  }
+  eraseBilinear(img.data, width, height, b);
+  ctx.putImageData(img, 0, 0);
 }
 
 /**
@@ -519,13 +579,9 @@ function paintBoxes(
     const bh = b.y1 - b.y0;
     if (bw < 4 || bh < 4) continue;
 
-    // 원문 지우기 — erase 모드는 여기까지만 하고 글자를 쓰지 않는다
-    if (it.solid_bg !== false) {
-      ctx.fillStyle = it.bg;
-      ctx.fillRect(b.x0, b.y0, bw, bh);
-    } else {
-      eraseGradient(ctx, width, height, b);
-    }
+    // 원문 지우기 — 배경은 주변 픽셀에서 읽는다(모델의 bg 색은 어긋나 박스 자국이 남았다).
+    // erase 모드는 여기까지만 하고 글자를 쓰지 않는다.
+    eraseRegion(ctx, width, height, b);
     if (mode === "erase") continue;
 
     const family = FONT_FAMILIES[it.weight ?? pickWeight(it.bold, bh)];
@@ -549,6 +605,28 @@ function paintBoxes(
     const offY = ((it.dy ?? 0) / 1000) * height;
 
     ctx.fillStyle = it.fg;
+
+    // 세로쓰기 문구는 글자를 세로로 쌓는다 — 가로로 쓰면 좁은 박스에
+    // 밀려 들어가 아주 작아진다(수동 조정한 세로 문구에서 발생)
+    if (isVerticalBox(it.box, width, height)) {
+      // 공백은 세로로 쌓을 때 빈 칸만 만들어 어색하다 — 빼고 글자만 쌓는다
+      const chars = [...ko].filter((c) => c.trim());
+      const cell = Math.min(bw, bh / Math.max(1, chars.length));
+      const vsize = Math.max(6, Math.round(cell * 0.9 * (it.scale ?? 1)));
+      ctx.font = `${vsize}px "${family}"`;
+      const startY = b.y0 + (bh - cell * chars.length) / 2 + offY;
+      chars.forEach((ch, ci) => {
+        const m = ctx.measureText(ch);
+        const h = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
+        ctx.fillText(
+          ch,
+          b.x0 + (bw - m.width) / 2 + offX,
+          startY + cell * ci + (cell - h) / 2 + m.actualBoundingBoxAscent,
+        );
+      });
+      continue;
+    }
+
     ctx.fillText(
       ko,
       b.x0 + (bw - metrics.width) / 2 + offX,
