@@ -40,10 +40,13 @@ const AUTOPLAY_MS = 6000;
 export function HeroBanner({
   banners: input,
   widget,
+  sidebar,
 }: {
   banners: HeroBannerData[];
-  /** 히어로 우측 오버레이 슬롯 — 로그인 직후 인사 카드가 여기서 떴다 내려간다 */
+  /** 히어로 우측 오버레이 슬롯 — 회원 인사·요약 카드 */
   widget?: React.ReactNode;
+  /** 히어로 왼쪽에 상시 노출되는 전체 카테고리 기둥 (넓은 화면 전용) */
+  sidebar?: React.ReactNode;
 }) {
   const banners = input.length > 0 ? input : [FALLBACK];
   const [index, setIndex] = useState(0);
@@ -107,12 +110,19 @@ export function HeroBanner({
 
         {/* Copy overlaid on the empty (left / top) area of the image */}
         <div className="relative z-10 mx-auto max-w-[1280px] px-6">
+          {/* 전체 카테고리 기둥 — 배너 왼쪽에 붙어 항상 떠 있다 */}
+          {sidebar && (
+            <div className="absolute inset-y-0 left-6 z-20 hidden lg:block">{sidebar}</div>
+          )}
           {/*
            * 모바일 배너 높이. 예전 540px 는 화면(844px)의 82% 를 먹어서
            * 첫 화면에 상품이 하나도 안 보였다 → 절반 수준으로 낮춘다.
            */}
           <div className="flex min-h-[300px] flex-col justify-start pt-7 sm:min-h-[440px] sm:pt-10 lg:min-h-[460px] lg:justify-center lg:pt-0">
-            <div key={banner.id} className="hero-enter max-w-full lg:max-w-[520px] lg:pl-4">
+            <div
+              key={banner.id}
+              className={`hero-enter max-w-full lg:max-w-[520px] ${sidebar ? "lg:pl-[268px]" : "lg:pl-4"}`}
+            >
               <p className="text-[13px] font-bold uppercase tracking-[0.22em] text-brand-500">
                 {banner.eyebrow}
               </p>
@@ -164,7 +174,9 @@ export function HeroBanner({
             type="button"
             onClick={() => go(index - 1)}
             aria-label="이전 배너"
-            className="absolute left-0 top-1/2 hidden h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/85 text-ink shadow-[var(--shadow-soft)] transition-colors hover:bg-white lg:flex"
+            className={`absolute top-1/2 hidden h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/85 text-ink shadow-[var(--shadow-soft)] transition-colors hover:bg-white lg:flex ${
+              sidebar ? "left-[212px]" : "left-0"
+            }`}
           >
             <Icon name="chevronLeft" className="h-5 w-5" strokeWidth={2} />
           </button>

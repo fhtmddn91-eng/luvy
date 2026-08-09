@@ -26,10 +26,23 @@ export default async function LoginPage({
     >
       <LoginForm next={next ?? "/"} />
 
+      {/*
+       * 가입 신청을 실시간으로 지켜볼 수 없어, 연락을 주면 바로 승인된다는 걸
+       * 로그인 화면에서도 알린다 — 가입 직후 여기로 되돌아오는 회원이 많다.
+       */}
+      <div className="mt-5 rounded-2xl border border-brand-200 bg-brand-50 px-4 py-3.5">
+        <p className="text-[13px] font-bold text-brand-700">
+          회원가입 후 고객센터로 꼭 연락 주세요
+        </p>
+        <p className="mt-1 text-[12.5px] leading-relaxed text-ink-soft">
+          승인 요청을 실시간으로 확인하기 어렵습니다. 가입 후 연락 주시면 더 빠르게
+          승인해 드립니다.
+        </p>
+      </div>
+
       {/* 비밀번호 재발급이 아직 자동화되지 않아 고객센터로 안내한다 */}
-      <p className="mt-5 border-t border-line pt-4 text-center text-[12px] leading-relaxed text-muted">
-        로그인이 어려우시면 고객센터{" "}
-        <span className="font-semibold text-ink-soft">{contactPoint(company)}</span> 으로 문의해주세요.
+      <p className="mt-4 border-t border-line pt-4 text-center text-[12px] leading-relaxed text-muted">
+        고객센터 <span className="font-semibold text-ink-soft">{contactPoint(company)}</span>
         <br />
         ({company.hours})
       </p>

@@ -9,23 +9,37 @@ import { ProductTabs } from "@/components/home/ProductTabs";
 import { NoticeStrip } from "@/components/home/NoticeStrip";
 import { FeatureGrid } from "@/components/home/FeatureGrid";
 import { getHomeTabs } from "@/lib/homeTabs";
+import { getCategoryTree } from "@/lib/categories";
+import { CategoryColumns } from "@/components/layout/CategoryMenu";
 
 export default async function HomePage() {
-  const [banners, notices, user, stats, tabs] = await Promise.all([
+  const [banners, notices, user, stats, tabs, tree] = await Promise.all([
     db.banner.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
     db.notice.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" }, take: 3 }),
     getSession(),
     getHomeStats(),
     getHomeTabs(),
+    getCategoryTree(),
   ]);
 
   return (
     <>
-      {/* 인사 카드 — 히어로 우측 원래 자리에서 로그인 직후 1회만 떴다가 내려간다
-          (luvy_welcome 쿠키를 보고 스스로 판단) */}
+      {/* 배너 왼쪽에 전체 카테고리를 상시 노출하고, 오른쪽은 요약 카드로 채운다 —
+          가운데가 비어 휑해 보인다는 피드백에 대한 조치 */}
       <HeroBanner
         banners={banners}
         widget={<HeroGreeting companyName={user?.companyName ?? "LUVY"} rows={stats} />}
+        sidebar={
+          <CategoryColumns
+            variant="rail"
+            className="h-full"
+            tree={tree.map((t) => ({
+              slug: t.slug,
+              name: t.name,
+              children: t.children.map((c) => ({ slug: c.slug, name: c.name })),
+            }))}
+          />
+        }
       />
       <QuickMenu />
       <ProductTabs tabs={tabs} />

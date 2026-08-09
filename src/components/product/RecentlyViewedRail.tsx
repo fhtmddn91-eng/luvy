@@ -12,7 +12,8 @@ const WINDOW = 4;
 /**
  * 화면 오른쪽에 붙는 "최근 본 상품" 레일.
  *
- * 좁은 화면에서는 본문을 가리므로 넓은 화면(xl 이상)에서만 띄운다.
+ * 본문(최대 1280px)과 겹치면 안 되므로 여백이 확보되는 2xl(1536px) 이상에서만
+ * 띄운다 — 1280~1440 에서는 푸터 링크 위에 그대로 얹혀 버린다.
  */
 export function RecentlyViewedRail() {
   const [items, setItems] = useState<RecentItem[]>([]);
@@ -41,7 +42,7 @@ export function RecentlyViewedRail() {
   return (
     <aside
       aria-label="최근 본 상품"
-      className="fixed right-5 top-1/2 z-30 hidden w-[92px] -translate-y-1/2 rounded-2xl border border-line bg-white/95 p-2 shadow-[var(--shadow-card)] backdrop-blur xl:block"
+      className="fixed right-5 top-1/2 z-30 hidden w-[92px] -translate-y-1/2 rounded-2xl border border-line bg-white/95 p-2 shadow-[var(--shadow-card)] backdrop-blur 2xl:block"
     >
       <p className="pb-2 text-center text-[11px] font-bold text-ink-soft">최근 본 상품</p>
       <ul className="space-y-2">
