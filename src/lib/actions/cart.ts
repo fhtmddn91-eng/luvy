@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { getSession, requireUser, requireApprovedUser } from "@/lib/auth";
-import { getMoq, type Tier } from "@/lib/pricing";
+import { getMoq, hasPrice, type Tier } from "@/lib/pricing";
 import { clampToStock, isSoldOut } from "@/lib/stock";
 
 const MAX_QTY = 100_000; // 상한 (정수 오버플로/오입력 방지)
@@ -13,6 +13,8 @@ export async function addToCart(productId: string, quantity: number): Promise<vo
   const product = await db.product.findUnique({ where: { id: productId }, include: { priceTiers: true } });
   if (!product) return;
   if (isSoldOut(product)) return; // 품절 상품은 담기지 않는다
+  // 단가가 아직 0인 수집 상품 — 담기면 그대로 0원 주문이 된다
+  if (!hasPrice(product.priceTiers as Tier[])) return;
 
   const moq = getMoq(product.priceTiers as Tier[]);
 

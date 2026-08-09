@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ProductThumb } from "./ProductThumb";
 import { won } from "@/lib/format";
-import { getMoq, resolveUnitPrice, type Tier } from "@/lib/pricing";
+import { getMoq, hasPrice, resolveUnitPrice, type Tier } from "@/lib/pricing";
 import { isSoldOut } from "@/lib/stock";
 
 export interface ProductCardData {
@@ -56,7 +56,11 @@ export function ProductCard({ product }: { product: ProductCardData }) {
         <div className="mt-1.5 flex flex-wrap items-end justify-between gap-x-2 gap-y-1">
           <div>
             <span className="text-[11px] text-muted">공급가</span>
-            <p className="whitespace-nowrap text-[15px] font-extrabold text-ink sm:text-[16px]">{won(fromPrice)}~</p>
+            <p className="whitespace-nowrap text-[15px] font-extrabold text-ink sm:text-[16px]">
+              {hasPrice(product.priceTiers) ? `${won(fromPrice)}~` : (
+                <span className="text-[13px] font-bold text-muted">가격 준비중</span>
+              )}
+            </p>
           </div>
           <span className="whitespace-nowrap rounded-pill bg-brand-50 px-2 py-1 text-[11px] font-bold text-brand-600 sm:px-2.5">
             MOQ {moq}

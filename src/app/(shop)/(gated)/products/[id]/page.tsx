@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { getAllCategories } from "@/lib/categories";
 import { PriceTierTable } from "@/components/product/PriceTierTable";
 import { AddToCart } from "@/components/product/AddToCart";
-import { getMoq, resolveUnitPrice } from "@/lib/pricing";
+import { getMoq, hasPrice, resolveUnitPrice } from "@/lib/pricing";
 import { won } from "@/lib/format";
 import { AssetDownloads } from "@/components/product/AssetDownloads";
 import { ProductGallery } from "@/components/product/ProductGallery";
@@ -25,6 +25,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const category = (await getAllCategories()).find((c) => c.slug === product.categorySlug);
   const moq = getMoq(product.priceTiers);
   const wholesale = resolveUnitPrice(product.priceTiers, moq);
+  // 수집 직후라 단가가 0인 상품은 "0원"으로 보여서도, 0원에 주문돼서도 안 된다
+  const priced = hasPrice(product.priceTiers);
   // 상세 이미지가 하나도 없는(직접 등록한) 옛 상품은 있는 자료를 그대로 보여준다
   const onlyDetail = product.assets.filter((a) => a.kind === "DETAIL" || a.kind === "GIF");
   const detailAssets = onlyDetail.length > 0 ? onlyDetail : product.assets;
@@ -67,9 +69,17 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             <div className="flex items-baseline gap-3">
               <dt className="w-[74px] shrink-0 text-[13px] text-muted">공급가</dt>
               <dd className="text-[20px] font-extrabold text-brand-600">
-                {won(wholesale)}
-                {product.priceTiers.length > 1 && (
-                  <span className="ml-1 text-[13px] font-semibold text-muted">부터</span>
+                {priced ? (
+                  <>
+                    {won(wholesale)}
+                    {product.priceTiers.length > 1 && (
+                      <span className="ml-1 text-[13px] font-semibold text-muted">부터</span>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-[15px] font-bold text-muted">
+                    가격 준비중 — 고객센터로 문의해주세요
+                  </span>
                 )}
               </dd>
             </div>
@@ -81,12 +91,21 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           </div>
 
           <div className="mt-8">
-            <AddToCart
-              productId={product.id}
-              tiers={product.priceTiers}
-              moq={moq}
-              stockInfo={{ trackStock: product.trackStock, stock: product.stock }}
-            />
+            {priced ? (
+              <AddToCart
+                productId={product.id}
+                tiers={product.priceTiers}
+                moq={moq}
+                stockInfo={{ trackStock: product.trackStock, stock: product.stock }}
+              />
+            ) : (
+              <div className="border border-line bg-cream px-4 py-4 text-center">
+                <p className="text-[15px] font-extrabold text-ink">아직 판매 준비 중입니다</p>
+                <p className="mt-1 text-[13px] text-muted">
+                  도매 단가가 확정되면 바로 주문할 수 있습니다. 급하시면 고객센터로 문의해주세요.
+                </p>
+              </div>
+            )}
             <div className="mt-3">
               <WishButton productId={product.id} initial={wished} />
             </div>

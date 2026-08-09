@@ -15,6 +15,16 @@ function sorted(tiers: Tier[]): Tier[] {
   return [...tiers].sort((a, b) => a.minQty - b.minQty);
 }
 
+/**
+ * 판매 가능한 가격이 정해졌는지.
+ *
+ * 1688 수집 상품은 단가 0원으로 들어온다(마진율을 운영자가 정해야 한다).
+ * 그대로 두면 화면에 "0원"이 뜨고, 더 나쁘게는 0원 주문이 들어온다.
+ */
+export function hasPrice(tiers: Tier[]): boolean {
+  return tiers.some((t) => t.unitPrice > 0);
+}
+
 export function getMoq(tiers: Tier[]): number {
   if (tiers.length === 0) return 1;
   return sorted(tiers)[0].minQty;

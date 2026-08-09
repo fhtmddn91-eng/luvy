@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveUnitPrice, getMoq, shippingFor, type Tier } from "./pricing";
+import { resolveUnitPrice, getMoq, hasPrice, shippingFor, type Tier } from "./pricing";
 
 const tiers: Tier[] = [
   { minQty: 10, unitPrice: 6500 },
@@ -39,5 +39,16 @@ describe("shippingFor", () => {
   });
   it("is free for empty subtotal", () => {
     expect(shippingFor(0)).toBe(0);
+  });
+});
+
+describe("hasPrice — 단가 미설정 상품", () => {
+  it("모든 단가가 0이면 아직 팔 수 없는 상품이다 (수집 직후)", () => {
+    expect(hasPrice([{ minQty: 1, unitPrice: 0 }])).toBe(false);
+    expect(hasPrice([])).toBe(false);
+  });
+
+  it("하나라도 값이 잡혀 있으면 판매 가능", () => {
+    expect(hasPrice([{ minQty: 1, unitPrice: 0 }, { minQty: 10, unitPrice: 5000 }])).toBe(true);
   });
 });
