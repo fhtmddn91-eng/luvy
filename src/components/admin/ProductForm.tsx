@@ -144,13 +144,17 @@ export function ProductForm({
  </p>
  </div>
  <div>
- <label className={labelCls}>정가 (참고용)</label>
+ <label className={labelCls}>권장 판매가</label>
  <input
  name="basePrice"
  type="number"
+ min={0}
  defaultValue={product?.basePrice}
  className={fieldCls}
  />
+ <p className={helpCls}>
+ 거래처가 소비자에게 판매할 때 권장하는 가격입니다. 상품 페이지에 도매가와 함께 표시됩니다.
+ </p>
  </div>
  <div>
  <label className={labelCls}>판매 상태</label>

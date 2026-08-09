@@ -75,7 +75,7 @@ function validate(f: ReturnType<typeof parseFields>, tiers: { minQty: number }[]
   if (!f.categorySlug) return "대표 카테고리를 선택해주세요.";
   const sku = skuError(f.sku);
   if (sku) return sku;
-  if (f.basePrice <= 0) return "정가를 올바르게 입력해주세요.";
+  if (f.basePrice <= 0) return "권장 판매가를 올바르게 입력해주세요.";
   if (tiers.length === 0) return "수량별 도매가를 최소 1개 입력해주세요.";
   return null;
 }

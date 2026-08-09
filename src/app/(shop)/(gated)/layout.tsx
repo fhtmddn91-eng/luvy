@@ -1,4 +1,5 @@
 import { requireApprovedUser } from "@/lib/auth";
+import { RecentlyViewedRail } from "@/components/product/RecentlyViewedRail";
 
 /**
  * 승인 회원 전용 구역.
@@ -14,5 +15,11 @@ import { requireApprovedUser } from "@/lib/auth";
  */
 export default async function GatedLayout({ children }: { children: React.ReactNode }) {
   await requireApprovedUser();
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      {/* 최근 본 상품 레일 — 승인 회원 구역 전체에서 따라다닌다 */}
+      <RecentlyViewedRail />
+    </>
+  );
 }

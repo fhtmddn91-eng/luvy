@@ -28,6 +28,7 @@ model User {
   cartItems      CartItem[]
   orders         Order[]
   inquiries      Inquiry[]
+  wishlists      Wishlist[]
 }
 
 model Product {
@@ -47,6 +48,10 @@ model Product {
   sku          String?     @unique
   description  String
   image        String      @default("")
+  /**
+   * 권장 소비자가. 거래처가 "얼마에 팔면 되는지" 바로 알 수 있게 도매가와 함께 노출한다.
+   * 0 이면 아직 정하지 않은 것으로 보고 화면에 표시하지 않는다.
+   */
   basePrice    Int
   status       String      @default("ACTIVE")
   /**
@@ -64,8 +69,24 @@ model Product {
   assets       ProductAsset[]
   categories   ProductCategory[]
   homePicks    HomePick[]
+  wishlists    Wishlist[]
 
   @@index([categorySlug])
+}
+
+/**
+ * 찜(관심상품). 거래처가 발주 후보를 모아두는 용도라 수량·가격은 담지 않는다 —
+ * 그건 장바구니(CartItem)의 몫.
+ */
+model Wishlist {
+  userId    String
+  productId String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([userId, productId])
+  @@index([userId, createdAt])
 }
 
 /**

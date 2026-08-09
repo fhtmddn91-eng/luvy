@@ -2,6 +2,7 @@ import Link from "next/link";
 
 const nav = [
   { href: "/account", label: "계정 홈", exact: true },
+  { href: "/account/wishlist", label: "찜한 상품" },
   { href: "/orders", label: "주문 내역" },
   { href: "/support/inquiry", label: "1:1 문의" },
   { href: "/cart", label: "장바구니" },
