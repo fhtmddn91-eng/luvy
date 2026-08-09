@@ -190,11 +190,14 @@ const EXTRACT_PROMPT = `이 이미지 안의 외국어 텍스트(중국어·일�
 반드시 포함:
 - 작은 글씨·장식 문구·세로쓰기 문구도 빠짐없이 (1688 이미지에는 일본어 장식 문구도 흔합니다)
 - 여러 줄로 쓰인 문구는 한 덩어리로 묶지 말고 줄 단위로 각각 항목을 만드세요
+- **한 줄 안에 외국어와 숫자·단위가 붙어 있으면 그 줄 전체를 한 항목으로** 잡고,
+  box 도 줄 전체를 감싸게 하세요 (예: "不低于53MIN" 을 "不低于" 와 "53MIN" 으로
+  쪼개지 말 것 — 쪼개면 한쪽을 고칠 때 다른 쪽이 훼손됩니다)
 
 제외 대상:
 - 로고·브랜드명 (라틴 문자 브랜드 포함)
 - 영어·한국어 문장
-- 숫자·단위만 있는 것 (216g, 56dB, 3.7V 등)
+- 숫자·단위만 단독으로 있는 것 (216g, 56dB, 3.7V 처럼 외국어가 섞이지 않은 것)
 
 각 텍스트마다 JSON 배열 원소로:
 - box: [ymin, xmin, ymax, xmax] — 글자가 실제 차지한 영역, 0~1000 정규화
@@ -266,6 +269,7 @@ function translatePrompt(items: string[], strict: boolean): string {
 
 규칙:
 - 한국 성인용품 도매몰 상세페이지에서 쓰는 자연스러운 표현으로
+- **숫자·단위·모델명은 원문 그대로 유지** (53MIN, 3.7V, SHD-S549 등을 절대 바꾸거나 빼지 마세요)
 - 원문 글자수의 1.5배를 넘지 않게 짧게
 - 한자·중국어 문자를 답에 절대 남기지 마세요. 모든 단어를 한글로 씁니다 (예: 伸缩→신축)${
     strict ? "\n- 이전 답에 한자가 남아 있었습니다. 이번에는 반드시 순수 한글+숫자+영문만 사용하세요." : ""
@@ -402,18 +406,66 @@ function eraseGradient(ctx: SKRSContext2D, width: number, height: number, b: PxB
   ctx.putImageData(img, 0, Math.max(0, y0));
 }
 
+/**
+ * 지우기 영역의 좌우 여백을 옆 내용에 닿기 전까지로 제한한다.
+ *
+ * toPixelBox 의 기본 6% 여백이 바로 옆 숫자를 덮은 실사례가 있다
+ * ("不低于53MIN" → "최소 3MIN", 53분이 3분으로). 원본 픽셀을 알고 있을 때는
+ * 옆 내용까지의 거리만큼만 넓힌다.
+ */
+function clampedPixelBox(
+  it: OcrBox,
+  width: number,
+  height: number,
+  origPixels?: Uint8ClampedArray,
+): PxBox {
+  const padded = toPixelBox(it.box, width, height);
+  if (!origPixels) return padded;
+
+  const [ymin, xmin, ymax, xmax] = it.box;
+  const rawX0 = (xmin / 1000) * width;
+  const rawX1 = (xmax / 1000) * width;
+  const ty0 = Math.max(0, Math.round((ymin / 1000) * height));
+  const ty1 = Math.min(height, Math.round((ymax / 1000) * height));
+  const th = MIN_TEXT_STDDEV * 0.8;
+
+  const hasRight = (d: number) =>
+    columnStdev(origPixels, width, Math.round(rawX1) + d, ty0, ty1) > th;
+  const hasLeft = (d: number) =>
+    columnStdev(origPixels, width, Math.round(rawX0) - d, ty0, ty1) > th;
+
+  const wantLeft = Math.max(0, Math.round(rawX0 - padded.x0));
+  const wantRight = Math.max(0, Math.round(padded.x1 - rawX1));
+  // 붙어 있는 잔여 획은 덮되(최대 박스 폭 15%), 빈 칸 뒤의 옆 항목은 건드리지 않는다
+  const leftoverCap = Math.min(24, Math.round((rawX1 - rawX0) * 0.15));
+  const padLeft = hasLeft(1)
+    ? extendOverLeftover(hasLeft, leftoverCap)
+    : safePad(hasLeft, wantLeft);
+  const padRight = hasRight(1)
+    ? extendOverLeftover(hasRight, leftoverCap)
+    : safePad(hasRight, wantRight);
+
+  return {
+    x0: Math.max(0, Math.round(rawX0) - padLeft),
+    y0: padded.y0,
+    x1: Math.min(width, Math.round(rawX1) + padRight),
+    y1: padded.y1,
+  };
+}
+
 /** 한 프레임에 번역 박스들을 그린다 (원문 지우기 + 한국어 얹기) */
 function paintBoxes(
   ctx: SKRSContext2D,
   width: number,
   height: number,
   boxes: OcrBox[],
+  origPixels?: Uint8ClampedArray,
 ): void {
   for (const it of boxes) {
     const ko = sanitizeSymbols(it.ko).trim();
     if (!ko) continue; // 어드민이 비운 문구 = 이 항목은 번역하지 않음
 
-    const b = toPixelBox(it.box, width, height);
+    const b = clampedPixelBox(it, width, height, origPixels);
     const bw = b.x1 - b.x0;
     const bh = b.y1 - b.y0;
     if (bw < 4 || bh < 4) continue;
@@ -599,6 +651,30 @@ export function safePad(
     if (colHasContent(d)) return Math.max(0, d - 2);
   }
   return maxPad;
+}
+
+/**
+ * 박스 밖으로 이어지는 "같은 글자의 잔여분"까지만 지우기 영역을 넓힌다.
+ *
+ * 모델 좌표가 글자 끝을 살짝 짧게 잡으면 원문 마지막 획이 남는다
+ * (실사례: "1050MAH" 의 H 가 남아 "1050MAHH"). 붙어 있는 내용은 통과시키되,
+ * 빈 칸(2px 이상)이 나오면 거기서 멈춰 옆 항목은 건드리지 않는다.
+ * 넓히는 양은 박스 폭의 15% 이내로 제한 — 옆 단어를 통째로 삼키지 않도록.
+ */
+export function extendOverLeftover(
+  colHasContent: (offset: number) => boolean,
+  maxExtend: number,
+): number {
+  let gap = 0;
+  for (let d = 1; d <= maxExtend; d++) {
+    if (colHasContent(d)) {
+      gap = 0;
+    } else {
+      gap++;
+      if (gap >= 2) return d - gap;
+    }
+  }
+  return maxExtend;
 }
 
 /** 세로 구간에서 한 열의 명암 표준편차 — 글자가 있으면 높다 */
@@ -810,7 +886,7 @@ export async function compositeTranslatedStill(
   const out = ctx.getImageData(0, 0, W, H);
   for (const it of patchBoxes) patchOne(out.data, rd, it, W, H);
   ctx.putImageData(out, 0, 0);
-  if (overlayBoxes.length > 0) paintBoxes(ctx, W, H, overlayBoxes);
+  if (overlayBoxes.length > 0) paintBoxes(ctx, W, H, overlayBoxes, origPixels);
 
   // 자동 검수 — 재생성이 문구를 빠뜨리거나 뭉갠 박스를 잡아 재처리한다
   if (verify && patchBoxes.length > 0) {
@@ -825,7 +901,7 @@ export async function compositeTranslatedStill(
         const img = ctx.getImageData(0, 0, W, H);
         for (const it of bad) restoreOne(img.data, origPixels, it, W, H);
         ctx.putImageData(img, 0, 0);
-        if (horiz.length > 0) paintBoxes(ctx, W, H, horiz);
+        if (horiz.length > 0) paintBoxes(ctx, W, H, horiz, origPixels);
         void vert; // 세로쓰기는 원본 유지 (오버레이가 세로를 못 그림)
       }
     } catch {

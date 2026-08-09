@@ -14,6 +14,7 @@ import {
   isForeignSource,
   safePad,
   isCrowdedBox,
+  extendOverLeftover,
 } from "./imageTranslate";
 
 describe("parseOcrBoxes — 모델 응답 검증", () => {
@@ -151,6 +152,20 @@ describe("safePad — 옆 내용 침범 방지", () => {
 
   it("주변이 비어 있으면 최대 여백을 그대로 쓴다", () => {
     expect(safePad(() => false, 18)).toBe(18);
+  });
+});
+
+describe("extendOverLeftover — 잔여 획 덮기", () => {
+  it("붙어 있는 잔여 글자를 지나 빈 칸에서 멈춘다 (실사례: 1050MAHH 의 H)", () => {
+    expect(extendOverLeftover((d) => d <= 6, 24)).toBe(6);
+  });
+
+  it("빈 칸 뒤의 옆 항목은 삼키지 않는다", () => {
+    expect(extendOverLeftover((d) => d <= 4 || d >= 7, 24)).toBe(4);
+  });
+
+  it("상한을 넘지 않는다", () => {
+    expect(extendOverLeftover(() => true, 10)).toBe(10);
   });
 });
 
