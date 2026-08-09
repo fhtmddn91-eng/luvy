@@ -6,6 +6,7 @@ import {
   addProductAssets,
   deleteProductAsset,
   moveProductAsset,
+  reorderProductAssets,
   translateProductAsset,
   updateAssetTranslation,
   revertAssetTranslation,
@@ -67,9 +68,17 @@ function TranslationEditor({ asset, onClose }: { asset: AssetRow; onClose: () =>
         </button>
       </div>
 
-      <div className="mt-3 grid gap-4 lg:grid-cols-[240px_1fr]">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={asset.url} alt="번역된 이미지" className="w-full border border-hairline bg-canvas object-contain" />
+      {/* 미리보기를 크게 — 작으면 고친 문구가 제대로 들어갔는지 확인이 안 된다 */}
+      <div className="mt-3 grid gap-5 lg:grid-cols-[minmax(320px,42%)_1fr]">
+        <a href={asset.url} target="_blank" rel="noreferrer" className="block self-start">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={asset.url}
+            alt="번역된 이미지"
+            className="w-full border border-hairline bg-canvas object-contain"
+          />
+          <span className="mt-1 block text-[11px] text-muted">클릭하면 원래 크기로 열립니다</span>
+        </a>
 
         <form action={formAction} className="space-y-2">
           {items.map((it, i) => (
@@ -115,6 +124,16 @@ export function ProductAssetsManager({
   const [trErrors, setTrErrors] = useState<string[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
 
+  // 드래그 순서 변경 — 저장 전까지는 화면에서만 순서를 바꾼다
+  const [order, setOrder] = useState<string[] | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [savingOrder, setSavingOrder] = useState(false);
+  const [orderError, setOrderError] = useState<string | null>(null);
+
+  const view = order
+    ? (order.map((id) => assets.find((a) => a.id === id)).filter(Boolean) as AssetRow[])
+    : assets;
+
   const toggle = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -122,6 +141,36 @@ export function ProductAssetsManager({
       else next.add(id);
       return next;
     });
+  };
+
+  const allSelected = assets.length > 0 && selected.size === assets.length;
+  const toggleAll = () => {
+    setSelected(allSelected ? new Set() : new Set(assets.map((a) => a.id)));
+  };
+
+  const onDrop = (targetId: string) => {
+    if (!dragId || dragId === targetId) return;
+    const ids = view.map((a) => a.id);
+    const from = ids.indexOf(dragId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    setOrder(ids);
+    setDragId(null);
+  };
+
+  const saveOrder = async () => {
+    if (!order) return;
+    setSavingOrder(true);
+    setOrderError(null);
+    try {
+      const r = await reorderProductAssets(productId, order);
+      if (r.error) setOrderError(r.error);
+      else setOrder(null); // 서버 순서와 같아졌으니 화면 임시 순서를 버린다
+    } catch {
+      setOrderError("순서 저장에 실패했습니다. 다시 시도해주세요.");
+    }
+    setSavingOrder(false);
   };
 
   // 순차 실행 — 한 번에 몰아 보내면 OCR API 한도(분당 요청)에 걸린다
@@ -166,10 +215,20 @@ export function ProductAssetsManager({
         <>
           {/* 번역 도구줄 */}
           <div className="mb-3 flex flex-wrap items-center gap-3 border border-hairline bg-canvas px-4 py-3">
-            <p className="text-[12px] text-ink-soft">
+            <p className="w-full text-[12px] text-ink-soft">
               이미지를 체크한 뒤 번역을 누르면 이미지 속 중국어가 한국어로 바뀝니다. 원본은
-              보존되어 언제든 복원할 수 있습니다.
+              보존되어 언제든 복원할 수 있습니다. 타일을 끌어다 놓으면 순서를 바꿀 수 있습니다.
             </p>
+            <label className="flex cursor-pointer items-center gap-2 text-[12px] font-bold text-ink-deep">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                disabled={progress !== null}
+                className="size-4 accent-ink-deep"
+              />
+              전체 선택 ({assets.length}장)
+            </label>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -205,11 +264,37 @@ export function ProductAssetsManager({
             </div>
           )}
 
+          {order && (
+            <div className="mb-3 flex flex-wrap items-center gap-3 border border-ink-deep bg-white px-4 py-3">
+              <p className="text-[12px] font-bold text-ink-deep">
+                순서를 바꿨습니다. 저장해야 상세페이지에 반영됩니다.
+              </p>
+              <button type="button" onClick={saveOrder} disabled={savingOrder} className={btnPrimary}>
+                {savingOrder ? "저장 중…" : "순서 저장"}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setOrder(null); setOrderError(null); }}
+                className="text-[12px] font-bold text-muted hover:text-ink-deep"
+              >
+                되돌리기
+              </button>
+              {orderError && <p className={errorCls}>{orderError}</p>}
+            </div>
+          )}
+
           <ul className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
-            {assets.map((a, i) => (
+            {view.map((a, i) => (
               <li
                 key={a.id}
-                className={`border bg-white p-1.5 ${selected.has(a.id) ? "border-ink-deep" : "border-hairline"}`}
+                draggable={progress === null}
+                onDragStart={() => setDragId(a.id)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => onDrop(a.id)}
+                onDragEnd={() => setDragId(null)}
+                className={`border bg-white p-1.5 ${dragId === a.id ? "opacity-40" : ""} ${
+                  selected.has(a.id) ? "border-ink-deep" : "border-hairline"
+                } ${progress === null ? "cursor-grab active:cursor-grabbing" : ""}`}
               >
                 <label className="relative block cursor-pointer">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -243,10 +328,10 @@ export function ProductAssetsManager({
                 <div className="mt-1 flex items-center justify-between text-[11px]">
                   <span className="flex gap-1">
                     <form action={moveProductAsset.bind(null, a.id, "up")}>
-                      <button type="submit" disabled={i === 0} aria-label="앞으로" className="px-1 text-muted hover:text-ink-deep disabled:opacity-25">◀</button>
+                      <button type="submit" disabled={i === 0 || order !== null} aria-label="앞으로" className="px-1 text-muted hover:text-ink-deep disabled:opacity-25">◀</button>
                     </form>
                     <form action={moveProductAsset.bind(null, a.id, "down")}>
-                      <button type="submit" disabled={i === assets.length - 1} aria-label="뒤로" className="px-1 text-muted hover:text-ink-deep disabled:opacity-25">▶</button>
+                      <button type="submit" disabled={i === view.length - 1 || order !== null} aria-label="뒤로" className="px-1 text-muted hover:text-ink-deep disabled:opacity-25">▶</button>
                     </form>
                   </span>
                   <form action={deleteProductAsset.bind(null, a.id)}>

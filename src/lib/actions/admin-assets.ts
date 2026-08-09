@@ -245,6 +245,38 @@ export async function revertAssetTranslation(assetId: string): Promise<void> {
   revalidateProduct(asset.productId);
 }
 
+/**
+ * 드래그로 옮긴 순서를 통째로 저장한다.
+ *
+ * 화살표 한 칸 이동은 20~30장을 옮길 때 클릭이 너무 많다. 클라이언트가 정렬한
+ * id 순서를 그대로 받아 0부터 다시 매긴다 — 같은 상품의 자산만 반영하므로
+ * 남의 상품 자산 id 를 섞어 보내도 무시된다.
+ */
+export async function reorderProductAssets(
+  productId: string,
+  orderedIds: string[],
+): Promise<{ error?: string; ok?: boolean }> {
+  await requireAdmin();
+
+  const assets = await db.productAsset.findMany({
+    where: { productId },
+    select: { id: true },
+  });
+  const own = new Set(assets.map((a) => a.id));
+  const next = orderedIds.filter((id) => own.has(id));
+  if (next.length !== assets.length) {
+    return { error: "이미지 목록이 바뀌었습니다. 새로고침 후 다시 시도해주세요." };
+  }
+
+  await db.$transaction(
+    next.map((id, i) =>
+      db.productAsset.update({ where: { id }, data: { sortOrder: i } }),
+    ),
+  );
+  revalidateProduct(productId);
+  return { ok: true };
+}
+
 /** 상세 이미지 순서 한 칸 이동 — 이웃과 sortOrder 를 맞바꾼다 */
 export async function moveProductAsset(assetId: string, dir: "up" | "down"): Promise<void> {
   await requireAdmin();

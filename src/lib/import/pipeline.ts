@@ -13,6 +13,41 @@ import type { ImportPayload } from "./types";
 /** CNY 단가는 참고용으로만 쓰고, 원화 판매가는 관리자가 직접 넣는다. */
 const PLACEHOLDER_TIER = { minQty: 1, unitPrice: 0 };
 
+export interface MirroredRow {
+  url: string;
+  bytes: number;
+}
+
+/**
+ * 자산 행 생성 — sortOrder 를 **종류를 가로질러 하나의 연속 번호**로 매긴다.
+ *
+ * 예전에는 대표·상세·옵션이 각각 0번부터 시작해 번호가 서로 겹쳤다. 정렬이
+ * sortOrder 하나뿐이라 같은 번호끼리는 순서가 매번 달라졌고, 1688 에서 1,2,3,4,5
+ * 순이던 이미지가 어드민·상세페이지에서 1,4,3,2,5 처럼 뒤섞여 보였다(실제 발생).
+ * 대표 → 상세 → 옵션 순으로 이어 붙여 원본 순서를 그대로 보존한다.
+ */
+export function buildAssetRows(
+  main: MirroredRow[],
+  detail: MirroredRow[],
+  option: MirroredRow[],
+): { kind: string; url: string; bytes: number; sortOrder: number }[] {
+  const rows: { kind: string; url: string; bytes: number; sortOrder: number }[] = [];
+  const push = (kind: string, list: MirroredRow[]) => {
+    for (const i of list) {
+      rows.push({
+        kind: kind === "DETAIL" && i.url.endsWith(".gif") ? "GIF" : kind,
+        url: i.url,
+        bytes: i.bytes,
+        sortOrder: rows.length,
+      });
+    }
+  };
+  push("MAIN", main);
+  push("DETAIL", detail);
+  push("OPTION", option);
+  return rows;
+}
+
 export interface ImportOutcome {
   ok: boolean
   productId?: string;
@@ -137,28 +172,7 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
         sourceUrl: draft.sourceUrl,
         sourceId: draft.sourceId,
         priceTiers: { create: [PLACEHOLDER_TIER] },
-        assets: {
-          create: [
-            ...mainReport.images.map((i, idx) => ({
-              kind: "MAIN",
-              url: i.url,
-              bytes: i.bytes,
-              sortOrder: idx,
-            })),
-            ...detailReport.images.map((i, idx) => ({
-              kind: i.url.endsWith(".gif") ? "GIF" : "DETAIL",
-              url: i.url,
-              bytes: i.bytes,
-              sortOrder: idx,
-            })),
-            ...optionReport.images.map((i, idx) => ({
-              kind: "OPTION",
-              url: i.url,
-              bytes: i.bytes,
-              sortOrder: idx,
-            })),
-          ],
-        },
+        assets: { create: buildAssetRows(mainReport.images, detailReport.images, optionReport.images) },
       },
     });
 
