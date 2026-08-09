@@ -21,6 +21,27 @@ function revalidateProduct(productId: string): void {
 }
 
 /**
+ * 썸네일(Product.image)을 첫 대표이미지에 맞춘다.
+ *
+ * 썸네일을 자산과 따로 복사해 두니 번역·삭제·순서변경 때마다 어긋났다.
+ * 실제로 썸네일만 중국어로 남거나(번역 대상에서 빠짐), 자산을 지웠을 때
+ * 파일이 사라져 깨진 썸네일이 생겼다(운영 데이터에서 2건 확인).
+ * 자산이 바뀔 때마다 첫 MAIN(없으면 첫 자산)으로 다시 맞춘다.
+ */
+async function syncProductThumbnail(productId: string): Promise<void> {
+  const assets = await db.productAsset.findMany({
+    where: { productId },
+    orderBy: { sortOrder: "asc" },
+    select: { url: true, kind: true },
+  });
+  const next = assets.find((a) => a.kind === "MAIN")?.url ?? assets[0]?.url ?? "";
+  await db.product.updateMany({
+    where: { id: productId, NOT: { image: next } },
+    data: { image: next },
+  });
+}
+
+/**
  * 상세페이지 이미지/GIF 업로드 (여러 장 한 번에).
  * GIF 는 kind=GIF, 나머지는 kind=DETAIL 로 저장되어 상품 상세 하단에 순서대로 렌더된다.
  */
@@ -74,6 +95,7 @@ export async function addProductAssets(
     targetId: productId,
     summary: `상세 이미지 ${saved}장 추가`,
   });
+  await syncProductThumbnail(productId);
   revalidateProduct(productId);
   return { ok: saved };
 }
@@ -96,6 +118,8 @@ export async function deleteProductAsset(assetId: string): Promise<void> {
     summary: `상세 이미지 1장 삭제 (${asset.kind})`,
     meta: { url: asset.url },
   });
+  // 지운 게 썸네일이었다면 남은 대표이미지로 다시 맞춘다 (깨진 썸네일 방지)
+  await syncProductThumbnail(asset.productId);
   revalidateProduct(asset.productId);
 }
 
@@ -129,11 +153,8 @@ async function swapTranslatedFile(
       bytes: rendered.data.byteLength,
     },
   });
-  // 대표 썸네일이 이 이미지를 쓰고 있으면 함께 교체
-  await db.product.updateMany({
-    where: { id: asset.productId, image: { in: [sourceUrl, asset.url] } },
-    data: { image: saved.url },
-  });
+  // 썸네일은 항상 첫 대표이미지를 따라간다
+  await syncProductThumbnail(asset.productId);
   return { ok: true };
 }
 
@@ -248,10 +269,7 @@ export async function revertAssetTranslation(assetId: string): Promise<void> {
       bytes: original?.data.byteLength ?? asset.bytes,
     },
   });
-  await db.product.updateMany({
-    where: { id: asset.productId, image: asset.url },
-    data: { image: asset.originalUrl },
-  });
+  await syncProductThumbnail(asset.productId);
   await audit({
     action: "ASSET_TRANSLATE",
     target: "product",
@@ -290,6 +308,8 @@ export async function reorderProductAssets(
       db.productAsset.update({ where: { id }, data: { sortOrder: i } }),
     ),
   );
+  // 첫 대표이미지가 바뀌었을 수 있다
+  await syncProductThumbnail(productId);
   revalidateProduct(productId);
   return { ok: true };
 }
