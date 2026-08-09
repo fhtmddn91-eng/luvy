@@ -37,3 +37,6 @@ next-env.d.ts
 
 # private uploads (사업자등록증 — 절대 커밋 금지)
 /private-uploads
+
+# 작업 중 생긴 임시 이미지
+spec_*.jpg
