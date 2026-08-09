@@ -12,6 +12,8 @@ import {
   isVerticalBox,
   isSmallOverlayBox,
   isForeignSource,
+  safePad,
+  isCrowdedBox,
 } from "./imageTranslate";
 
 describe("parseOcrBoxes — 모델 응답 검증", () => {
@@ -133,6 +135,39 @@ describe("박스 분류 — 재생성 패치 vs 오버레이", () => {
     expect(isVerticalBox(vertBox, 1440, 1440)).toBe(true);
     expect(isSmallOverlayBox(vertBox, 1440, 1440)).toBe(false);
     expect(isVerticalBox(titleBox, 1440, 1440)).toBe(false);
+  });
+});
+
+describe("safePad — 옆 내용 침범 방지", () => {
+  it("가까이 내용이 있으면 그 앞에서 멈춘다 (실사례: 不低于53MIN 의 5 를 덮음)", () => {
+    // 박스 오른쪽 5px 지점부터 숫자가 있다 → 여백은 3px 로 줄어야 한다
+    expect(safePad((d) => d >= 5, 18)).toBe(3);
+  });
+
+  it("바로 옆에 붙어 있으면 여백 0", () => {
+    expect(safePad((d) => d >= 1, 18)).toBe(0);
+    expect(safePad((d) => d >= 2, 18)).toBe(0);
+  });
+
+  it("주변이 비어 있으면 최대 여백을 그대로 쓴다", () => {
+    expect(safePad(() => false, 18)).toBe(18);
+  });
+});
+
+describe("isCrowdedBox — 옆에 내용이 붙은 문구 판별", () => {
+  it("가까이 내용이 있으면 오버레이 대상 (실사례: 不低于53MIN)", () => {
+    expect(isCrowdedBox(5, 30)).toBe(true);   // 30px 글자 옆 5px 지점에 숫자
+    expect(isCrowdedBox(13, 30)).toBe(true);  // 13 < 13.5
+  });
+
+  it("충분히 떨어져 있으면 재생성 패치를 쓴다", () => {
+    expect(isCrowdedBox(40, 30)).toBe(false);
+    expect(isCrowdedBox(20, 30)).toBe(false);
+  });
+
+  it("작은 글자도 최소 10px 는 확보돼야 한다", () => {
+    expect(isCrowdedBox(6, 12)).toBe(true);
+    expect(isCrowdedBox(12, 12)).toBe(false);
   });
 });
 

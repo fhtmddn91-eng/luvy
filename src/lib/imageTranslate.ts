@@ -583,6 +583,88 @@ export function isSmallOverlayBox(box: [number, number, number, number], W: numb
   return bh < SMALL_BOX_PX && !isVerticalBox(box, W, H);
 }
 
+/**
+ * 여백을 옆 내용에 닿기 전까지로 줄인다.
+ *
+ * 번역 대상이 아닌 것(숫자·단위)이 바로 옆에 붙어 있으면 여백이 그것을
+ * 덮어버린다 — 실사례: "不低于53MIN"에서 "不低于"를 "최소"로 바꾸며 옆의
+ * "5"를 지워 "최소 3MIN"(53분→3분)이 됐다. 스펙 오류는 치명적이라
+ * 바깥으로 한 칸씩 나가며 글자다운 대비가 나오면 거기서 멈춘다.
+ */
+export function safePad(
+  colHasContent: (offset: number) => boolean,
+  maxPad: number,
+): number {
+  for (let d = 1; d <= maxPad; d++) {
+    if (colHasContent(d)) return Math.max(0, d - 2);
+  }
+  return maxPad;
+}
+
+/** 세로 구간에서 한 열의 명암 표준편차 — 글자가 있으면 높다 */
+function columnStdev(
+  px: Uint8ClampedArray,
+  W: number,
+  x: number,
+  y0: number,
+  y1: number,
+): number {
+  if (x < 0 || x >= W || y1 <= y0) return 0;
+  let sum = 0;
+  let sq = 0;
+  let n = 0;
+  for (let y = y0; y < y1; y++) {
+    const i = (y * W + x) * 4;
+    const v = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+    sum += v;
+    sq += v * v;
+    n++;
+  }
+  if (n === 0) return 0;
+  const mean = sum / n;
+  return Math.sqrt(Math.max(0, sq / n - mean * mean));
+}
+
+/**
+ * 문구 바로 옆에 다른 내용(번역 대상이 아닌 숫자·단위 등)이 붙어 있는가.
+ *
+ * 이런 문구에 재생성 패치를 쓰면 안 된다 — 재생성은 줄 전체를 다시 그리므로
+ * 패치 경계에서 글자가 어긋난다. 실사례 "不低于53MIN": 여백이 넓으면 "5"를
+ * 덮어 53분→3분이 되고, 여백을 줄이면 재생성이 그린 "최소53"과 원본 "53MIN"이
+ * 겹쳐 "최소5353MIN"이 된다. 둘 다 스펙 오류라, 이런 박스는 오버레이로
+ * 정확히 박스 안에서만 처리한다.
+ */
+export function isCrowdedBox(
+  nearestContentPx: number,
+  boxHeightPx: number,
+): boolean {
+  return nearestContentPx < Math.max(10, boxHeightPx * 0.45);
+}
+
+/** 박스 좌우에서 가장 가까운 내용까지의 거리(px) */
+function nearestContentDistance(
+  origPixels: Uint8ClampedArray,
+  b: PxBox,
+  W: number,
+  H: number,
+  limit: number,
+): number {
+  const ty0 = Math.max(0, Math.round(b.y0));
+  const ty1 = Math.min(H, Math.round(b.y1));
+  const th = MIN_TEXT_STDDEV * 0.8;
+  let best = limit;
+  for (let d = 1; d <= limit; d++) {
+    if (
+      columnStdev(origPixels, W, Math.round(b.x1) + d, ty0, ty1) > th ||
+      columnStdev(origPixels, W, Math.round(b.x0) - d, ty0, ty1) > th
+    ) {
+      best = d;
+      break;
+    }
+  }
+  return best;
+}
+
 /** 박스 하나를 재생성본→원본 위에 페더링 패치 */
 function patchOne(
   od: Uint8ClampedArray,
@@ -712,9 +794,18 @@ export async function compositeTranslatedStill(
   rctx.drawImage(regen, 0, 0, W, H);
   const rd = rctx.getImageData(0, 0, W, H).data;
 
+  // 재생성 패치가 위험한 박스(작은 가로 글씨, 옆에 내용이 붙은 문구)는
+  // 오버레이로 — 박스 안에서만 정확히 지우고 그린다
   const active = boxes.filter((b) => b.ko.trim());
-  const patchBoxes = active.filter((b) => !isSmallOverlayBox(b.box, W, H));
-  const overlayBoxes = active.filter((b) => isSmallOverlayBox(b.box, W, H));
+  const useOverlay = (b: OcrBox): boolean => {
+    if (isSmallOverlayBox(b.box, W, H)) return true;
+    if (isVerticalBox(b.box, W, H)) return false; // 세로쓰기는 오버레이가 못 그린다
+    const px = toPixelBox(b.box, W, H);
+    const dist = nearestContentDistance(origPixels, px, W, H, 40);
+    return isCrowdedBox(dist, px.y1 - px.y0);
+  };
+  const patchBoxes = active.filter((b) => !useOverlay(b));
+  const overlayBoxes = active.filter(useOverlay);
 
   const out = ctx.getImageData(0, 0, W, H);
   for (const it of patchBoxes) patchOne(out.data, rd, it, W, H);
