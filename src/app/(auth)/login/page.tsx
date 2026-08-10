@@ -1,4 +1,3 @@
-import { contactPoint } from "@/lib/company";
 import { getCompany } from "@/lib/companyInfo";
 import Link from "next/link";
 import { AuthCard } from "@/components/auth/AuthCard";
@@ -40,9 +39,19 @@ export default async function LoginPage({
         </p>
       </div>
 
-      {/* 비밀번호 재발급이 아직 자동화되지 않아 고객센터로 안내한다 */}
+      {/*
+       * 승인 문의처는 전화·이메일을 함께 보여준다 — 연락 수단이 하나만 뜨면
+       * 그쪽이 안 될 때 되돌아갈 곳이 없다(전화가 없으면 이메일만 나온다).
+       */}
       <p className="mt-4 border-t border-line pt-4 text-center text-[12px] leading-relaxed text-muted">
-        고객센터 <span className="font-semibold text-ink-soft">{contactPoint(company)}</span>
+        고객센터{" "}
+        {company.tel && (
+          <>
+            <span className="font-semibold text-ink-soft">{company.tel}</span>
+            {" · "}
+          </>
+        )}
+        <span className="font-semibold text-ink-soft">{company.email}</span>
         <br />
         ({company.hours})
       </p>

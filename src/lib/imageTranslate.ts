@@ -313,9 +313,13 @@ function translatePrompt(items: string[], strict: boolean): string {
   return `중국 상품 상세페이지 이미지에서 추출한 문구 목록입니다. 각각 한국어로 번역하세요.
 
 규칙:
-- 한국 성인용품 도매몰 상세페이지에서 쓰는 자연스러운 표현으로
+- 한국 성인용품 도매몰 상세페이지에서 실제로 쓰는 자연스러운 표현으로
 - **숫자·단위·모델명은 원문 그대로 유지** (53MIN, 3.7V, SHD-S549 등을 절대 바꾸거나 빼지 마세요)
-- 원문 글자수의 1.5배를 넘지 않게 짧게
+- **원문 글자수를 넘지 않게** 짧게. 이미지 안에 들어가야 하므로 길면 글씨가 작아져 안 읽힙니다
+- 중국어 의성어·의태어를 소리 나는 대로 옮기지 마세요.
+  한국에서 쓰는 말로 바꿉니다 (拍打→탭·두드림, 咬合→흡입·조임, 抠震→자극)
+- 설명하듯 늘이지 말고 상품 카피처럼 끊어 씁니다
+  (나쁨: "한 손 한가득 착감기는 그립" / 좋음: "한 손 그립")
 - 한자·중국어 문자를 답에 절대 남기지 마세요. 모든 단어를 한글로 씁니다 (예: 伸缩→신축)${
     strict ? "\n- 이전 답에 한자가 남아 있었습니다. 이번에는 반드시 순수 한글+숫자+영문만 사용하세요." : ""
   }
@@ -653,6 +657,54 @@ function clampedPixelBox(
 }
 
 /** 한 프레임에 번역 박스들을 그린다 (원문 지우기 + 한국어 얹기) */
+/**
+ * 원문에서 같은 크기였던 문구끼리 묶는다 (높이 차이가 tol 이내면 한 묶음).
+ *
+ * 왜: 렌더 크기를 박스마다 따로 맞추면, 원문에서 같은 12px 이던 줄들이
+ * 좌표 오차 때문에 15·13·17px 로 제각각 나온다(실사용 지적). 원문 높이로
+ * 먼저 묶어 두고 묶음마다 하나의 크기를 쓰면 원본의 위계가 그대로 산다.
+ */
+export function groupBySize(heights: number[], tol = 0.18): number[] {
+  const order = heights.map((_, i) => i).sort((a, b) => heights[a] - heights[b]);
+  const group = new Array<number>(heights.length).fill(0);
+  let g = -1;
+  let anchor = 0;
+  for (const i of order) {
+    if (g < 0 || heights[i] > anchor * (1 + tol)) {
+      g++;
+      anchor = heights[i];
+    }
+    group[i] = g;
+  }
+  return group;
+}
+
+/**
+ * 묶음마다 하나의 글자 크기를 정한다.
+ *
+ * 묶음 안에서는 다 들어가야 하므로 가장 작은 쪽에 맞춘다. 다만 번역문이
+ * 유난히 길어 혼자 많이 줄여야 하는 항목은 묶음에서 빼고 제 크기를 쓴다 —
+ * 그 하나 때문에 같은 줄들이 전부 작아지면 그게 더 어색하다.
+ */
+export function unifySizes(groups: number[], fitted: number[], floor = 0.75): number[] {
+  const out = fitted.slice();
+  const byGroup = new Map<number, number[]>();
+  groups.forEach((g, i) => {
+    const list = byGroup.get(g);
+    if (list) list.push(i);
+    else byGroup.set(g, [i]);
+  });
+  for (const idx of byGroup.values()) {
+    if (idx.length < 2) continue;
+    const mid = median(idx.map((i) => fitted[i]));
+    const inRange = idx.filter((i) => fitted[i] >= mid * floor);
+    if (inRange.length < 2) continue;
+    const unified = Math.min(...inRange.map((i) => fitted[i]));
+    for (const i of inRange) out[i] = unified;
+  }
+  return out;
+}
+
 function paintBoxes(
   ctx: SKRSContext2D,
   width: number,
@@ -660,6 +712,18 @@ function paintBoxes(
   boxes: OcrBox[],
   origPixels?: Uint8ClampedArray,
 ): void {
+  interface Plan {
+    it: OcrBox;
+    ko: string;
+    b: PxBox;
+    bw: number;
+    bh: number;
+    family: string;
+    vertical: boolean;
+    fitted: number;
+  }
+
+  const plans: Plan[] = [];
   for (const it of boxes) {
     const mode = it.mode ?? "translate";
     if (mode === "keep") continue; // 손대지 않음 — 원문 그대로
@@ -674,35 +738,53 @@ function paintBoxes(
     if (bw < 4 || bh < 4) continue;
 
     // 원문 지우기 — 배경은 주변 픽셀에서 읽는다(모델의 bg 색은 어긋나 박스 자국이 남았다).
-    // erase 모드는 여기까지만 하고 글자를 쓰지 않는다.
+    // 지우기는 먼저 전부 끝낸다 — 나중에 지우면 이미 그린 옆 문구를 덮을 수 있다.
     eraseRegion(ctx, width, height, b);
-    if (mode === "erase") continue;
+    if (mode === "erase") continue; // erase 모드는 여기까지
 
-    const family = FONT_FAMILIES[it.weight ?? pickWeight(it.bold, bh)];
-    // 박스에 맞는 크기를 찾은 뒤 배율을 곱한다 (어드민이 키우거나 줄일 수 있게)
-    let size = Math.floor(bh);
-    let metrics!: TextMetrics;
+    plans.push({
+      it,
+      ko,
+      b,
+      bw,
+      bh,
+      family: FONT_FAMILIES[it.weight ?? pickWeight(it.bold, bh)],
+      vertical: isVerticalBox(it.box, width, height),
+      fitted: 0,
+    });
+  }
+
+  // 박스에 들어가는 최대 크기를 먼저 구한다
+  for (const p of plans) {
+    let size = Math.floor(p.bh);
     while (size > 6) {
-      ctx.font = `${size}px "${family}"`;
-      metrics = ctx.measureText(ko);
-      const textH = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
-      if (metrics.width <= bw * 0.94 && textH <= bh * 0.82) break;
+      ctx.font = `${size}px "${p.family}"`;
+      const m = ctx.measureText(p.ko);
+      const textH = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
+      if (m.width <= p.bw * 0.94 && textH <= p.bh * 0.82) break;
       size -= 1;
     }
-    size = Math.max(6, Math.round(size * (it.scale ?? 1)));
-    ctx.font = `${size}px "${family}"`;
-    metrics = ctx.measureText(ko);
-    const textH = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+    p.fitted = size;
+  }
 
+  // 원문에서 같은 크기였던 가로쓰기 문구끼리 크기를 통일한다
+  const flat = plans.filter((p) => !p.vertical);
+  if (flat.length > 1) {
+    const heights = flat.map((p) => ((p.it.box[2] - p.it.box[0]) / 1000) * height);
+    const unified = unifySizes(groupBySize(heights), flat.map((p) => p.fitted));
+    flat.forEach((p, i) => (p.fitted = unified[i]));
+  }
+
+  for (const p of plans) {
+    const { it, ko, b, bw, bh, family } = p;
     // 위치 보정 — 정규화(0~1000) 단위를 픽셀로 환산해 더한다
     const offX = ((it.dx ?? 0) / 1000) * width;
     const offY = ((it.dy ?? 0) / 1000) * height;
-
     ctx.fillStyle = it.fg;
 
     // 세로쓰기 문구는 글자를 세로로 쌓는다 — 가로로 쓰면 좁은 박스에
     // 밀려 들어가 아주 작아진다(수동 조정한 세로 문구에서 발생)
-    if (isVerticalBox(it.box, width, height)) {
+    if (p.vertical) {
       // 공백은 세로로 쌓을 때 빈 칸만 만들어 어색하다 — 빼고 글자만 쌓는다
       const chars = [...ko].filter((c) => c.trim());
       const cell = Math.min(bw, bh / Math.max(1, chars.length));
@@ -721,6 +803,11 @@ function paintBoxes(
       continue;
     }
 
+    // 통일된 크기에 어드민 배율을 곱한다 (키우거나 줄일 수 있게)
+    const size = Math.max(6, Math.round(p.fitted * (it.scale ?? 1)));
+    ctx.font = `${size}px "${family}"`;
+    const metrics = ctx.measureText(ko);
+    const textH = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
     ctx.fillText(
       ko,
       b.x0 + (bw - metrics.width) / 2 + offX,

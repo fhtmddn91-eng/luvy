@@ -18,6 +18,8 @@ import {
   groupTouching,
   median,
   cleanEdge,
+  groupBySize,
+  unifySizes,
   hasManualOverride,
   borderUniformity,
 } from "./imageTranslate";
@@ -317,5 +319,30 @@ describe("borderUniformity — 글자가 테두리에 닿은 경우", () => {
     const r = borderUniformity([...bg, ...stroke]);
     expect(r.uniform).toBe(true);
     expect(r.color[0]).toBe(240);
+  });
+});
+
+describe("groupBySize / unifySizes — 글자 크기 통일", () => {
+  it("원문 높이가 비슷하면 한 묶음으로 본다", () => {
+    // 12px 짜리 세 줄 + 24px 제목 → 두 묶음
+    expect(groupBySize([12, 12.5, 13, 24])).toEqual([0, 0, 0, 1]);
+  });
+
+  it("높이가 계단식으로 벌어지면 각각 다른 묶음", () => {
+    expect(groupBySize([10, 20, 40])).toEqual([0, 1, 2]);
+  });
+
+  it("같은 묶음은 가장 작은 크기로 통일한다 (다 들어가야 하므로)", () => {
+    // 실사용 지적: 원문 12px 한 줄이 15·13·17px 로 제각각 나왔다
+    expect(unifySizes([0, 0, 0], [15, 13, 17])).toEqual([13, 13, 13]);
+  });
+
+  it("번역문이 유난히 길어 혼자 많이 줄어야 하면 묶음에서 뺀다", () => {
+    // 5 는 median(15) 의 75% 미만 → 혼자 제 크기를 쓰고 나머지는 통일
+    expect(unifySizes([0, 0, 0], [15, 16, 5])).toEqual([15, 15, 5]);
+  });
+
+  it("묶음에 하나뿐이면 그대로 둔다", () => {
+    expect(unifySizes([0, 1], [12, 30])).toEqual([12, 30]);
   });
 });

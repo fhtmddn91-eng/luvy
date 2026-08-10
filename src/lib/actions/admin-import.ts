@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
+import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { runImport } from "@/lib/import/pipeline";
 import type { ImportPayload } from "@/lib/import/types";
@@ -87,4 +88,43 @@ export async function importFrom1688(
     : undefined;
 
   return { ok: true, message: result.message, productId: result.productId, summary };
+}
+
+/**
+ * 수집 기록 삭제.
+ *
+ * 기록은 실패 원인 추적용이라 남겨두지만, 시험 삼아 여러 번 돌리면 목록이
+ * 금세 지저분해진다. **상품은 건드리지 않는다** — 기록만 지운다.
+ * sourceId 중복 방지도 상품(Product.sourceId)이 담당하므로 재수집에 영향 없다.
+ */
+export async function deleteImportJob(formData: FormData): Promise<void> {
+  await requireAdmin();
+  const id = String(formData.get("id") ?? "");
+  if (!id) return;
+
+  const job = await db.importJob.findUnique({ where: { id }, select: { rawTitle: true, koTitle: true } });
+  if (!job) return;
+  await db.importJob.delete({ where: { id } });
+
+  await audit({
+    action: "IMPORT_JOB_DELETE",
+    target: "import",
+    targetId: id,
+    summary: `수집 기록 삭제: ${job.koTitle || job.rawTitle || "(제목 없음)"}`,
+  });
+  revalidatePath("/admin/import");
+}
+
+/** 목록 비우기 — 완료·실패 기록을 한 번에 지운다(진행중은 남긴다). */
+export async function clearImportJobs(): Promise<void> {
+  await requireAdmin();
+  const { count } = await db.importJob.deleteMany({
+    where: { status: { in: ["DONE", "FAILED"] } },
+  });
+  await audit({
+    action: "IMPORT_JOB_DELETE",
+    target: "import",
+    summary: `수집 기록 일괄 삭제 ${count}건`,
+  });
+  revalidatePath("/admin/import");
 }

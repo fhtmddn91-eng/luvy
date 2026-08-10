@@ -6,6 +6,7 @@ import { bookmarkletHref } from "@/lib/import/bookmarklet";
 import { isTranslatorConfigured } from "@/lib/import/translate";
 import { ImportForm } from "@/components/admin/ImportForm";
 import { BookmarkletLink } from "@/components/admin/BookmarkletLink";
+import { clearImportJobs, deleteImportJob } from "@/lib/actions/admin-import";
 import {
   PageHeader,
   Panel,
@@ -94,7 +95,22 @@ export default async function AdminImportPage() {
       </div>
 
       <div className="rise rise-2 mt-8">
-        <Panel title="수집 이력" flush>
+        <Panel
+          title="수집 이력"
+          flush
+          action={
+            jobs.some((j) => j.status !== "PENDING") ? (
+              <form action={clearImportJobs}>
+                <button
+                  type="submit"
+                  className="border border-hairline px-3.5 py-1.5 text-[12px] font-semibold text-muted transition-colors hover:border-ink-deep hover:text-ink-deep"
+                >
+                  완료·실패 기록 비우기
+                </button>
+              </form>
+            ) : undefined
+          }
+        >
           {jobs.length === 0 ? (
             <EmptyState>아직 수집 이력이 없습니다.</EmptyState>
           ) : (
@@ -106,6 +122,7 @@ export default async function AdminImportPage() {
                   <Th align="center">이미지</Th>
                   <Th align="center">상태</Th>
                   <Th align="right">일시</Th>
+                  <Th align="right">기록</Th>
                 </tr>
               </thead>
               <tbody>
@@ -157,6 +174,19 @@ export default async function AdminImportPage() {
                     </td>
                     <td className="whitespace-nowrap px-5 py-3.5 text-right text-[13px] text-muted sm:px-6">
                       {dateFmt(j.createdAt)}
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3.5 text-right sm:px-6">
+                      {/* 기록만 지운다 — 등록된 상품은 그대로 남는다 */}
+                      <form action={deleteImportJob}>
+                        <input type="hidden" name="id" value={j.id} />
+                        <button
+                          type="submit"
+                          aria-label="수집 기록 삭제"
+                          className="text-[12.5px] text-muted transition-colors hover:text-ink-deep"
+                        >
+                          삭제
+                        </button>
+                      </form>
                     </td>
                   </tr>
                 ))}

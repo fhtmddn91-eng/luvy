@@ -26,6 +26,7 @@ export const AUDIT_ACTIONS = {
   PRODUCT_DELETE: "상품 삭제",
   PRODUCT_STATUS: "상품 판매/숨김 전환",
   PRODUCT_IMPORT: "1688 상품 수집",
+  IMPORT_JOB_DELETE: "수집 기록 삭제",
   ASSET_ADD: "상세 이미지 추가",
   ASSET_DELETE: "상세 이미지 삭제",
   ASSET_TRANSLATE: "이미지 번역",
@@ -70,7 +71,7 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
     label: "상품",
     actions: [
       "PRODUCT_CREATE", "PRODUCT_UPDATE", "PRODUCT_DELETE",
-      "PRODUCT_STATUS", "PRODUCT_IMPORT", "ASSET_ADD", "ASSET_DELETE",
+      "PRODUCT_STATUS", "PRODUCT_IMPORT", "IMPORT_JOB_DELETE", "ASSET_ADD", "ASSET_DELETE",
       "ASSET_TRANSLATE", "CATEGORY_CREATE", "CATEGORY_DELETE",
     ],
   },
