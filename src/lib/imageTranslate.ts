@@ -931,7 +931,12 @@ async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer;
  * 문구를 고정해야 어드민의 "문구 수정 → 재생성" 흐름이 성립한다.
  * GIF 는 프레임마다 그림이 미묘하게 달라져 애니메이션이 떨리므로 제외.
  */
-const IMAGE_MODEL = "gemini-3.1-flash-image";
+/**
+ * 이미지 편집 모델 (원본을 주고 글자 영역만 다시 그리게 한다).
+ * Imagen 계열은 predict 방식의 텍스트→이미지라 편집에 못 쓴다.
+ * 환경변수로 바꿔 끼울 수 있게 열어 둔다.
+ */
+const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
 
 function regenPrompt(boxes: OcrBox[]): string {
   // 유지·지움으로 지정한 항목은 재생성 대상에서 빼야 모델이 건드리지 않는다
