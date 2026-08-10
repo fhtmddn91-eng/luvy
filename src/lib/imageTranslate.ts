@@ -401,6 +401,41 @@ export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
     .filter((b) => b.ko && b.ko !== b.zh);
 }
 
+/**
+ * 이미 뽑아 둔 좌표는 그대로 두고 문구만 다시 번역한다.
+ *
+ * 번역 지침이 바뀌었을 때 기존 번역본을 손보는 용도. OCR 을 다시 돌리면
+ * 좌표가 미묘하게 달라져 어드민이 맞춰 둔 위치·크기 조정이 어긋난다.
+ * 어드민이 손댄 항목(위치·크기·지움 등)은 그대로 둔다.
+ */
+export async function retranslateBoxes(boxes: OcrBox[]): Promise<OcrBox[]> {
+  const targets = boxes
+    .map((b, i) => ({ b, i }))
+    .filter(({ b }) => b.zh && !hasManualOverride(b));
+  if (targets.length === 0) return boxes;
+
+  const koList = await translateTexts(targets.map(({ b }) => b.zh));
+  const bad = koList.map((ko, i) => (hasHanzi(ko) ? i : -1)).filter((i) => i >= 0);
+  if (bad.length > 0) {
+    try {
+      const repaired = await translateTexts(bad.map((i) => targets[i].b.zh), true);
+      bad.forEach((orig, j) => {
+        if (repaired[j] && !hasHanzi(repaired[j])) koList[orig] = repaired[j];
+      });
+    } catch {
+      // 보정 실패 시 이번 번역 그대로 — 아래에서 빈 값이면 옛 문구를 지킨다
+    }
+  }
+
+  const next = boxes.slice();
+  targets.forEach(({ i }, k) => {
+    const ko = koList[k];
+    // 새 번역이 비었거나 원문 그대로면 기존 문구를 지킨다 (퇴보 방지)
+    if (ko && ko !== next[i].zh) next[i] = { ...next[i], ko };
+  });
+  return next;
+}
+
 /* ── 렌더링 ────────────────────────────────────────────── */
 
 interface PxBox {
