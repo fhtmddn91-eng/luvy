@@ -1691,6 +1691,144 @@ async function callImageEdit(
   return sharp(out).resize(W, H, { fit: "fill" }).png().toBuffer();
 }
 
+/**
+ * 글자 박스들을 세로로 뭉쳐 "전체 폭 띠"로 만든다.
+ *
+ * 안전 필터에 걸린 이미지용 — 필터는 사진(화보)을 보고 거부하는데, 글자는
+ * 대부분 사진이 없는 위·아래 띠에 있다. 띠만 잘라 보내면 통과한다.
+ * 띠 최소 높이를 보장하는 이유: 이미지 모델은 극단적인 가로 비율(10:1 띠)을
+ * 못 그려서 비율 검증에서 전부 반려된다.
+ */
+export function textBands(
+  targets: OcrBox[],
+  W: number,
+  H: number,
+  pad = 24,
+  joinGap = 48,
+): { y0: number; y1: number; boxes: OcrBox[] }[] {
+  if (targets.length === 0) return [];
+  const spans = targets
+    .map((b) => ({ b, y0: (b.box[0] / 1000) * H, y1: (b.box[2] / 1000) * H }))
+    .sort((a, z) => a.y0 - z.y0);
+
+  // 1) 세로로 가까운 문구끼리 뭉친다
+  const clusters: { y0: number; y1: number; boxes: OcrBox[] }[] = [];
+  for (const s of spans) {
+    const last = clusters[clusters.length - 1];
+    if (last && s.y0 - last.y1 < joinGap) {
+      last.y1 = Math.max(last.y1, s.y1);
+      last.boxes.push(s.b);
+    } else {
+      clusters.push({ y0: s.y0, y1: s.y1, boxes: [s.b] });
+    }
+  }
+
+  // 2) 여유 + 최소 높이(가로 비율 2.5:1 이내) 보장
+  const minH = W * 0.4;
+  for (const c of clusters) {
+    c.y0 -= pad;
+    c.y1 += pad;
+    const short = minH - (c.y1 - c.y0);
+    if (short > 0) {
+      c.y0 -= short / 2;
+      c.y1 += short / 2;
+    }
+    c.y0 = Math.max(0, Math.round(c.y0));
+    c.y1 = Math.min(H, Math.round(c.y1));
+  }
+
+  // 3) 넓히다 겹쳐진 띠는 다시 합친다
+  const merged: typeof clusters = [];
+  for (const c of clusters) {
+    const last = merged[merged.length - 1];
+    if (last && c.y0 <= last.y1) {
+      last.y1 = Math.max(last.y1, c.y1);
+      last.boxes.push(...c.boxes);
+    } else {
+      merged.push(c);
+    }
+  }
+  return merged;
+}
+
+const clamp1k = (v: number): number => Math.max(0, Math.min(1000, Math.round(v)));
+
+/** 원본 기준 박스 좌표를 띠(잘라낸 부분) 기준 좌표로 옮긴다 — 띠 안 검수용 */
+function shiftBoxToBand(b: OcrBox, y0: number, bandH: number, H: number): OcrBox {
+  const [ymin, xmin, ymax, xmax] = b.box;
+  const py0 = (ymin / 1000) * H - y0;
+  const py1 = (ymax / 1000) * H - y0;
+  return { ...b, box: [clamp1k((py0 / bandH) * 1000), xmin, clamp1k((py1 / bandH) * 1000), xmax] };
+}
+
+/**
+ * 글자 띠만 잘라 하나씩 재생성하고, 띠 안에서도 글자 영역만 오려 원본에 얹는다.
+ *
+ * 실측: 화보 이미지 10장이 안전 필터에 걸려 모델이 이미지를 반환하지 않았다.
+ * 필터는 사진을 보고 거부하므로, 사진이 안 든 글자 띠는 통과한다.
+ *
+ * 띠를 통째로 얹으면 안 된다 — 띠에 딸려 들어간 소품(케이블·설명서)까지
+ * 모델이 다시 그려 위치가 밀리고 유령 글자가 생겼다(실측). GIF 정지 패치와
+ * 같은 방식으로 글자 영역만 페더링해 얹으면 나머지는 원본 픽셀 그대로다.
+ * 통과 못 한 띠만 오버레이로 — 띠 단위라 최악의 경우도 부분 오버레이다.
+ */
+export async function regenerateByBands(
+  data: Buffer,
+  mime: string,
+  boxes: OcrBox[],
+): Promise<{ data: Buffer; mime: string }> {
+  const meta = await sharp(data).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (!W || !H) throw new Error("이미지 크기를 읽을 수 없습니다.");
+
+  const targets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
+  const bands = textBands(targets, W, H);
+  const totalBand = bands.reduce((s, b) => s + (b.y1 - b.y0), 0);
+  // 띠가 이미지 대부분을 덮으면 전체 재생성과 다를 게 없다 — 거부도 그대로 재현된다
+  if (bands.length === 0 || totalBand / H > 0.85) {
+    throw new Error("글자 띠가 이미지 대부분을 덮음");
+  }
+
+  const img = await loadImage(data);
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+  const origPixels = ctx.getImageData(0, 0, W, H).data.slice();
+
+  const overlayLater: OcrBox[] = [];
+  for (const band of bands) {
+    const bandH = band.y1 - band.y0;
+    const crop = await sharp(data)
+      .extract({ left: 0, top: band.y0, width: W, height: bandH })
+      .png()
+      .toBuffer();
+    const shifted = band.boxes.map((b) => shiftBoxToBand(b, band.y0, bandH, H));
+    let ok = false;
+    for (let attempt = 1; attempt <= 2 && !ok; attempt++) {
+      try {
+        const outPng = await callImageEdit(crop, "image/png", regenPrompt(band.boxes), W, bandH);
+        if ((await flaggedBoxes(outPng, "image/png", shifted)).length > 0) continue;
+        // 글자 영역만 오려 얹는다 — 띠에 딸려 들어간 소품은 원본 유지
+        const regenRaw = new Uint8Array(await sharp(outPng).ensureAlpha().raw().toBuffer());
+        const overlay = buildPatchOverlay(regenRaw, W, bandH, shifted.map((b) => gifPatchRect(b, W, bandH)));
+        const patchPng = await sharp(overlay, { raw: { width: W, height: bandH, channels: 4 } })
+          .png()
+          .toBuffer();
+        ctx.drawImage(await loadImage(patchPng), 0, band.y0);
+        ok = true;
+      } catch {
+        // 이 띠는 다음 시도 — 두 번 다 안 되면 오버레이로
+      }
+    }
+    if (!ok) overlayLater.push(...band.boxes);
+  }
+  if (overlayLater.length > 0) paintBoxes(ctx, W, H, overlayLater, origPixels);
+
+  if (mime === "image/png") return { data: canvas.toBuffer("image/png"), mime };
+  return { data: canvas.toBuffer("image/jpeg", 90), mime: "image/jpeg" };
+}
+
 async function regenerateStill(
   data: Buffer,
   mime: string,
@@ -1814,18 +1952,26 @@ export function flaggedHits(flag: [number, number, number, number], it: OcrBox):
  * 검사에는 OCR 과 같은 추출기를 쓴다. "외국어로 보이나?"를 모델이 판단하게 했더니
  * 작은 한글까지 깨진 글자로 집어냈고, 정작 "제头工厂"처럼 반만 번역된 것은 놓쳤다.
  */
+async function flaggedBoxes(
+  out: Buffer,
+  mime: string,
+  targets: OcrBox[],
+): Promise<OcrBox[]> {
+  try {
+    const found = await extractForeign(out, mime);
+    return targets.filter((b) => found.some((f) => flaggedHits(f.box, b)));
+  } catch {
+    // 검수 자체가 실패하면 결과를 살린다 (검수는 보강 장치일 뿐)
+    return [];
+  }
+}
+
 async function leftoverInBoxes(
   out: Buffer,
   mime: string,
   targets: OcrBox[],
 ): Promise<boolean> {
-  try {
-    const found = await extractForeign(out, mime);
-    return found.some((f) => targets.some((b) => flaggedHits(f.box, b)));
-  } catch {
-    // 검수 자체가 실패하면 결과를 살린다 (검수는 보강 장치일 뿐)
-    return false;
-  }
+  return (await flaggedBoxes(out, mime, targets)).length > 0;
 }
 
 /** 번역 이미지를 만든다. 문구 수정 후 재생성에도 그대로 쓴다. */
@@ -1887,13 +2033,33 @@ export async function renderTranslatedImage(
   // 중국어가 남은 이미지를 내보내느니 자국이 조금 있는 편이 낫다.
   const verifyTargets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
   let reason = "";
+  let refused = false;
   for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
     try {
       const out = await regenerateStill(data, mime, boxes);
-      if (!(await leftoverInBoxes(out.data, out.mime, verifyTargets))) return out;
-      reason = "원문이 남음";
+      const flagged = await flaggedBoxes(out.data, out.mime, verifyTargets);
+      if (flagged.length === 0) return out;
+      // 소수만 걸렸으면 그 문구만 오버레이로 고친다 — 한 문구 때문에
+      // 재생성 전체를 버리는 게 실측 폴백 7건 중 대부분의 원인이었다
+      if (flagged.length <= Math.max(1, Math.floor(verifyTargets.length / 3))) {
+        console.warn(`[imageTranslate] 재생성에 ${flagged.length}개 문구 잔류 — 그 문구만 오버레이 보정`);
+        return renderStill(out.data, out.mime, flagged);
+      }
+      reason = `원문이 남음 (${flagged.length}/${verifyTargets.length})`;
     } catch (e) {
       reason = e instanceof Error ? e.message : String(e);
+      // 안전 필터 거부는 같은 그림을 다시 보내도 똑같이 거부한다 — 즉시 띠 모드로
+      if (reason.includes("반환하지 않음")) {
+        refused = true;
+        break;
+      }
+    }
+  }
+  if (refused) {
+    try {
+      return await regenerateByBands(data, mime, boxes);
+    } catch (e) {
+      reason = `띠 재생성도 실패: ${e instanceof Error ? e.message : e}`;
     }
   }
   console.warn(`[imageTranslate] 재생성 실패(${REGEN_ATTEMPTS}회) — 오버레이 폴백: ${reason}`);

@@ -22,6 +22,7 @@ import {
   eraseTargets,
   regionIsStatic,
   inventedInBox,
+  textBands,
   planErase,
   stripForeign,
   inpaint,
@@ -542,5 +543,49 @@ describe("inventedInBox — 모델 지우기가 도장을 지어냈는지", () =
 
   it("재생성 노이즈 수준의 미세한 차이는 지어낸 게 아니다", () => {
     expect(inventedInBox(img(240), img(225), W, box)).toBe(false);
+  });
+});
+
+describe("textBands — 글자 띠 자르기 (안전 필터 우회)", () => {
+  const b = (ymin: number, ymax: number): OcrBox => ({
+    box: [ymin, 50, ymax, 950],
+    zh: "字",
+    ko: "글",
+    bg: "#ffffff",
+    fg: "#000000",
+    bold: false,
+    solid_bg: true,
+  });
+
+  it("세로로 가까운 문구는 한 띠로 뭉친다", () => {
+    // 1000x2000: 위쪽에 두 줄(픽셀 y 80~120, 160~200), 아래쪽에 한 줄(y 1800~1900)
+    const bands = textBands([b(40, 60), b(80, 100), b(900, 950)], 1000, 2000);
+    expect(bands).toHaveLength(2);
+    expect(bands[0].boxes).toHaveLength(2);
+    expect(bands[1].boxes).toHaveLength(1);
+  });
+
+  it("띠는 최소 높이(폭의 0.4배)를 보장한다 — 극단적 가로 비율은 모델이 못 그린다", () => {
+    const bands = textBands([b(500, 510)], 1000, 2000);
+    expect(bands[0].y1 - bands[0].y0).toBeGreaterThanOrEqual(400);
+  });
+
+  it("최소 높이로 넓히다 겹치면 다시 합친다", () => {
+    // 두 문구가 200px 떨어짐 — 각자 400px 로 넓어지면 겹친다
+    const bands = textBands([b(100, 110), b(200, 210)], 1000, 2000);
+    expect(bands).toHaveLength(1);
+    expect(bands[0].boxes).toHaveLength(2);
+  });
+
+  it("이미지 가장자리를 벗어나지 않는다", () => {
+    const bands = textBands([b(0, 20), b(980, 1000)], 1000, 1000);
+    for (const band of bands) {
+      expect(band.y0).toBeGreaterThanOrEqual(0);
+      expect(band.y1).toBeLessThanOrEqual(1000);
+    }
+  });
+
+  it("문구가 없으면 빈 배열", () => {
+    expect(textBands([], 1000, 1000)).toEqual([]);
   });
 });
