@@ -121,10 +121,11 @@ export function HeroBanner({
           <div className="flex min-h-[300px] flex-col justify-start pt-7 sm:min-h-[440px] sm:pt-10 lg:min-h-[460px] lg:justify-center lg:pt-0">
             <div
               key={banner.id}
-              // 카테고리 기둥이 왼쪽을 차지하는 만큼 카피 폭을 넓혀 준다 —
-              // 520px 로 두면 "상세페이지 만들 시간에" 가 한 줄에 안 들어가 제목이 4줄로 깨진다
+              // 카테고리 기둥을 피하는 여백은 **바깥 여백(ml)** 이어야 한다.
+              // padding 으로 주면 max-width 안쪽을 깎아 실제 글자 폭이 352px 밖에
+              // 안 됐고, 그래서 제목이 4줄로 깨졌다.
               className={`hero-enter max-w-full ${
-                sidebar ? "lg:max-w-[620px] lg:pl-[268px]" : "lg:max-w-[520px] lg:pl-4"
+                sidebar ? "lg:ml-[268px] lg:max-w-[560px]" : "lg:max-w-[520px] lg:pl-4"
               }`}
             >
               <p className="text-[13px] font-bold uppercase tracking-[0.22em] text-brand-500">
