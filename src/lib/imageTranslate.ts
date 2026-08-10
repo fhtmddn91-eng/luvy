@@ -685,6 +685,312 @@ function eraseBilinear(d: Uint8ClampedArray, W: number, H: number, b: PxBox): vo
   }
 }
 
+/* ── 획만 지우기 ───────────────────────────────────────────────
+ *
+ * 예전에는 문구 자리를 **사각형으로 칠했다**. 배경이 조금이라도 흐르면 그
+ * 사각형이 그대로 보여서, 번역문이 배경에 얹힌 게 아니라 네모에 담겨 덧붙은
+ * 것처럼 보였다. 칠하는 색을 아무리 잘 골라도 사각형인 이상 자국은 남는다.
+ *
+ * 그래서 사각형을 없앤다. 글자 **획이 있는 픽셀만** 배경으로 되돌리고,
+ * 나머지는 원본 픽셀을 그대로 둔다. 자국이 남을 사각형 자체가 없어진다.
+ *
+ * 배경 추정은 "획은 가늘다"는 성질을 쓴다. 글자 높이의 절반쯤 되는 창으로
+ * 백분위 필터를 돌리면 가는 획은 사라지고 배경의 결(그라데이션·사진·질감)은
+ * 남는다. 밝은 배경이면 위쪽 분위, 어두운 배경이면 아래쪽 분위를 집는다.
+ */
+
+/** 배경 추정 창의 최대 크기 (px) */
+const PLATE_WIN_MAX = 121;
+/** 배경과 이만큼 넘게 다른 픽셀을 획으로 본다 (0~255) */
+const GLYPH_DIFF = 22;
+/** 획이 박스의 이 비율을 넘으면 획을 가려낸 게 아니다 — 예전 방식으로 되돌린다 */
+const GLYPH_MAX_COVER = 0.62;
+
+/**
+ * 슬라이딩 창 백분위 필터 한 방향(가로 또는 세로).
+ *
+ * 값을 4단계로 묶은 히스토그램으로 창을 굴린다. 고른 칸의 **평균**을 돌려주므로
+ * 단색 배경에서는 원래 값이 그대로 나온다(묶음 때문에 색이 어긋나지 않는다).
+ * p=0.95 는 최댓값, p=0.05 는 최솟값에 가깝되 티끌 하나에 끌려가지 않는다.
+ */
+export function percentilePass(
+  src: Uint8Array,
+  w: number,
+  h: number,
+  win: number,
+  p: number,
+  vertical: boolean,
+): Uint8Array {
+  const half = Math.max(1, win >> 1);
+  const len = vertical ? h : w;
+  const lines = vertical ? w : h;
+  const stride = vertical ? 1 : w;
+  const step = vertical ? w : 1;
+
+  const hist = new Uint16Array(64);
+  const sum = new Float64Array(64);
+  const out = new Uint8Array(w * h);
+  let n = 0;
+
+  for (let l = 0; l < lines; l++) {
+    hist.fill(0);
+    sum.fill(0);
+    n = 0;
+    const base = l * stride;
+    const add = (v: number) => { hist[v >> 2]++; sum[v >> 2] += v; n++; };
+    const del = (v: number) => { hist[v >> 2]--; sum[v >> 2] -= v; n--; };
+
+    for (let i = 0; i <= Math.min(half, len - 1); i++) add(src[base + i * step]);
+    for (let i = 0; i < len; i++) {
+      if (i > 0) {
+        const rm = i - half - 1;
+        if (rm >= 0) del(src[base + rm * step]);
+        const ad = i + half;
+        if (ad < len) add(src[base + ad * step]);
+      }
+      const need = Math.max(1, Math.round(n * p));
+      let acc = 0;
+      let b = 0;
+      for (; b < 63; b++) { acc += hist[b]; if (acc >= need) break; }
+      out[base + i * step] = hist[b] > 0 ? Math.round(sum[b] / hist[b]) : 0;
+    }
+  }
+  return out;
+}
+
+/**
+ * 배경만 남긴 판(plate)을 만든다.
+ *
+ * 밝은 배경 위의 어두운 글자는 **닫힘**(넓히기 → 좁히기)으로 지운다. 넓히기가
+ * 획을 배경 밝기로 덮고, 좁히기가 넓어진 만큼 되돌려 배경의 밝기·결을 지킨다.
+ * 어두운 배경 위의 밝은 글자는 반대로 **열림**. 창이 획 굵기보다 커야 하므로
+ * 글자 높이에 맞춰 잡는다 — 큰 제목일수록 창도 커진다.
+ */
+export function backgroundPlate(
+  src: Uint8Array,
+  w: number,
+  h: number,
+  win: number,
+  bgIsLight: boolean,
+): Uint8Array {
+  const hi = 0.95;
+  const lo = 0.05;
+  const grow = (a: Uint8Array, p: number) =>
+    percentilePass(percentilePass(a, w, h, win, p, false), w, h, win, p, true);
+  return bgIsLight ? grow(grow(src, hi), lo) : grow(grow(src, lo), hi);
+}
+
+/**
+ * 획이 있는 픽셀만 배경으로 되돌린다.
+ * 획을 가려내지 못하면(글자가 영역을 꽉 채움) false — 부르는 쪽이 예전 방식을 쓴다.
+ */
+export function eraseGlyphs(
+  d: Uint8ClampedArray,
+  W: number,
+  H: number,
+  box: { x0: number; y0: number; x1: number; y1: number },
+): boolean {
+  const bh = box.y1 - box.y0;
+  // 창은 획 굵기보다 넉넉히 커야 한다 — 작으면 굵은 제목의 획 속이 안 지워져
+  // 원문이 유령처럼 비친다(실사례: "持私密性爱的纯粹"가 한글 뒤로 비쳤다)
+  const win = Math.min(PLATE_WIN_MAX, Math.max(7, Math.round(bh * 0.9)) | 1);
+  const pad = win; // 창이 박스 바깥 배경까지 보게 여유를 둔다
+  const rx0 = Math.max(0, box.x0 - pad);
+  const ry0 = Math.max(0, box.y0 - pad);
+  const rx1 = Math.min(W, box.x1 + pad);
+  const ry1 = Math.min(H, box.y1 + pad);
+  const rw = rx1 - rx0;
+  const rh = ry1 - ry0;
+  if (rw < 3 || rh < 3) return false;
+
+  // 배경이 글자보다 밝은지 — 밝으면 위쪽 분위를, 어두우면 아래쪽 분위를 집는다
+  const lum: number[] = [];
+  for (let y = ry0; y < ry1; y += 2) {
+    for (let x = rx0; x < rx1; x += 2) {
+      const i = (y * W + x) * 4;
+      lum.push((d[i] * 3 + d[i + 1] * 6 + d[i + 2]) / 10);
+    }
+  }
+  const bgIsLight = median(lum) >= 128;
+
+  const plate: Uint8Array[] = [];
+  for (let c = 0; c < 3; c++) {
+    const ch = new Uint8Array(rw * rh);
+    for (let y = 0; y < rh; y++) {
+      for (let x = 0; x < rw; x++) ch[y * rw + x] = d[((ry0 + y) * W + rx0 + x) * 4 + c];
+    }
+    plate.push(backgroundPlate(ch, rw, rh, win, bgIsLight));
+  }
+
+  // 획 마스크 — 배경 추정치와 많이 다른 픽셀
+  const mask = new Uint8Array(rw * rh);
+  let hits = 0;
+  for (let y = box.y0; y < box.y1; y++) {
+    for (let x = box.x0; x < box.x1; x++) {
+      const k = (y - ry0) * rw + (x - rx0);
+      const i = (y * W + x) * 4;
+      const diff = Math.max(
+        Math.abs(d[i] - plate[0][k]),
+        Math.abs(d[i + 1] - plate[1][k]),
+        Math.abs(d[i + 2] - plate[2][k]),
+      );
+      if (diff > GLYPH_DIFF) { mask[k] = 255; hits++; }
+    }
+  }
+  const area = (box.x1 - box.x0) * (box.y1 - box.y0);
+  if (hits === 0 || hits > area * GLYPH_MAX_COVER) return false;
+
+  // 획을 두 겹 넓힌다 — 안티에일리어싱된 획 끝(옅은 테두리)까지 덮어야 잔상이 없다
+  let grown: Uint8Array = mask;
+  for (let r = 0; r < 2; r++) grown = dilate1(grown, rw, rh);
+  const alpha = boxBlur(boxBlur(grown, rw, rh), rw, rh);
+
+  /*
+   * 채우기는 **주변에서 번져 들어오게** 한다.
+   *
+   * 배경 판(plate)을 그대로 칠하면 창 크기 때문에 실제 배경보다 밝거나 어두워져
+   * 원문이 유령처럼 비친다(실사례: 사진 위 큰 제목에 흰 글자 자국이 남았다).
+   * 획 주변의 진짜 픽셀에서 한 겹씩 번져 들어오면 그 자리의 배경 밝기·결이
+   * 그대로 이어진다.
+   */
+  const filled = inpaint(
+    [0, 1, 2].map((c) => {
+      const ch = new Uint8Array(rw * rh);
+      for (let y = 0; y < rh; y++) {
+        for (let x = 0; x < rw; x++) ch[y * rw + x] = d[((ry0 + y) * W + rx0 + x) * 4 + c];
+      }
+      return ch;
+    }),
+    grown,
+    rw,
+    rh,
+  );
+
+  for (let y = box.y0; y < box.y1; y++) {
+    for (let x = box.x0; x < box.x1; x++) {
+      const k = (y - ry0) * rw + (x - rx0);
+      const a = alpha[k] / 255;
+      if (a === 0) continue;
+      const i = (y * W + x) * 4;
+      for (let c = 0; c < 3; c++) d[i + c] = Math.round(d[i + c] * (1 - a) + filled[c][k] * a);
+      d[i + 3] = 255;
+    }
+  }
+  return true;
+}
+
+/** 마스크를 한 겹 넓힌다 (8이웃) */
+function dilate1(src: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let v = 0;
+      for (let dy = -1; dy <= 1 && !v; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          if (src[yy * w + xx]) { v = 255; break; }
+        }
+      }
+      out[y * w + x] = v;
+    }
+  }
+  return out;
+}
+
+/**
+ * 마스크 자리를 주변 배경에서 한 겹씩 번져 채운다.
+ *
+ * 가장자리부터 안쪽으로 채워 들어가므로 획이 굵어도 메워지고, 채운 값이
+ * 바로 옆 실제 배경에서 나오기 때문에 그라데이션·사진의 결이 이어진다.
+ * 다 채운 뒤 몇 번 고르게 펴서 획 한가운데에 능선이 지지 않게 한다.
+ */
+export function inpaint(
+  channels: Uint8Array[],
+  mask: Uint8Array,
+  w: number,
+  h: number,
+): Uint8Array[] {
+  const out = channels.map((c) => Float32Array.from(c));
+  const known = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) known[i] = mask[i] ? 0 : 1;
+
+  const nbr = [-1, 1, -w, w, -w - 1, -w + 1, w - 1, w + 1];
+  for (let round = 0; round < 512; round++) {
+    const justFilled: number[] = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const k = y * w + x;
+        if (known[k]) continue;
+        let n = 0;
+        const acc = [0, 0, 0];
+        for (const o of nbr) {
+          const j = k + o;
+          if (j < 0 || j >= w * h) continue;
+          // 가로로 감기는 것 방지
+          if (Math.abs(((j % w) - (k % w))) > 1) continue;
+          if (!known[j]) continue;
+          for (let c = 0; c < 3; c++) acc[c] += out[c][j];
+          n++;
+        }
+        if (n === 0) continue;
+        for (let c = 0; c < 3; c++) out[c][k] = acc[c] / n;
+        justFilled.push(k);
+      }
+    }
+    if (justFilled.length === 0) break;
+    for (const k of justFilled) known[k] = 1;
+  }
+
+  // 채운 자리만 몇 번 고르게 편다
+  for (let pass = 0; pass < 3; pass++) {
+    const snap = out.map((c) => Float32Array.from(c));
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const k = y * w + x;
+        if (!mask[k]) continue;
+        let n = 0;
+        const acc = [0, 0, 0];
+        for (const o of nbr) {
+          const j = k + o;
+          if (j < 0 || j >= w * h) continue;
+          if (Math.abs(((j % w) - (k % w))) > 1) continue;
+          for (let c = 0; c < 3; c++) acc[c] += snap[c][j];
+          n++;
+        }
+        if (!n) continue;
+        for (let c = 0; c < 3; c++) out[c][k] = acc[c] / n;
+      }
+    }
+  }
+  return out.map((c) => Uint8Array.from(c, (v) => Math.round(v)));
+}
+
+/** 3×3 평균 — 마스크 가장자리를 부드럽게 만든다 */
+function boxBlur(src: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let t = 0;
+      let c = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          t += src[yy * w + xx];
+          c++;
+        }
+      }
+      out[y * w + x] = Math.round(t / c);
+    }
+  }
+  return out;
+}
+
 /** 박스 영역의 원문을 지운다 (배경을 주변에서 추정해 채움) */
 function eraseRegion(ctx: SKRSContext2D, width: number, height: number, b: PxBox): void {
   const x0 = Math.max(0, Math.round(b.x0));
@@ -694,6 +1000,12 @@ function eraseRegion(ctx: SKRSContext2D, width: number, height: number, b: PxBox
   if (x1 - x0 < 2 || y1 - y0 < 2) return;
 
   const img = ctx.getImageData(0, 0, width, height);
+  if (eraseGlyphs(img.data, width, height, { x0, y0, x1, y1 })) {
+    ctx.putImageData(img, 0, 0);
+    return;
+  }
+
+  // 획을 못 가려냈을 때만(글자가 박스를 꽉 채운 경우) 예전처럼 영역을 칠한다
   const plan = planErase(sampleSides(img.data, width, height, b));
   if (plan.how === "blend") {
     eraseBilinear(img.data, width, height, b);

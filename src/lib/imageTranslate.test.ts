@@ -23,6 +23,9 @@ import {
   hasManualOverride,
   planErase,
   stripForeign,
+  inpaint,
+  percentilePass,
+  eraseGlyphs,
   backgroundRef,
 } from "./imageTranslate";
 
@@ -217,6 +220,81 @@ describe("planErase — 지운 자리를 무엇으로 채울지", () => {
 
   it("완만한 그라데이션은 보간으로 간다", () => {
     expect(planErase([ramp(255, 230), ramp(250, 225), ramp(255, 250), ramp(230, 225)]).how).toBe("blend");
+  });
+});
+
+
+describe("eraseGlyphs — 사각형을 칠하지 않고 획만 지운다", () => {
+  /** 세로 그라데이션 배경에 검은 가로 막대(=글자 획) 하나를 그린 그림 */
+  const make = (W: number, H: number) => {
+    const d = new Uint8ClampedArray(W * H * 4);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const v = 200 + Math.round((y / H) * 40); // 200 → 240 그라데이션
+        const i = (y * W + x) * 4;
+        d[i] = d[i + 1] = d[i + 2] = v;
+        d[i + 3] = 255;
+      }
+    }
+    // 획: 가운데 4px 높이의 어두운 막대
+    for (let y = 18; y < 22; y++) {
+      for (let x = 20; x < 80; x++) {
+        const i = (y * W + x) * 4;
+        d[i] = d[i + 1] = d[i + 2] = 20;
+      }
+    }
+    return d;
+  };
+
+  it("획은 배경색으로 덮이고, 획에서 먼 배경은 한 바이트도 안 바뀐다", () => {
+    const W = 100, H = 40;
+    const before = make(W, H);
+    const after = Uint8ClampedArray.from(before);
+    expect(eraseGlyphs(after, W, H, { x0: 10, y0: 8, x1: 90, y1: 32 })).toBe(true);
+
+    // 획 자리는 배경 밝기로 돌아왔다
+    const at = (x: number, y: number) => after[(y * W + x) * 4];
+    expect(at(50, 20)).toBeGreaterThan(180);
+
+    // 예전에는 박스 전체를 칠해서 이 자리들이 전부 바뀌었다 —
+    // 이제 획에서 떨어진 배경은 원본 그대로여야 한다
+    for (const [x, y] of [[12, 10], [88, 10], [12, 30], [88, 30], [50, 9], [50, 31]]) {
+      const i = (y * W + x) * 4;
+      expect([after[i], after[i + 1], after[i + 2]]).toEqual([before[i], before[i + 1], before[i + 2]]);
+    }
+  });
+
+  it("배경과 글자를 가려낼 수 없으면 false — 부르는 쪽이 예전 방식을 쓴다", () => {
+    // 박스가 통째로 한 색(예: 단색 버튼 안)이면 획으로 볼 픽셀이 없다
+    const W = 40, H = 20;
+    const d = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0; i < W * H; i++) {
+      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = 30;
+      d[i * 4 + 3] = 255;
+    }
+    expect(eraseGlyphs(d, W, H, { x0: 2, y0: 2, x1: 38, y1: 18 })).toBe(false);
+  });
+});
+
+describe("inpaint — 주변에서 번져 채우기", () => {
+  it("구멍을 이웃 배경값으로 메운다", () => {
+    const w = 5, h = 5;
+    const ch = new Uint8Array(w * h).fill(100);
+    ch[12] = 0; // 가운데
+    const mask = new Uint8Array(w * h);
+    mask[12] = 255;
+    const [out] = inpaint([ch, Uint8Array.from(ch), Uint8Array.from(ch)], mask, w, h);
+    expect(out[12]).toBe(100);
+  });
+});
+
+describe("percentilePass — 가는 획 제거", () => {
+  it("높은 분위는 어두운 획을 배경 밝기로 덮는다", () => {
+    const w = 21, h = 1;
+    const src = new Uint8Array(w).fill(230);
+    src[10] = 20;
+    const out = percentilePass(src, w, h, 9, 0.95, false);
+    expect(out[10]).toBeGreaterThan(200);
   });
 });
 
