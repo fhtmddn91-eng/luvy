@@ -2,7 +2,7 @@ import "server-only";
 import path from "node:path";
 import crypto from "node:crypto";
 import sharp from "sharp";
-import { createCanvas, loadImage, GlobalFonts, type SKRSContext2D, type Canvas } from "@napi-rs/canvas";
+import { createCanvas, loadImage, GlobalFonts, type SKRSContext2D, type Canvas, type Image } from "@napi-rs/canvas";
 
 /**
  * 상품 이미지 속 중국어 → 한국어 번역.
@@ -1158,6 +1158,8 @@ function paintBoxes(
   height: number,
   boxes: OcrBox[],
   origPixels?: Uint8ClampedArray,
+  /** skipErase: 이미 글자가 지워진 그림(모델 지우기 결과) 위에 그릴 때 */
+  opts: { skipErase?: boolean } = {},
 ): void {
   interface Plan {
     it: OcrBox;
@@ -1186,7 +1188,7 @@ function paintBoxes(
 
     // 원문 지우기 — 배경은 주변 픽셀에서 읽는다(모델의 bg 색은 어긋나 박스 자국이 남았다).
     // 지우기는 먼저 전부 끝낸다 — 나중에 지우면 이미 그린 옆 문구를 덮을 수 있다.
-    eraseRegion(ctx, width, height, b);
+    if (!opts.skipErase) eraseRegion(ctx, width, height, b);
     if (mode === "erase") continue; // erase 모드는 여기까지
 
     plans.push({
@@ -1278,6 +1280,27 @@ async function renderStill(data: Buffer, mime: string, boxes: OcrBox[]): Promise
 }
 
 /**
+ * 이미 글자가 지워진 그림 위에 문구만 그린다.
+ *
+ * 모델 지우기 결과에 쓴다 — 여기서 eraseRegion 을 또 돌리면 안 된다.
+ * 지워진 자리엔 획이 없어 획 지우개가 빈손이 되고, 그러면 폴백이
+ * 사각형을 칠해 모처럼 깨끗해진 배경에 도로 자국을 낸다.
+ */
+async function drawTextOnly(
+  data: Buffer,
+  mime: string,
+  boxes: OcrBox[],
+): Promise<{ data: Buffer; mime: string }> {
+  const img = await loadImage(data);
+  const canvas = createCanvas(img.width, img.height);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0);
+  paintBoxes(ctx, img.width, img.height, boxes, undefined, { skipErase: true });
+  if (mime === "image/png") return { data: canvas.toBuffer("image/png"), mime };
+  return { data: canvas.toBuffer("image/jpeg", 90), mime: "image/jpeg" };
+}
+
+/**
  * 연속 중복 프레임 병합 계획 — sharp 는 재조립 때 똑같은 연속 프레임을
  * 지연시간 합산 없이 떨어뜨려 그 구간 재생이 빨라진다(실측: 15→12프레임).
  * 우리가 먼저 병합하며 지연시간을 합쳐 원본 재생 속도를 유지한다.
@@ -1301,12 +1324,147 @@ export function mergeDuplicateFrames(
   return { keep, delays: outDelays };
 }
 
+/** GIF 정지 패치의 오려낼 영역 — 재생성 글자가 원문 박스보다 살짝 클 수 있어 여유를 둔다 */
+function gifPatchRect(b: OcrBox, W: number, H: number): PxBox & { feather: number } {
+  const p = toPixelBox(b.box, W, H);
+  const padX = Math.max(12, (p.x1 - p.x0) * 0.25);
+  const padY = Math.max(10, (p.y1 - p.y0) * 0.5);
+  return {
+    x0: Math.max(0, Math.round(p.x0 - padX)),
+    y0: Math.max(0, Math.round(p.y0 - padY)),
+    x1: Math.min(W, Math.round(p.x1 + padX)),
+    y1: Math.min(H, Math.round(p.y1 + padY)),
+    feather: Math.min(10, Math.max(5, Math.min(padX, padY) * 0.5)),
+  };
+}
+
+/**
+ * 이 영역이 모든 프레임에서 정지해 있는가.
+ * GIF 팔레트·디더링 노이즈를 감안해 "크게 달라진 픽셀이 1% 미만"이면 정지로 본다.
+ */
+export function regionIsStatic(
+  frames: Uint8Array[],
+  W: number,
+  rect: { x0: number; y0: number; x1: number; y1: number },
+  tol = 32,
+  maxMovedFrac = 0.01,
+): boolean {
+  const base = frames[0];
+  const area = Math.max(1, (rect.x1 - rect.x0) * (rect.y1 - rect.y0));
+  for (let f = 1; f < frames.length; f++) {
+    const cur = frames[f];
+    let moved = 0;
+    for (let y = rect.y0; y < rect.y1; y++) {
+      for (let x = rect.x0; x < rect.x1; x++) {
+        const i = (y * W + x) * 4;
+        const d = Math.max(
+          Math.abs(cur[i] - base[i]),
+          Math.abs(cur[i + 1] - base[i + 1]),
+          Math.abs(cur[i + 2] - base[i + 2]),
+        );
+        if (d > tol) moved++;
+      }
+    }
+    if (moved / area > maxMovedFrac) return false;
+  }
+  return true;
+}
+
+/** 재생성본에서 글자 영역만 페더링된 알파로 오려낸 오버레이(RGBA raw) */
+function buildPatchOverlay(
+  regen: Uint8Array,
+  W: number,
+  H: number,
+  rects: (PxBox & { feather: number })[],
+): Buffer {
+  const out = Buffer.alloc(W * H * 4); // 알파 0 = 투명
+  for (const r of rects) {
+    for (let y = r.y0; y < r.y1; y++) {
+      for (let x = r.x0; x < r.x1; x++) {
+        const edge = Math.min(x - r.x0 + 1, r.x1 - x, y - r.y0 + 1, r.y1 - y);
+        const a = Math.round(Math.min(1, edge / r.feather) * 255);
+        const i = (y * W + x) * 4;
+        if (a > out[i + 3]) {
+          out[i] = regen[i];
+          out[i + 1] = regen[i + 1];
+          out[i + 2] = regen[i + 2];
+          out[i + 3] = a;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** 정지 패치를 못 쓸 만큼 프레임이 많은 GIF — 메모리를 아끼고 바로 오버레이로 */
+const GIF_PATCH_MAX_PAGES = 60;
+
+/**
+ * GIF 정지 패치 — 첫 프레임만 모델로 재생성해 글자 영역을 오려 두고,
+ * 모든 프레임에 같은 픽셀을 얹는다.
+ *
+ * 프레임마다 모델을 돌리면 그림이 미묘하게 달라져 애니메이션이 떨린다.
+ * 같은 패치를 얹으면 떨림이 원천적으로 없다. 글자 자리가 움직이는 문구는
+ * 패치가 그 움직임을 얼려버리므로 그 문구만 오버레이로 넘긴다 —
+ * 실측에서 "문구는 정지인데 여유 영역이 아래 제품 애니메이션에 걸리는"
+ * 경우가 흔해서, 전부-아니면-전무가 아니라 문구 단위로 가른다.
+ */
+async function tryBuildGifPatch(
+  data: Buffer,
+  boxes: OcrBox[],
+  W: number,
+  H: number,
+  pages: number,
+): Promise<{ patch: Image; overlayBoxes: OcrBox[] } | null> {
+  try {
+    if (pages > GIF_PATCH_MAX_PAGES) return null;
+    const targets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
+    if (targets.length === 0) return null;
+
+    const raws: Uint8Array[] = [];
+    for (let i = 0; i < pages; i++) {
+      raws.push(
+        new Uint8Array(await sharp(data, { page: i, pages: 1 }).ensureAlpha().raw().toBuffer()),
+      );
+    }
+    const still = targets.filter((b) => regionIsStatic(raws, W, gifPatchRect(b, W, H)));
+    if (still.length === 0) return null;
+    const moving = targets.filter((b) => !still.includes(b));
+
+    const frame0 = await sharp(data, { page: 0, pages: 1 }).png().toBuffer();
+    for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
+      const regenPng = await callImageEdit(frame0, "image/png", regenPrompt(still), W, H);
+      if (await leftoverInBoxes(regenPng, "image/png", still)) continue;
+      const regenRaw = new Uint8Array(await sharp(regenPng).ensureAlpha().raw().toBuffer());
+      const overlay = buildPatchOverlay(regenRaw, W, H, still.map((b) => gifPatchRect(b, W, H)));
+      const png = await sharp(overlay, { raw: { width: W, height: H, channels: 4 } })
+        .png()
+        .toBuffer();
+      return { patch: await loadImage(png), overlayBoxes: moving };
+    }
+    return null;
+  } catch (e) {
+    console.warn(
+      `[imageTranslate] GIF 정지 패치 실패 — 오버레이 폴백: ${e instanceof Error ? e.message : e}`,
+    );
+    return null;
+  }
+}
+
 async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer; mime: string }> {
   const meta = await sharp(data, { animated: true }).metadata();
   const pages = meta.pages ?? 1;
   const width = meta.width ?? 0;
   const height = meta.pageHeight ?? meta.height ?? 0;
   if (!width || !height) throw new Error("GIF 크기를 읽을 수 없습니다.");
+
+  // 글자 자리가 정지해 있으면 모델 재생성 품질을 GIF 에도 쓴다.
+  // 수동 조정본은 지시를 지켜야 하므로 프레임별 오버레이 유지.
+  const patched = mustOverlay(boxes)
+    ? null
+    : await tryBuildGifPatch(data, boxes, width, height, pages);
+  // 패치가 안 됐으면 전 문구를, 됐으면 움직여서 못 얹은 문구만 오버레이로
+  const overlayBoxes = patched ? patched.overlayBoxes : boxes;
 
   const frames: Buffer[] = [];
   const hashes: string[] = [];
@@ -1316,8 +1474,11 @@ async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer;
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(img, 0, 0);
-    // 프레임마다 그 프레임의 원본 픽셀 기준으로 잔여 획을 판단한다
-    paintBoxes(ctx, width, height, boxes, ctx.getImageData(0, 0, width, height).data.slice());
+    if (patched) ctx.drawImage(patched.patch, 0, 0); // 모든 프레임에 같은 픽셀 — 떨림 없음
+    if (overlayBoxes.length > 0) {
+      // 프레임마다 그 프레임의 원본 픽셀 기준으로 잔여 획을 판단한다
+      paintBoxes(ctx, width, height, overlayBoxes, ctx.getImageData(0, 0, width, height).data.slice());
+    }
     const buf = canvas.toBuffer("image/png");
     frames.push(buf);
     hashes.push(crypto.createHash("md5").update(buf).digest("hex"));
@@ -1497,21 +1658,19 @@ function rowStdev(
 
 
 
-async function regenerateStill(
+/** 이미지 모델 편집 호출 공통부 — 비율 검증까지 마친 원본 크기 PNG 를 돌려준다 */
+async function callImageEdit(
   data: Buffer,
   mime: string,
-  boxes: OcrBox[],
-): Promise<{ data: Buffer; mime: string }> {
-  const meta = await sharp(data).metadata();
-  const W = meta.width ?? 0;
-  const H = meta.height ?? 0;
-  if (!W || !H) throw new Error("이미지 크기를 읽을 수 없습니다.");
-
+  prompt: string,
+  W: number,
+  H: number,
+): Promise<Buffer> {
   const parts = await callGemini(
     IMAGE_MODEL,
     [
       { inline_data: { mime_type: mime, data: data.toString("base64") } },
-      { text: regenPrompt(boxes) },
+      { text: prompt },
     ],
     { responseModalities: ["TEXT", "IMAGE"] },
   );
@@ -1529,25 +1688,110 @@ async function regenerateStill(
   if (!ow || !oh || Math.abs(ow / oh - W / H) / (W / H) > 0.05) {
     throw new Error(`재생성 비율 불일치 (${W}x${H} → ${ow}x${oh})`);
   }
+  return sharp(out).resize(W, H, { fit: "fill" }).png().toBuffer();
+}
+
+async function regenerateStill(
+  data: Buffer,
+  mime: string,
+  boxes: OcrBox[],
+): Promise<{ data: Buffer; mime: string }> {
+  const meta = await sharp(data).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (!W || !H) throw new Error("이미지 크기를 읽을 수 없습니다.");
 
   // 모델이 만든 그림을 그대로 쓴다. 글자 영역만 오려 붙이던 예전 방식은
   // 결국 "네모를 덧대는" 자국을 남겨서 버렸다 — 모델은 원문 획을 지우고
   // 그 자리 배경까지 다시 그리므로, 통째로 쓸 때가 가장 자연스럽다.
-  const sized = sharp(out).resize(W, H, { fit: "fill" });
-  if (mime === "image/png") return { data: await sized.png().toBuffer(), mime };
-  return { data: await sized.jpeg({ quality: 95 }).toBuffer(), mime: "image/jpeg" };
+  const png = await callImageEdit(data, mime, regenPrompt(boxes), W, H);
+  if (mime === "image/png") return { data: png, mime };
+  return { data: await sharp(png).jpeg({ quality: 95 }).toBuffer(), mime: "image/jpeg" };
 }
 
 /**
- * 이미지 모델에 맡기면 안 되는 경우 — 직접 그리는 오버레이로 간다.
+ * 이미지 모델에 문구 교체를 통째로 맡기면 안 되는 경우.
  *
  * 모델은 "이 문구를 저 자리에 이 크기로" 같은 지시를 지키지 못한다. 어드민이
  * 위치·크기·굵기를 손봤거나 "지움"으로 표시했다면 그 지시가 결과의 전부이므로
- * 모델에 넘길 수 없다. 바꿀 문구가 아예 없을 때도 마찬가지.
+ * 교체를 맡길 수 없다 — 대신 모델에게 지우기만 시키고 글자는 우리가 그린다.
+ * 바꿀 문구가 아예 없을 때도 마찬가지.
  */
 export function mustOverlay(boxes: OcrBox[]): boolean {
   if (boxes.some((b) => hasManualOverride(b) || b.mode === "erase")) return true;
   return !boxes.some((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
+}
+
+/** 원본에서 없어져야 하는 항목 — 번역해 갈아끼울 것 + 지우라고 표시된 것 */
+export function eraseTargets(boxes: OcrBox[]): OcrBox[] {
+  return boxes.filter(
+    (b) => b.mode === "erase" || ((b.mode ?? "translate") === "translate" && b.ko.trim()),
+  );
+}
+
+function erasePrompt(targets: OcrBox[]): string {
+  const list = targets.map((b) => `- "${b.zh}"`).join("\n");
+  return `이 이미지에서 아래 글자만 깨끗이 지운 이미지를 만들어 주세요.
+
+지울 글자:
+${list}
+
+가장 중요한 규칙:
+- 지우는 것은 글자 획뿐이다. 글자가 올라앉은 색 띠·배지·버튼·리본·말풍선·장식은
+  절대 지우지 말고 그대로 둔다 — 그 위의 글자만 지워 "빈 띠", "빈 배지"로 만든다
+- 지운 자리는 글자가 처음부터 없던 것처럼 바로 뒤의 색·그라데이션·사진이 이어지게 메운다
+- 지운 자리를 다른 것으로 채우지 말 것 — 도장·스티커·도형·그림·무늬를 새로
+  만들어 넣으면 실패다. 글자만 사라진 원래 배경이어야 한다
+- 어떤 글자도 새로 그려 넣지 말 것 — 번역문·대체 문구 금지
+
+절대 규칙:
+- 지우기 말고는 전부 원본 그대로 — 제품 사진, 모델, 배경, 장식, 도형, 아이콘, 로고, 배지, 띠, 레이아웃, 가로세로 비율, 해상도
+- 위 목록에 없는 글자·로고·워터마크는 그대로 둘 것`;
+}
+
+/** 모델에게 지우기만 시킨다 — 원본 크기 PNG 반환. 글자는 호출한 쪽이 그린다. */
+async function eraseViaModel(data: Buffer, mime: string, targets: OcrBox[]): Promise<Buffer> {
+  const meta = await sharp(data).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (!W || !H) throw new Error("이미지 크기를 읽을 수 없습니다.");
+  return callImageEdit(data, mime, erasePrompt(targets), W, H);
+}
+
+/**
+ * 모델 지우기가 글자만 지웠는지 — 지운 자리에 뭔가 지어내는 사고 검출.
+ *
+ * 실측: "源头工厂" 빨간 글자를 지우랬더니 그 자리에 빨간 도장 그림을 만들어
+ * 넣었다. 프롬프트로 금지해도 재발해 픽셀로 검사한다. 글자만 지웠다면 박스
+ * 안에서 달라지는 픽셀은 원래 획 언저리뿐이라 대개 3분의 2를 넘지 않는다 —
+ * 도장·장식을 지어냈다면 박스 대부분이 달라진다.
+ */
+export function inventedInBox(
+  orig: Uint8Array,
+  clean: Uint8Array,
+  W: number,
+  box: { x0: number; y0: number; x1: number; y1: number },
+  tol = 40,
+  maxChangedFrac = 0.65,
+): boolean {
+  const x0 = Math.max(0, Math.round(box.x0));
+  const y0 = Math.max(0, Math.round(box.y0));
+  const x1 = Math.round(box.x1);
+  const y1 = Math.round(box.y1);
+  const area = Math.max(1, (x1 - x0) * (y1 - y0));
+  let changed = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * W + x) * 4;
+      const d = Math.max(
+        Math.abs(clean[i] - orig[i]),
+        Math.abs(clean[i + 1] - orig[i + 1]),
+        Math.abs(clean[i + 2] - orig[i + 2]),
+      );
+      if (d > tol) changed++;
+    }
+  }
+  return changed / area > maxChangedFrac;
 }
 
 /** 검수에서 걸린 영역이 우리 박스와 겹치는가 (걸린 영역의 중심이 박스 안) */
@@ -1573,11 +1817,10 @@ export function flaggedHits(flag: [number, number, number, number], it: OcrBox):
 async function leftoverInBoxes(
   out: Buffer,
   mime: string,
-  boxes: OcrBox[],
+  targets: OcrBox[],
 ): Promise<boolean> {
   try {
     const found = await extractForeign(out, mime);
-    const targets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
     return found.some((f) => targets.some((b) => flaggedHits(f.box, b)));
   } catch {
     // 검수 자체가 실패하면 결과를 살린다 (검수는 보강 장치일 뿐)
@@ -1601,20 +1844,53 @@ export async function renderTranslatedImage(
   opts: { regenerate?: boolean } = {},
 ): Promise<{ data: Buffer; mime: string }> {
   ensureFonts();
-  // GIF 는 프레임마다 그림이 미묘하게 달라져 애니메이션이 떨린다 — 오버레이 유지
   if (mime === "image/gif") return renderGif(data, boxes);
   if (opts.regenerate === false) return renderStill(data, mime, boxes);
 
-  if (mustOverlay(boxes)) return renderStill(data, mime, boxes);
+  const removals = eraseTargets(boxes);
+  if (removals.length === 0) return renderStill(data, mime, boxes); // 지울 것도 그릴 것도 없다
+
+  // 어드민이 위치·크기·굵기를 손댔거나 "지움"을 표시했으면 문구 교체를 모델에
+  // 맡길 수 없다. 대신 지우기만 시키고, 그 위에 지시대로 우리가 그린다 —
+  // 지우기는 모델이 자국 없이 잘하고, 지시는 우리가 그려야 정확히 지켜진다.
+  if (mustOverlay(boxes)) {
+    const om = await sharp(data).metadata();
+    const W = om.width ?? 0;
+    const H = om.height ?? 0;
+    const origRaw = W && H ? new Uint8Array(await sharp(data).ensureAlpha().raw().toBuffer()) : null;
+    let reason = "";
+    for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
+      try {
+        const cleaned = await eraseViaModel(data, mime, removals);
+        if (await leftoverInBoxes(cleaned, "image/png", removals)) {
+          reason = "원문이 남음";
+          continue;
+        }
+        if (origRaw) {
+          const cleanRaw = new Uint8Array(await sharp(cleaned).ensureAlpha().raw().toBuffer());
+          if (removals.some((b) => inventedInBox(origRaw, cleanRaw, W, toPixelBox(b.box, W, H)))) {
+            reason = "지운 자리에 장식을 지어냄";
+            continue;
+          }
+        }
+        return drawTextOnly(cleaned, mime, boxes);
+      } catch (e) {
+        reason = e instanceof Error ? e.message : String(e);
+      }
+    }
+    console.warn(`[imageTranslate] 모델 지우기 실패(${REGEN_ATTEMPTS}회) — 오버레이 폴백: ${reason}`);
+    return renderStill(data, mime, boxes);
+  }
 
   // 모델은 가끔 원문을 지우지 않고 한국어를 덧붙인다(빽빽한 스펙표에서 관측).
   // 검수에서 걸리면 한 번 더 뽑고, 그래도 남으면 오버레이로 내려간다 —
   // 중국어가 남은 이미지를 내보내느니 자국이 조금 있는 편이 낫다.
+  const verifyTargets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
   let reason = "";
   for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
     try {
       const out = await regenerateStill(data, mime, boxes);
-      if (!(await leftoverInBoxes(out.data, out.mime, boxes))) return out;
+      if (!(await leftoverInBoxes(out.data, out.mime, verifyTargets))) return out;
       reason = "원문이 남음";
     } catch (e) {
       reason = e instanceof Error ? e.message : String(e);

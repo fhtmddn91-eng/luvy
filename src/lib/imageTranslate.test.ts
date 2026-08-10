@@ -19,6 +19,9 @@ import {
   unifySizes,
   hasManualOverride,
   mustOverlay,
+  eraseTargets,
+  regionIsStatic,
+  inventedInBox,
   planErase,
   stripForeign,
   inpaint,
@@ -430,5 +433,114 @@ describe("mustOverlay — 이미지 모델에 맡길 수 없는 경우", () => {
     expect(mustOverlay([box({ ko: "  " })])).toBe(true);
     expect(mustOverlay([box({ mode: "keep" })])).toBe(true);
     expect(mustOverlay([])).toBe(true);
+  });
+});
+
+describe("eraseTargets — 원본에서 없어져야 하는 항목", () => {
+  const box = (over: Partial<OcrBox> = {}): OcrBox => ({
+    box: [10, 10, 60, 300],
+    zh: "快速伸缩",
+    ko: "고속 신축",
+    bg: "#ffffff",
+    fg: "#000000",
+    bold: true,
+    solid_bg: false,
+    ...over,
+  });
+
+  it("번역할 것과 지울 것만 고른다 — 유지·빈 문구는 남긴다", () => {
+    const keep = box({ mode: "keep" });
+    const empty = box({ ko: " " });
+    const erase = box({ mode: "erase" });
+    const normal = box();
+    expect(eraseTargets([keep, empty, erase, normal])).toEqual([erase, normal]);
+  });
+});
+
+describe("regionIsStatic — GIF 글자 자리가 움직이는지", () => {
+  const W = 20;
+  const H = 20;
+  const frame = (fill: number) => {
+    const f = new Uint8Array(W * H * 4);
+    for (let i = 0; i < f.length; i += 4) {
+      f[i] = f[i + 1] = f[i + 2] = fill;
+      f[i + 3] = 255;
+    }
+    return f;
+  };
+
+  it("모든 프레임이 같으면 정지", () => {
+    expect(regionIsStatic([frame(100), frame(100), frame(100)], W, { x0: 2, y0: 2, x1: 18, y1: 18 })).toBe(true);
+  });
+
+  it("팔레트 노이즈 수준의 미세한 차이는 정지로 본다", () => {
+    expect(regionIsStatic([frame(100), frame(110)], W, { x0: 2, y0: 2, x1: 18, y1: 18 })).toBe(true);
+  });
+
+  it("영역 안이 실제로 움직이면 정지가 아니다", () => {
+    const a = frame(100);
+    const b = frame(100);
+    // 영역 안 절반이 크게 달라진다 (움직이는 제품이 지나감)
+    for (let y = 5; y < 15; y++)
+      for (let x = 5; x < 15; x++) {
+        const i = (y * W + x) * 4;
+        b[i] = b[i + 1] = b[i + 2] = 220;
+      }
+    expect(regionIsStatic([a, b], W, { x0: 2, y0: 2, x1: 18, y1: 18 })).toBe(false);
+  });
+
+  it("영역 밖의 움직임은 상관없다", () => {
+    const a = frame(100);
+    const b = frame(100);
+    for (let y = 0; y < 2; y++)
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        b[i] = 250;
+      }
+    expect(regionIsStatic([a, b], W, { x0: 2, y0: 4, x1: 18, y1: 18 })).toBe(true);
+  });
+});
+
+describe("inventedInBox — 모델 지우기가 도장을 지어냈는지", () => {
+  const W = 40;
+  const H = 40;
+  const img = (fill: number) => {
+    const d = new Uint8Array(W * H * 4);
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = d[i + 1] = d[i + 2] = fill;
+      d[i + 3] = 255;
+    }
+    return d;
+  };
+  const box = { x0: 5, y0: 5, x1: 35, y1: 35 };
+
+  it("획만 지웠으면(변한 픽셀이 획 언저리뿐) 통과", () => {
+    const orig = img(240);
+    // 원본: 박스 안에 가는 획 두 줄
+    for (const yy of [12, 20])
+      for (let x = 8; x < 32; x++) {
+        const i = (yy * W + x) * 4;
+        orig[i] = orig[i + 1] = orig[i + 2] = 20;
+      }
+    const clean = img(240); // 획이 배경색으로 돌아감
+    expect(inventedInBox(orig, clean, W, box)).toBe(false);
+  });
+
+  it("박스 대부분이 달라졌으면(도장을 지어냄) 잡아낸다", () => {
+    const orig = img(240);
+    const clean = img(240);
+    // 실사례: 지운 자리에 빨간 도장 — 박스 전체가 빨갛게 바뀜
+    for (let y = box.y0; y < box.y1; y++)
+      for (let x = box.x0; x < box.x1; x++) {
+        const i = (y * W + x) * 4;
+        clean[i] = 200;
+        clean[i + 1] = 30;
+        clean[i + 2] = 30;
+      }
+    expect(inventedInBox(orig, clean, W, box)).toBe(true);
+  });
+
+  it("재생성 노이즈 수준의 미세한 차이는 지어낸 게 아니다", () => {
+    expect(inventedInBox(img(240), img(225), W, box)).toBe(false);
   });
 });
