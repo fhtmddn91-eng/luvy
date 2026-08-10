@@ -1362,9 +1362,19 @@ export async function renderTranslatedImage(
   data: Buffer,
   mime: string,
   boxes: OcrBox[],
+  /**
+   * 이미지 모델로 글자 영역을 다시 그리게 할지.
+   *
+   * 기본은 끔. 재생성은 결과가 매번 달라서 같은 이미지도 됐다 깨졌다 한다 —
+   * 실측에서 원문이 안 지워진 채 한글이 겹쳐 그려지거나 같은 문구가 두 번
+   * 찍히는 사고가 났다. 지우기를 픽셀 기반으로 고친 뒤로는 덧그리기 쪽이
+   * 원본 배지·장식까지 그대로 남기면서 결과도 항상 같다.
+   */
+  opts: { regenerate?: boolean } = {},
 ): Promise<{ data: Buffer; mime: string }> {
   ensureFonts();
   if (mime === "image/gif") return renderGif(data, boxes);
+  if (!opts.regenerate) return renderStill(data, mime, boxes);
   try {
     return await regenerateStill(data, mime, boxes);
   } catch (e) {
