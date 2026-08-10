@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
       o.phone,
       o.address,
       o.memo ?? "",
-      o.items.map((i) => `${i.name} x${i.quantity}`).join(" / "),
+      o.items.map((i) => `${i.name}${i.optionName ? ` (${i.optionName})` : ""} x${i.quantity}`).join(" / "),
       // 품번을 쓰지 않는 상품이 섞여 있어도 상품 순서와 자리가 어긋나지 않도록 빈 칸을 유지한다
       o.items.map((i) => i.sku).join(" / "),
       o.items.reduce((s, i) => s + i.quantity, 0),

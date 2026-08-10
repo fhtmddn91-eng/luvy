@@ -124,7 +124,14 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                 <li key={i.id} className="flex items-start justify-between gap-4 px-5 py-4 sm:px-6">
                   <div className="min-w-0">
                     <p className="text-[12px] font-semibold text-brand-500">{i.brand}</p>
-                    <p className="mt-0.5 text-[14px] font-medium text-ink-deep">{i.name}</p>
+                    <p className="mt-0.5 text-[14px] font-medium text-ink-deep">
+                      {i.name}
+                      {i.optionName && (
+                        <span className="ml-1.5 text-[12.5px] font-normal text-muted">
+                          ({i.optionName})
+                        </span>
+                      )}
+                    </p>
                     <p className="mt-1 text-[12px] text-muted">
                       {won(i.unitPrice)} × {i.quantity}개
                     </p>

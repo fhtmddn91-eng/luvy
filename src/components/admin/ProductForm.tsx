@@ -21,6 +21,7 @@ export interface ProductFormData {
  stock?: number;
  image?: string;
  priceTiers: { minQty: number; unitPrice: number }[];
+ options?: { name: string; unitPrice: number; trackStock: boolean; stock: number }[];
 }
 
 /** 선택 상자·체크박스에 넘길 카테고리 (2단) */
@@ -66,6 +67,20 @@ export function ProductForm({
 
  const setTier = (i: number, key: "minQty" | "unitPrice", value: string) =>
  setTiers((rows) => rows.map((r, idx) => (idx === i ? { ...r, [key]: value } : r)));
+
+ // 상품 옵션(색상·사이즈). 비어 있으면 옵션 없는 상품으로 저장된다
+ const [options, setOptions] = useState<
+ { name: string; unitPrice: string; trackStock: boolean; stock: string }[]
+ >(
+ (product?.options ?? []).map((o) => ({
+ name: o.name,
+ unitPrice: o.unitPrice ? String(o.unitPrice) : "",
+ trackStock: o.trackStock,
+ stock: String(o.stock),
+ })),
+ );
+ const setOption = (i: number, patch: Partial<(typeof options)[number]>) =>
+ setOptions((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
 
  const toggleExtra = (slug: string) =>
  setExtras((cur) => (cur.includes(slug) ? cur.filter((s) => s !== slug) : [...cur, slug]));
@@ -338,6 +353,85 @@ export function ProductForm({
  <p className={helpCls}>
  가장 낮은 수량이 최소 주문 수량(MOQ)이 됩니다. 수량이 많을수록 단가를 낮게 설정하세요.
  </p>
+ </Panel>
+ </div>
+
+ <div className="rise rise-3">
+ <Panel
+ title="상품 옵션 (선택)"
+ action={
+ <button
+ type="button"
+ onClick={() =>
+ setOptions((r) => [...r, { name: "", unitPrice: "", trackStock: false, stock: "0" }])
+ }
+ className="border border-hairline px-3.5 py-1.5 text-[12px] font-semibold text-ink-soft transition-colors hover:border-ink-deep hover:text-ink-deep"
+ >
+ + 옵션 추가
+ </button>
+ }
+ >
+ {options.length === 0 ? (
+ <p className={helpCls}>
+ 색상·사이즈처럼 고를 것이 있으면 추가하세요. 옵션을 하나라도 넣으면
+ 거래처는 <strong className="text-ink-deep">옵션을 골라야</strong> 주문할 수 있습니다.
+ </p>
+ ) : (
+ <div className="space-y-2.5">
+ {options.map((o, i) => (
+ <div key={i} className="flex flex-wrap items-center gap-2 border-b border-hairline-soft pb-2.5 last:border-0">
+ <input
+ name="optionName"
+ value={o.name}
+ onChange={(e) => setOption(i, { name: e.target.value })}
+ placeholder="옵션명 (예: 레드)"
+ className={`${fieldCls} w-40`}
+ />
+ <input
+ name="optionPrice"
+ type="number"
+ min={0}
+ value={o.unitPrice}
+ onChange={(e) => setOption(i, { unitPrice: e.target.value })}
+ placeholder="옵션 단가"
+ className={`${fieldCls} w-32`}
+ />
+ <span className="text-[12px] text-muted">원 (비우면 수량별 도매가)</span>
+ <label className="flex cursor-pointer items-center gap-1.5 text-[12.5px] text-ink-soft">
+ <input
+ type="checkbox"
+ checked={o.trackStock}
+ onChange={(e) => setOption(i, { trackStock: e.target.checked })}
+ className="h-4 w-4 accent-ink-deep"
+ />
+ 재고 관리
+ </label>
+ <input
+ name="optionStock"
+ type="number"
+ min={0}
+ value={o.stock}
+ onChange={(e) => setOption(i, { stock: e.target.value })}
+ placeholder="재고"
+ className={`${fieldCls} w-24`}
+ disabled={!o.trackStock}
+ />
+ {/* 체크박스는 꺼져 있으면 전송되지 않으므로 값을 따로 실어 보낸다 */}
+ <input type="hidden" name="optionTrack" value={o.trackStock ? "1" : "0"} />
+ <button
+ type="button"
+ onClick={() => setOptions((r) => r.filter((_, idx) => idx !== i))}
+ className="ml-auto text-[13px] text-muted transition-colors hover:text-ink-deep"
+ >
+ 삭제
+ </button>
+ </div>
+ ))}
+ <p className={helpCls}>
+ 옵션 단가를 비우면 위의 수량별 도매가를 그대로 씁니다. 재고 관리를 끄면 수량 제한 없이 주문받습니다.
+ </p>
+ </div>
+ )}
  </Panel>
  </div>
 

@@ -5,7 +5,8 @@ import { CheckoutForm } from "./CheckoutForm";
 import { PortOneCheckout } from "@/components/checkout/PortOneCheckout";
 import { isPortOneConfigured, PORTONE_STORE_ID, PORTONE_CHANNEL_KEY_KCP } from "@/lib/portone";
 import { won } from "@/lib/format";
-import { resolveUnitPrice, shippingFor, type Tier } from "@/lib/pricing";
+import { shippingFor, type Tier } from "@/lib/pricing";
+import { optionUnitPrice } from "@/lib/options";
 import { getShippingPolicy } from "@/lib/settings";
 import { getBankAccount } from "@/lib/bankAccountInfo";
 import { formatBankAccount } from "@/lib/bankAccount";
@@ -15,13 +16,19 @@ export default async function CheckoutPage() {
   const portoneMode = isPortOneConfigured();
   const items = await db.cartItem.findMany({
     where: { userId: user.id },
-    include: { product: { include: { priceTiers: true } } },
+    include: { product: { include: { priceTiers: true, options: true } } },
   });
   if (items.length === 0) redirect("/cart");
 
   const lines = items.map((it) => {
-    const unit = resolveUnitPrice(it.product.priceTiers as Tier[], it.quantity);
-    return { id: it.id, name: it.product.name, quantity: it.quantity, lineTotal: unit * it.quantity };
+    const option = it.optionId ? it.product.options.find((o) => o.id === it.optionId) : undefined;
+    const unit = optionUnitPrice(option, it.product.priceTiers as Tier[], it.quantity);
+    return {
+      id: it.id,
+      name: option ? `${it.product.name} (${option.name})` : it.product.name,
+      quantity: it.quantity,
+      lineTotal: unit * it.quantity,
+    };
   });
   const subtotal = lines.reduce((s, l) => s + l.lineTotal, 0);
   const shippingFee = shippingFor(subtotal, await getShippingPolicy());

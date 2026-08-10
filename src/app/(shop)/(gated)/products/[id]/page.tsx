@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import { getAllCategories } from "@/lib/categories";
 import { PriceTierTable } from "@/components/product/PriceTierTable";
 import { AddToCart } from "@/components/product/AddToCart";
+import { OptionOrder } from "@/components/product/OptionOrder";
+import { sellableOptions, anyOptionAvailable } from "@/lib/options";
 import { getMoq, hasPrice, resolveUnitPrice } from "@/lib/pricing";
 import { won } from "@/lib/format";
 import { AssetDownloads } from "@/components/product/AssetDownloads";
@@ -16,7 +18,11 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const { id } = await params;
   const product = await db.product.findUnique({
     where: { id },
-    include: { priceTiers: true, assets: { orderBy: { sortOrder: "asc" } } },
+    include: {
+      priceTiers: true,
+      options: { orderBy: { sortOrder: "asc" } },
+      assets: { orderBy: { sortOrder: "asc" } },
+    },
   });
   if (!product || product.status !== "ACTIVE") notFound();
 
@@ -27,6 +33,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const wholesale = resolveUnitPrice(product.priceTiers, moq);
   // 수집 직후라 단가가 0인 상품은 "0원"으로 보여서도, 0원에 주문돼서도 안 된다
   const priced = hasPrice(product.priceTiers);
+  const options = sellableOptions(product.options);
+  const stockInfo = { trackStock: product.trackStock, stock: product.stock };
   // 상세 이미지가 하나도 없는(직접 등록한) 옛 상품은 있는 자료를 그대로 보여준다
   const onlyDetail = product.assets.filter((a) => a.kind === "DETAIL" || a.kind === "GIF");
   const detailAssets = onlyDetail.length > 0 ? onlyDetail : product.assets;
@@ -91,12 +99,29 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           </div>
 
           <div className="mt-8">
-            {priced ? (
+            {priced && options.length > 0 ? (
+              anyOptionAvailable(product.options, stockInfo) ? (
+                <OptionOrder
+                  productId={product.id}
+                  options={options}
+                  tiers={product.priceTiers}
+                  moq={moq}
+                  stockInfo={stockInfo}
+                />
+              ) : (
+                <div className="border border-line bg-cream px-4 py-4 text-center">
+                  <p className="text-[15px] font-extrabold text-ink">모든 옵션이 품절입니다</p>
+                  <p className="mt-1 text-[13px] text-muted">
+                    재입고 문의는 고객센터 또는 1:1 문의를 이용해주세요.
+                  </p>
+                </div>
+              )
+            ) : priced ? (
               <AddToCart
                 productId={product.id}
                 tiers={product.priceTiers}
                 moq={moq}
-                stockInfo={{ trackStock: product.trackStock, stock: product.stock }}
+                stockInfo={stockInfo}
               />
             ) : (
               <div className="border border-line bg-cream px-4 py-4 text-center">

@@ -1,6 +1,7 @@
 import "server-only";
 import { db } from "@/lib/db";
-import { resolveUnitPrice, shippingFor, type Tier } from "@/lib/pricing";
+import { shippingFor, type Tier } from "@/lib/pricing";
+import { optionUnitPrice } from "@/lib/options";
 import { getShippingPolicy } from "@/lib/settings";
 import { fetchPortOnePayment } from "@/lib/portone";
 import { restoreStock, linesFromOrderItems } from "@/lib/stockOps";
@@ -12,6 +13,10 @@ export interface OrderDraft {
     brand: string;
     /** 주문 시점 품번 스냅샷. 안 쓰는 상품은 빈 문자열 */
     sku: string;
+    /** 주문 시점 옵션명 스냅샷. 옵션 없는 상품은 빈 문자열 */
+    optionName: string;
+    /** 취소 시 재고를 되돌릴 곳 — 주문서에도 함께 남긴다 */
+    optionId: string;
     unitPrice: number;
     quantity: number;
     lineTotal: number;
@@ -26,7 +31,7 @@ export interface OrderDraft {
 export async function buildOrderDraft(userId: string): Promise<OrderDraft | null> {
   const cart = await db.cartItem.findMany({
     where: { userId },
-    include: { product: { include: { priceTiers: true } } },
+    include: { product: { include: { priceTiers: true, options: true } } },
   });
   // 주문 가능한 항목만: 판매중(ACTIVE)이고 도매가 티어가 하나 이상 있어야 함.
   // (비활성/티어 없는 상품이 0원으로 주문되는 것을 방지)
@@ -36,12 +41,15 @@ export async function buildOrderDraft(userId: string): Promise<OrderDraft | null
   if (orderable.length === 0) return null;
 
   const items = orderable.map((it) => {
-    const unitPrice = resolveUnitPrice(it.product.priceTiers as Tier[], it.quantity);
+    const option = it.optionId ? it.product.options.find((o) => o.id === it.optionId) : undefined;
+    const unitPrice = optionUnitPrice(option, it.product.priceTiers as Tier[], it.quantity);
     return {
       productId: it.productId,
       name: it.product.name,
       brand: it.product.brand,
       sku: it.product.sku ?? "",
+      optionName: option?.name ?? "",
+      optionId: option?.id ?? "",
       unitPrice,
       quantity: it.quantity,
       lineTotal: unitPrice * it.quantity,

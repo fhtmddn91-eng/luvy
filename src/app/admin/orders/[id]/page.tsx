@@ -62,7 +62,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
                       </span>
                     )}
                     <span className="block truncate text-ink-soft">
-                      {i.name} × {i.quantity} ({won(i.unitPrice)})
+                      {i.name}{i.optionName ? ` (${i.optionName})` : ""} × {i.quantity} ({won(i.unitPrice)})
                     </span>
                   </span>
                   <span className="shrink-0 font-semibold text-ink-deep">{won(i.lineTotal)}</span>

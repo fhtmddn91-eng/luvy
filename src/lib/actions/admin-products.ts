@@ -36,6 +36,75 @@ async function handleImage(formData: FormData): Promise<{ url?: string } | { err
   return { url: saved.url };
 }
 
+/**
+ * 옵션 입력 파싱. 이름이 비면 버린다.
+ * 같은 이름이 둘이면 뒤엣것을 버린다 — 이름으로 기존 옵션과 짝을 맞추기 때문에
+ * 중복이 있으면 어느 쪽을 살릴지 정할 수 없다.
+ */
+export interface OptionInput {
+  name: string;
+  unitPrice: number;
+  trackStock: boolean;
+  stock: number;
+  sortOrder: number;
+}
+
+function parseOptions(formData: FormData): OptionInput[] {
+  const names = formData.getAll("optionName").map((v) => String(v).trim());
+  const prices = formData.getAll("optionPrice").map((v) => parseInt(String(v), 10));
+  const tracks = formData.getAll("optionTrack").map((v) => String(v) === "1");
+  const stocks = formData.getAll("optionStock").map((v) => parseInt(String(v), 10));
+
+  const out: OptionInput[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i].slice(0, 60);
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push({
+      name,
+      unitPrice: Number.isFinite(prices[i]) && prices[i] > 0 ? prices[i] : 0,
+      trackStock: tracks[i] ?? false,
+      stock: Number.isFinite(stocks[i]) && stocks[i] > 0 ? stocks[i] : 0,
+      sortOrder: out.length,
+    });
+  }
+  return out;
+}
+
+/**
+ * 옵션을 입력값에 맞춘다.
+ *
+ * 통째로 지웠다 다시 만들면 안 된다 — 장바구니(CartItem.optionId)가 사라진
+ * 옵션을 가리켜 주문이 막힌다. 이름으로 짝을 맞춰 기존 것은 갱신하고,
+ * 빠진 것만 지운다.
+ */
+async function syncOptions(productId: string, rows: OptionInput[]): Promise<void> {
+  const existing = await db.productOption.findMany({
+    where: { productId },
+    select: { id: true, name: true },
+  });
+  const byName = new Map(existing.map((o) => [o.name, o.id]));
+  const keep = new Set<string>();
+
+  for (const r of rows) {
+    const id = byName.get(r.name);
+    if (id) {
+      keep.add(id);
+      await db.productOption.update({ where: { id }, data: { ...r, active: true } });
+    } else {
+      const created = await db.productOption.create({ data: { ...r, productId } });
+      keep.add(created.id);
+    }
+  }
+  const gone = existing.filter((o) => !keep.has(o.id)).map((o) => o.id);
+  if (gone.length > 0) {
+    await db.productOption.deleteMany({ where: { id: { in: gone } } });
+    // 사라진 옵션을 담고 있던 장바구니 줄도 함께 정리한다
+    await db.cartItem.deleteMany({ where: { productId, optionId: { in: gone } } });
+  }
+}
+
 function parseTiers(formData: FormData): { minQty: number; unitPrice: number }[] {
   const minQtys = formData.getAll("tierMinQty").map((v) => parseInt(String(v), 10));
   const unitPrices = formData.getAll("tierUnitPrice").map((v) => parseInt(String(v), 10));
@@ -112,6 +181,7 @@ export async function createProduct(_prev: ProductFormState, formData: FormData)
       categories: { create: cats },
     },
   });
+  await syncOptions(created.id, parseOptions(formData));
   await audit({
     action: "PRODUCT_CREATE",
     target: "product",
@@ -159,6 +229,7 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
       },
     }),
   ]);
+  await syncOptions(id, parseOptions(formData));
   await audit({
     action: "PRODUCT_UPDATE",
     target: "product",

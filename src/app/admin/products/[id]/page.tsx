@@ -14,6 +14,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
     where: { id },
     include: {
       priceTiers: true,
+      options: { orderBy: { sortOrder: "asc" } },
       assets: { orderBy: { sortOrder: "asc" } },
       categories: { select: { categorySlug: true } },
     },
@@ -37,6 +38,12 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
           categorySlugs: product.categories.map((c) => c.categorySlug),
           description: product.description,
           basePrice: product.basePrice,
+          options: product.options.map((o) => ({
+            name: o.name,
+            unitPrice: o.unitPrice,
+            trackStock: o.trackStock,
+            stock: o.stock,
+          })),
           status: product.status,
           trackStock: product.trackStock,
           stock: product.stock,

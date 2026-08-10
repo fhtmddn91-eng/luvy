@@ -16,6 +16,8 @@ export interface StockLine {
   productId: string;
   name: string;
   quantity: number;
+  /** 옵션별 재고를 쓰는 상품이면 옵션 id. 없으면 빈 문자열 */
+  optionId?: string;
 }
 
 export class InsufficientStockError extends Error {
@@ -37,6 +39,25 @@ export async function reserveStock(tx: TxClient, lines: StockLine[]): Promise<vo
 
   for (const line of lines) {
     if (line.quantity <= 0) continue;
+
+    // 옵션이 재고를 추적하면 옵션에서 먼저 뺀다 — 상품 재고와 이중으로 빼면 안 된다
+    if (line.optionId) {
+      const opt = await tx.productOption.findUnique({
+        where: { id: line.optionId },
+        select: { trackStock: true, stock: true, name: true },
+      });
+      if (opt?.trackStock) {
+        const taken = await tx.productOption.updateMany({
+          where: { id: line.optionId, trackStock: true, stock: { gte: line.quantity } },
+          data: { stock: { decrement: line.quantity } },
+        });
+        if (taken.count === 0) {
+          short.push(`${line.name} (${opt.name}) (요청 ${line.quantity} / 재고 ${Math.max(0, opt.stock)})`);
+        }
+        continue;
+      }
+    }
+
     const res = await tx.product.updateMany({
       where: {
         id: line.productId,
@@ -65,6 +86,14 @@ export async function reserveStock(tx: TxClient, lines: StockLine[]): Promise<vo
 export async function restoreStock(tx: TxClient, lines: StockLine[]): Promise<void> {
   for (const line of lines) {
     if (line.quantity <= 0) continue;
+    // 뺀 곳으로 되돌린다 — 옵션에서 뺐으면 옵션으로
+    if (line.optionId) {
+      const back = await tx.productOption.updateMany({
+        where: { id: line.optionId, trackStock: true },
+        data: { stock: { increment: line.quantity } },
+      });
+      if (back.count > 0) continue;
+    }
     await tx.product.updateMany({
       where: { id: line.productId, trackStock: true },
       data: { stock: { increment: line.quantity } },
@@ -74,7 +103,12 @@ export async function restoreStock(tx: TxClient, lines: StockLine[]): Promise<vo
 
 /** 주문의 품목을 재고 조작용 형태로 변환 */
 export function linesFromOrderItems(
-  items: { productId: string; name: string; quantity: number }[],
+  items: { productId: string; name: string; quantity: number; optionId?: string }[],
 ): StockLine[] {
-  return items.map((i) => ({ productId: i.productId, name: i.name, quantity: i.quantity }));
+  return items.map((i) => ({
+    productId: i.productId,
+    name: i.name,
+    quantity: i.quantity,
+    optionId: i.optionId ?? "",
+  }));
 }

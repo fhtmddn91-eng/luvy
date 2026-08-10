@@ -3,29 +3,41 @@ import { requireApprovedUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { CartItemRow, type CartRowData } from "@/components/cart/CartItemRow";
 import { CartSummary } from "@/components/cart/CartSummary";
-import { getMoq, resolveUnitPrice, shippingFor, type Tier } from "@/lib/pricing";
+import { getMoq, shippingFor, type Tier } from "@/lib/pricing";
+import { optionUnitPrice } from "@/lib/options";
 import { getShippingPolicy } from "@/lib/settings";
 
 export default async function CartPage() {
   const user = await requireApprovedUser();
   const items = await db.cartItem.findMany({
     where: { userId: user.id },
-    include: { product: { include: { priceTiers: true } } },
+    include: { product: { include: { priceTiers: true, options: true } } },
     orderBy: { id: "desc" },
   });
 
-  const rows: CartRowData[] = items.map((it) => ({
-    id: it.id,
-    productId: it.productId,
-    name: it.product.name,
-    brand: it.product.brand,
-    image: it.product.image || undefined,
-    quantity: it.quantity,
-    moq: getMoq(it.product.priceTiers as Tier[]),
-    tiers: it.product.priceTiers as Tier[],
-  }));
+  const rows: CartRowData[] = items.map((it) => {
+    const option = it.optionId ? it.product.options.find((o) => o.id === it.optionId) : undefined;
+    return {
+      id: it.id,
+      productId: it.productId,
+      name: it.product.name,
+      brand: it.product.brand,
+      image: it.product.image || undefined,
+      quantity: it.quantity,
+      moq: getMoq(it.product.priceTiers as Tier[]),
+      tiers: it.product.priceTiers as Tier[],
+      optionName: option?.name ?? "",
+      optionPrice: option?.unitPrice ?? 0,
+    };
+  });
 
-  const subtotal = rows.reduce((sum, r) => sum + resolveUnitPrice(r.tiers, r.quantity) * r.quantity, 0);
+  const subtotal = rows.reduce(
+    (sum, r) =>
+      sum +
+      optionUnitPrice(r.optionPrice ? { unitPrice: r.optionPrice } : null, r.tiers, r.quantity) *
+        r.quantity,
+    0,
+  );
   const shippingFee = shippingFor(subtotal, await getShippingPolicy());
 
   return (
