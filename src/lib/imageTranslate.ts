@@ -435,35 +435,84 @@ export function toPixelBox(
  *  - 테두리가 거의 균일하면(단색 카드·버튼) 그 색으로 채운다 → 경계가 안 보인다
  *  - 테두리가 변하면(그라데이션·사진) 네 변에서 이중선형 보간해 결을 잇는다
  */
+export function median(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+/** 배경으로 볼 수 없을 만큼 튀는 표본으로 판단하는 기준 (0~255) */
+const OUTLIER = 24;
+
 export function borderUniformity(samples: number[][]): { uniform: boolean; color: [number, number, number] } {
   if (samples.length === 0) return { uniform: true, color: [255, 255, 255] };
-  const mean = [0, 1, 2].map((c) => samples.reduce((s, p) => s + p[c], 0) / samples.length);
-  const dev = Math.sqrt(
-    samples.reduce((s, p) => s + [0, 1, 2].reduce((t, c) => t + (p[c] - mean[c]) ** 2, 0) / 3, 0) /
-      samples.length,
+  /*
+   * 평균이 아니라 중앙값을 쓴다.
+   * 글자가 박스 테두리에 닿아 있으면 표본에 글자 획이 섞여 들어오는데,
+   * 평균은 그것에 끌려가고 표준편차도 커져 "그라데이션"으로 오판한다.
+   * 그러면 보간이 글자 색을 박스 전체로 늘려 줄무늬를 만든다(실사례:
+   * "직경 3CM" 줄이 지워지지 않고 획이 늘어나 한글과 겹쳐 보였다).
+   * 중앙값은 표본 절반이 배경이면 배경색을 그대로 집는다.
+   */
+  const color = [0, 1, 2].map((c) => Math.round(median(samples.map((s) => s[c])))) as [
+    number,
+    number,
+    number,
+  ];
+  const dev = samples.map((s) =>
+    Math.max(Math.abs(s[0] - color[0]), Math.abs(s[1] - color[1]), Math.abs(s[2] - color[2])),
   );
+  const kept = samples.filter((_, i) => dev[i] <= OUTLIER);
+  const spread = kept.length
+    ? Math.sqrt(
+        kept.reduce((t, s) => t + [0, 1, 2].reduce((u, c) => u + (s[c] - color[c]) ** 2, 0) / 3, 0) /
+          kept.length,
+      )
+    : Infinity;
   return {
-    // 표준편차 10 이하면 눈으로는 단색 — 그 색으로 칠해도 티가 안 난다
-    uniform: dev <= 10,
-    color: [Math.round(mean[0]), Math.round(mean[1]), Math.round(mean[2])],
+    // 표본 절반 이상이 한 색에 모이고 퍼짐이 작으면 단색 — 그 색으로 칠해도 티가 안 난다
+    uniform: kept.length >= samples.length * 0.5 && spread <= 10,
+    color,
   };
 }
 
-/** 박스 테두리 바로 바깥(1px 링)의 픽셀 표본 */
+/**
+ * 박스 바깥 1~3px 링의 픽셀 표본.
+ * 1px 만 보면 글자가 테두리에 닿았을 때 표본이 통째로 오염된다.
+ */
 function sampleBorder(d: Uint8ClampedArray, W: number, H: number, b: PxBox): number[][] {
-  const x0 = Math.max(0, Math.round(b.x0) - 1);
-  const y0 = Math.max(0, Math.round(b.y0) - 1);
-  const x1 = Math.min(W - 1, Math.round(b.x1));
-  const y1 = Math.min(H - 1, Math.round(b.y1));
+  const x0 = Math.round(b.x0);
+  const y0 = Math.round(b.y0);
+  const x1 = Math.round(b.x1);
+  const y1 = Math.round(b.y1);
   const out: number[][] = [];
   const at = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
     const i = (y * W + x) * 4;
     out.push([d[i], d[i + 1], d[i + 2]]);
   };
   const stepX = Math.max(1, Math.floor((x1 - x0) / 24));
   const stepY = Math.max(1, Math.floor((y1 - y0) / 24));
-  for (let x = x0; x <= x1; x += stepX) { at(x, y0); at(x, y1); }
-  for (let y = y0; y <= y1; y += stepY) { at(x0, y); at(x1, y); }
+  for (let o = 1; o <= 3; o++) {
+    for (let x = x0; x <= x1; x += stepX) { at(x, y0 - o); at(x, y1 + o); }
+    for (let y = y0; y <= y1; y += stepY) { at(x0 - o, y); at(x1 + o, y); }
+  }
+  return out;
+}
+
+/**
+ * 한 변에서 읽은 값들 중 이웃과 크게 어긋나는 것(=테두리에 걸친 글자 획)을
+ * 이웃 중앙값으로 바꾼다. 그라데이션은 이웃끼리 완만해 그대로 남는다.
+ */
+export function cleanEdge(raw: number[], window = 4, tol = 28): number[] {
+  const out = raw.slice();
+  for (let i = 0; i < raw.length; i++) {
+    const lo = Math.max(0, i - window);
+    const hi = Math.min(raw.length - 1, i + window);
+    const m = median(raw.slice(lo, hi + 1));
+    if (Math.abs(raw[i] - m) > tol) out[i] = m;
+  }
   return out;
 }
 
@@ -473,17 +522,27 @@ function eraseBilinear(d: Uint8ClampedArray, W: number, H: number, b: PxBox): vo
   const y0 = Math.max(1, Math.round(b.y0));
   const x1 = Math.min(W - 1, Math.round(b.x1));
   const y1 = Math.min(H - 1, Math.round(b.y1));
-  const px = (x: number, y: number, c: number) => d[(y * W + x) * 4 + c];
   const spanX = Math.max(1, x1 - x0);
   const spanY = Math.max(1, y1 - y0);
+  const px = (x: number, y: number, c: number) => d[(y * W + x) * 4 + c];
+
+  // 보간에 쓰는 네 변을 먼저 정리한다 — 글자 획이 섞인 채로 늘리면 줄무늬가 된다
+  const edges = [0, 1, 2].map((c) => ({
+    left: cleanEdge(Array.from({ length: y1 - y0 }, (_, k) => px(x0 - 1, y0 + k, c))),
+    right: cleanEdge(Array.from({ length: y1 - y0 }, (_, k) => px(x1, y0 + k, c))),
+    top: cleanEdge(Array.from({ length: x1 - x0 }, (_, k) => px(x0 + k, y0 - 1, c))),
+    bottom: cleanEdge(Array.from({ length: x1 - x0 }, (_, k) => px(x0 + k, y1, c))),
+  }));
+
   for (let y = y0; y < y1; y++) {
     const ty = (y - y0) / spanY;
     for (let x = x0; x < x1; x++) {
       const tx = (x - x0) / spanX;
       const i = (y * W + x) * 4;
       for (let c = 0; c < 3; c++) {
-        const horiz = px(x0 - 1, y, c) * (1 - tx) + px(x1, y, c) * tx;
-        const vert = px(x, y0 - 1, c) * (1 - ty) + px(x, y1, c) * ty;
+        const e = edges[c];
+        const horiz = e.left[y - y0] * (1 - tx) + e.right[y - y0] * tx;
+        const vert = e.top[x - x0] * (1 - ty) + e.bottom[x - x0] * ty;
         // 가로·세로 보간의 평균 — 한쪽만 쓰면 반대 방향 결이 뭉개진다
         d[i + c] = Math.round((horiz + vert) / 2);
       }
@@ -541,7 +600,12 @@ function clampedPixelBox(
 
   const wantLeft = Math.max(0, Math.round(rawX0 - padded.x0));
   const wantRight = Math.max(0, Math.round(padded.x1 - rawX1));
-  // 붙어 있는 잔여 획은 덮되(최대 박스 폭 15%), 빈 칸 뒤의 옆 항목은 건드리지 않는다
+  /*
+   * 붙어 있는 잔여 획은 덮되, 빈 칸 뒤의 옆 항목은 건드리지 않는다.
+   * 좌우 상한을 넉넉히 주면 띄어쓰기 없이 붙은 옆 글자를 먹는다 —
+   * 25% 로 올리거나 한 칸만 더 넓혀도 "버건디" 옆 "/BURGUNDY" 를 먹었다(실측).
+   * 가로는 지금 폭 그대로 두고, 잘려 남는 획은 아래 세로 확장이 받아낸다.
+   */
   const leftoverCap = Math.min(24, Math.round((rawX1 - rawX0) * 0.15));
   const padLeft = hasLeft(1)
     ? extendOverLeftover(hasLeft, leftoverCap)
@@ -550,11 +614,41 @@ function clampedPixelBox(
     ? extendOverLeftover(hasRight, leftoverCap)
     : safePad(hasRight, wantRight);
 
+  const x0 = Math.max(0, Math.round(rawX0) - padLeft);
+  const x1 = Math.min(width, Math.round(rawX1) + padRight);
+
+  /*
+   * 상하도 같은 원리로 잔여 획까지 지운다.
+   * 좌표가 글자 높이를 짧게 잡으면 받침·삐침이 박스 아래로 남아, 그 위에
+   * 한글을 그리면 밑줄처럼 비친다(실사례: 제목 "초고속 진동 바이브" 아래 잔상).
+   * 다만 바로 아래 줄까지 삼키면 안 되므로 빈 줄이 나오면 거기서 멈추고,
+   * 넓히는 양도 글자 높이의 20% 이내로 묶는다.
+   */
+  const rawY0 = (ymin / 1000) * height;
+  const rawY1 = (ymax / 1000) * height;
+  const hasBelow = (d: number) =>
+    rowStdev(origPixels, width, height, Math.round(rawY1) + d, x0, x1) > th;
+  const hasAbove = (d: number) =>
+    rowStdev(origPixels, width, height, Math.round(rawY0) - d, x0, x1) > th;
+  const wantUp = Math.max(0, Math.round(rawY0 - padded.y0));
+  const wantDown = Math.max(0, Math.round(padded.y1 - rawY1));
+  const capY = Math.min(14, Math.max(6, Math.round((rawY1 - rawY0) * 0.35)));
+  // 붙어 있는 잔여 획은 넘어가며 덮고(extend), 떨어져 있으면 원래 여백만큼(safePad).
+  // 둘 중 큰 쪽 — 어느 한쪽만 쓰면 받침이 남거나 여백이 사라진다.
+  // +1: extendOverLeftover 는 마지막 내용 위치를 돌려주므로 그 줄까지 포함시킨다.
+  // 위아래는 옆 글자를 먹을 위험이 없어(줄 사이 여백이 있다) 한 줄 더 잡아도 안전하다.
+  const over = (has: (d: number) => boolean): number => {
+    const e = extendOverLeftover(has, capY);
+    return e > 0 ? e + 1 : 0;
+  };
+  const padUp = Math.max(safePad(hasAbove, wantUp), over(hasAbove));
+  const padDown = Math.max(safePad(hasBelow, wantDown), over(hasBelow));
+
   return {
-    x0: Math.max(0, Math.round(rawX0) - padLeft),
-    y0: padded.y0,
-    x1: Math.min(width, Math.round(rawX1) + padRight),
-    y1: padded.y1,
+    x0,
+    y0: Math.max(0, Math.round(rawY0) - padUp),
+    x1,
+    y1: Math.min(height, Math.round(rawY1) + padDown),
   };
 }
 
@@ -640,7 +734,10 @@ async function renderStill(data: Buffer, mime: string, boxes: OcrBox[]): Promise
   const canvas = createCanvas(img.width, img.height);
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, 0, 0);
-  paintBoxes(ctx, img.width, img.height, boxes);
+  // 원본 픽셀을 함께 넘겨야 박스 밖으로 삐져나온 잔여 획까지 지운다 —
+  // 안 넘기면 좌표 그대로만 지워 받침·삐침이 남는다(실측: "직경 3CM" 아래 잔상)
+  const origPixels = ctx.getImageData(0, 0, img.width, img.height).data.slice();
+  paintBoxes(ctx, img.width, img.height, boxes, origPixels);
   // PNG 는 투명도 보존을 위해 PNG 유지, 나머지는 JPEG
   if (mime === "image/png") return { data: canvas.toBuffer("image/png"), mime };
   return { data: canvas.toBuffer("image/jpeg", 90), mime: "image/jpeg" };
@@ -685,7 +782,8 @@ async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer;
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(img, 0, 0);
-    paintBoxes(ctx, width, height, boxes);
+    // 프레임마다 그 프레임의 원본 픽셀 기준으로 잔여 획을 판단한다
+    paintBoxes(ctx, width, height, boxes, ctx.getImageData(0, 0, width, height).data.slice());
     const buf = canvas.toBuffer("image/png");
     frames.push(buf);
     hashes.push(crypto.createHash("md5").update(buf).digest("hex"));
@@ -838,6 +936,31 @@ function columnStdev(
   return Math.sqrt(Math.max(0, sq / n - mean * mean));
 }
 
+/** 가로 구간에서 한 행의 명암 표준편차 — 글자가 있으면 높다 */
+function rowStdev(
+  px: Uint8ClampedArray,
+  W: number,
+  H: number,
+  y: number,
+  x0: number,
+  x1: number,
+): number {
+  if (y < 0 || y >= H || x1 <= x0) return 0;
+  let sum = 0;
+  let sq = 0;
+  let n = 0;
+  for (let x = x0; x < x1; x++) {
+    const i = (y * W + x) * 4;
+    const v = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+    sum += v;
+    sq += v * v;
+    n++;
+  }
+  if (n === 0) return 0;
+  const mean = sum / n;
+  return Math.sqrt(Math.max(0, sq / n - mean * mean));
+}
+
 /**
  * 문구 바로 옆에 다른 내용(번역 대상이 아닌 숫자·단위 등)이 붙어 있는가.
  *
@@ -965,6 +1088,47 @@ async function detectForeignText(png: Buffer): Promise<[number, number, number, 
   return out;
 }
 
+/**
+ * 씨앗으로 지목된 사각형과 맞닿은 사각형들을 전부 끌어모은다(전이적).
+ *
+ * 왜 필요한가: 재생성 패치는 박스마다 여유를 두고 칠하므로 이웃 박스 영역을
+ * 침범한다. 검수에 걸린 박스만 원본으로 되돌리면, 이웃이 침범해 그려 놓은
+ * 글자는 되돌림 범위 밖이라 그대로 남고, 그 위에 다시 그리게 된다 →
+ * 같은 문구가 두 번 찍힌다(실사례: "직경 3CM"이 작게·크게 이중 렌더).
+ * 맞닿은 것끼리 한 덩어리로 묶어 함께 되돌리고 함께 다시 그려야 한다.
+ */
+export function groupTouching(rects: PxBox[], seed: number[]): number[] {
+  const touches = (a: PxBox, b: PxBox) =>
+    a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+  const chosen = new Set(seed);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (let i = 0; i < rects.length; i++) {
+      if (chosen.has(i)) continue;
+      for (const j of chosen) {
+        if (touches(rects[i], rects[j])) {
+          chosen.add(i);
+          grew = true;
+          break;
+        }
+      }
+    }
+  }
+  return [...chosen].sort((a, b) => a - b);
+}
+
+/** 재생성 패치가 실제로 칠하는 사각형 (박스 + 합성 여유) */
+function patchRect(it: OcrBox, W: number, H: number): PxBox {
+  const p = toPixelBox(it.box, W, H);
+  const { padX, padY } = compositeParams(p.x1 - p.x0, p.y1 - p.y0);
+  return {
+    x0: Math.max(0, p.x0 - padX),
+    y0: Math.max(0, p.y0 - padY),
+    x1: Math.min(W, p.x1 + padX),
+    y1: Math.min(H, p.y1 + padY),
+  };
+}
+
 /** 검수에서 걸린 영역이 우리 박스와 겹치는가 (걸린 영역의 중심이 박스 안) */
 function flaggedHits(flag: [number, number, number, number], it: OcrBox): boolean {
   const cy = (flag[0] + flag[2]) / 2;
@@ -1035,17 +1199,28 @@ export async function compositeTranslatedStill(
   if (verify && patchBoxes.length > 0) {
     try {
       const flags = await detectForeignText(canvas.toBuffer("image/png"));
-      const bad = patchBoxes.filter((b) => flags.some((f) => flaggedHits(f, b)));
-      if (bad.length > 0) {
+      const seed = patchBoxes
+        .map((b, i) => (flags.some((f) => flaggedHits(f, b)) ? i : -1))
+        .filter((i) => i >= 0);
+      if (seed.length > 0) {
+        // 패치 영역이 맞닿은 이웃까지 함께 되돌린다 — 안 그러면 이웃이 흘린
+        // 글자가 남아 그 위에 다시 그려진다(같은 문구 이중 렌더)
+        const rects = patchBoxes.map((b) => patchRect(b, W, H));
+        const bad = groupTouching(rects, seed).map((i) => patchBoxes[i]);
         const horiz = bad.filter((b) => !isVerticalBox(b.box, W, H));
-        const vert = bad.filter((b) => isVerticalBox(b.box, W, H));
-        // 걸린 박스는 먼저 원본으로 복원 — 재생성 패치가 여유 영역에 흘린
-        // 글자 조각까지 지운다 (복원 없이 덧칠하면 조각이 남는다 — 실측)
+
         const img = ctx.getImageData(0, 0, W, H);
         for (const it of bad) restoreOne(img.data, origPixels, it, W, H);
         ctx.putImageData(img, 0, 0);
+        // 세로쓰기는 원본 유지 (오버레이가 세로를 못 그림)
         if (horiz.length > 0) paintBoxes(ctx, W, H, horiz, origPixels);
-        void vert; // 세로쓰기는 원본 유지 (오버레이가 세로를 못 그림)
+
+        // 재처리 뒤에도 남으면 깨진 이미지를 내보내느니 전체를 오버레이로 다시
+        // 만든다 — 모델 호출이 없어 결과가 항상 같고, 실측에서 가장 깨끗했다
+        const after = await detectForeignText(canvas.toBuffer("image/png"));
+        if (active.some((b) => after.some((f) => flaggedHits(f, b)))) {
+          return renderStill(originalData, mime, active);
+        }
       }
     } catch {
       // 검수는 보강 장치 — 실패해도 합성 결과는 그대로 쓴다

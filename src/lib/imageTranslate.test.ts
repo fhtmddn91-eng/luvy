@@ -15,6 +15,9 @@ import {
   safePad,
   isCrowdedBox,
   extendOverLeftover,
+  groupTouching,
+  median,
+  cleanEdge,
   hasManualOverride,
   borderUniformity,
 } from "./imageTranslate";
@@ -248,5 +251,71 @@ describe("toPixelBox — 좌표 변환 + 여백", () => {
     expect(b.x1).toBe(800);
     expect(b.y1).toBeGreaterThan(200); // 200 + 여백
     expect(b.y1).toBeLessThanOrEqual(400);
+  });
+});
+
+describe("groupTouching — 이중 렌더 방지", () => {
+  const r = (x0: number, y0: number, x1: number, y1: number) => ({ x0, y0, x1, y1 });
+
+  it("맞닿은 이웃까지 함께 되돌릴 대상으로 끌어온다", () => {
+    // 실사례: "직경 3CM" 박스만 되돌리자 바로 아래 문구가 흘려 놓은 글자가
+    // 남아 그 위에 다시 그려졌다 → 같은 문구가 두 번 찍혔다
+    const rects = [r(0, 0, 100, 40), r(0, 35, 100, 75), r(0, 200, 100, 240)];
+    expect(groupTouching(rects, [0])).toEqual([0, 1]);
+  });
+
+  it("전이적으로 확장한다 (A-B, B-C 면 A도 C를 끌어온다)", () => {
+    const rects = [r(0, 0, 100, 40), r(0, 35, 100, 75), r(0, 70, 100, 110)];
+    expect(groupTouching(rects, [0])).toEqual([0, 1, 2]);
+  });
+
+  it("떨어져 있는 박스는 건드리지 않는다", () => {
+    const rects = [r(0, 0, 100, 40), r(0, 200, 100, 240)];
+    expect(groupTouching(rects, [0])).toEqual([0]);
+  });
+
+  it("씨앗이 여러 개여도 중복 없이 합친다", () => {
+    const rects = [r(0, 0, 50, 40), r(0, 200, 50, 240), r(0, 35, 50, 75)];
+    expect(groupTouching(rects, [0, 1])).toEqual([0, 1, 2]);
+  });
+
+  it("씨앗이 없으면 아무것도 고르지 않는다", () => {
+    expect(groupTouching([r(0, 0, 10, 10)], [])).toEqual([]);
+  });
+});
+
+describe("median / cleanEdge — 테두리에 걸친 글자 배제", () => {
+  it("표본 일부가 글자여도 중앙값은 배경색을 집는다", () => {
+    // 배경 240 이 다수, 글자 20 이 소수
+    expect(median([240, 241, 239, 20, 240])).toBe(240);
+  });
+
+  it("짝수 개는 가운데 둘의 평균", () => {
+    expect(median([10, 20, 30, 40])).toBe(25);
+    expect(median([])).toBe(0);
+  });
+
+  it("이웃과 크게 어긋나는 값(글자 획)을 이웃 중앙값으로 바꾼다", () => {
+    // 예전에는 이 값이 그대로 보간에 쓰여 박스 전체로 줄무늬가 늘어났다
+    const raw = [240, 240, 240, 20, 240, 240, 240];
+    expect(cleanEdge(raw)).toEqual([240, 240, 240, 240, 240, 240, 240]);
+  });
+
+  it("완만한 그라데이션은 손대지 않는다", () => {
+    const raw = [200, 205, 210, 215, 220, 225, 230];
+    expect(cleanEdge(raw)).toEqual(raw);
+  });
+});
+
+describe("borderUniformity — 글자가 테두리에 닿은 경우", () => {
+  it("표본 다수가 배경이면 글자 획이 섞여도 단색으로 본다", () => {
+    // 실사례: 박스가 글자에 딱 붙어 테두리 표본에 획이 섞였고,
+    // 평균·표준편차로 판단하던 예전 코드는 "그라데이션"으로 오판해
+    // 보간이 글자를 줄무늬로 늘렸다
+    const bg = Array.from({ length: 9 }, () => [240, 238, 238]);
+    const stroke = [[30, 20, 25], [28, 22, 24]];
+    const r = borderUniformity([...bg, ...stroke]);
+    expect(r.uniform).toBe(true);
+    expect(r.color[0]).toBe(240);
   });
 });
