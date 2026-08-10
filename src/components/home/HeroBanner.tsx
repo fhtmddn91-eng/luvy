@@ -108,12 +108,16 @@ export function HeroBanner({
           className="absolute inset-0 bg-gradient-to-b from-white/85 via-white/40 to-transparent lg:bg-gradient-to-r lg:from-white/85 lg:via-white/35 lg:to-transparent"
         />
 
-        {/* Copy overlaid on the empty (left / top) area of the image */}
-        <div className="relative z-10 mx-auto max-w-[1280px] px-6">
-          {/* 전체 카테고리 기둥 — 배너 왼쪽에 붙어 항상 떠 있다 */}
-          {sidebar && (
-            <div className="absolute inset-y-0 left-6 z-20 hidden lg:block">{sidebar}</div>
-          )}
+        {/*
+         * 카테고리 기둥 + 카피를 **진짜 2단**으로 놓는다.
+         * 예전에는 기둥을 절대배치하고 카피에 고정 여백(268px)을 줬는데,
+         * 화면 폭에 따라 카피가 눌려 제목이 4줄로 깨졌다. 기둥은 고정 폭,
+         * 카피는 남는 폭을 그대로 받게 하면 어느 폭에서도 안 밀린다.
+         */}
+        <div className="relative z-10 mx-auto flex max-w-[1280px] px-6">
+          {sidebar && <div className="hidden shrink-0 lg:block">{sidebar}</div>}
+
+          <div className="relative min-w-0 flex-1">
           {/*
            * 모바일 배너 높이. 예전 540px 는 화면(844px)의 82% 를 먹어서
            * 첫 화면에 상품이 하나도 안 보였다 → 절반 수준으로 낮춘다.
@@ -121,12 +125,8 @@ export function HeroBanner({
           <div className="flex min-h-[300px] flex-col justify-start pt-7 sm:min-h-[440px] sm:pt-10 lg:min-h-[460px] lg:justify-center lg:pt-0">
             <div
               key={banner.id}
-              // 카테고리 기둥을 피하는 여백은 **바깥 여백(ml)** 이어야 한다.
-              // padding 으로 주면 max-width 안쪽을 깎아 실제 글자 폭이 352px 밖에
-              // 안 됐고, 그래서 제목이 4줄로 깨졌다.
-              className={`hero-enter max-w-full ${
-                sidebar ? "lg:ml-[268px] lg:max-w-[560px]" : "lg:max-w-[520px] lg:pl-4"
-              }`}
+              // 좌측 여백은 이전 배너 화살표(44px)가 앉을 자리
+              className={`hero-enter max-w-full lg:max-w-[620px] ${sidebar ? "lg:pl-14" : "lg:pl-4"}`}
             >
               <p className="text-[13px] font-bold uppercase tracking-[0.22em] text-brand-500">
                 {banner.eyebrow}
@@ -169,7 +169,7 @@ export function HeroBanner({
 
           {/* 회원 인사 카드 (우측 오버레이) */}
           {widget && (
-            <div className="absolute right-16 top-1/2 z-20 hidden -translate-y-1/2 xl:block">
+            <div className="absolute right-10 top-1/2 z-20 hidden -translate-y-1/2 xl:block">
               {widget}
             </div>
           )}
@@ -179,9 +179,7 @@ export function HeroBanner({
             type="button"
             onClick={() => go(index - 1)}
             aria-label="이전 배너"
-            className={`absolute top-1/2 hidden h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/85 text-ink shadow-[var(--shadow-soft)] transition-colors hover:bg-white lg:flex ${
-              sidebar ? "left-[212px]" : "left-0"
-            }`}
+            className="absolute left-0 top-1/2 hidden h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/85 text-ink shadow-[var(--shadow-soft)] transition-colors hover:bg-white lg:flex"
           >
             <Icon name="chevronLeft" className="h-5 w-5" strokeWidth={2} />
           </button>
@@ -195,7 +193,7 @@ export function HeroBanner({
           </button>
 
           {/* Dots */}
-          <div className="absolute bottom-5 left-6 flex items-center gap-2 lg:left-1/2 lg:-translate-x-1/2">
+          <div className="absolute bottom-5 left-0 flex items-center gap-2 lg:left-1/2 lg:-translate-x-1/2">
             {banners.map((b, i) => (
               <button
                 key={b.id}
@@ -210,6 +208,7 @@ export function HeroBanner({
                 }`}
               />
             ))}
+          </div>
           </div>
         </div>
       </div>
