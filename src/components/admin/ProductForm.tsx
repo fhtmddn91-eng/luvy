@@ -259,7 +259,8 @@ export function ProductForm({
  </div>
 
  <div className="rise rise-2">
- <Panel title="상품 이미지">
+ {/* 아래 "상품 이미지" 패널의 대표이미지와 헷갈리지 않게 이름을 나눈다 */}
+        <Panel title="목록 썸네일">
  <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
  <div className="shrink-0">
  {preview || product?.image ? (
@@ -293,7 +294,8 @@ export function ProductForm({
  className="block w-full text-[13px] text-ink-soft file:mr-3 file:border file:border-hairline file:bg-white file:px-4 file:py-2 file:text-[13px] file:font-semibold file:text-ink-deep hover:file:border-ink-deep"
  />
  <p className={helpCls}>
- JPG · PNG · WebP · AVIF / 5MB 이하.{" "}
+ JPG · PNG · WebP · AVIF / 5MB 이하. 대표이미지를 등록하면 첫
+                대표이미지가 썸네일이 되므로 여기 올린 이미지는 쓰이지 않습니다.{" "}
  {product?.image
  ? "새 이미지를 선택하면 기존 이미지를 교체하고 이전 파일은 삭제됩니다."
  : "선택하지 않으면 브랜드 타일이 표시됩니다."}

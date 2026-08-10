@@ -12,6 +12,7 @@ import {
   readPublicUpload,
 } from "@/lib/storage";
 import { ocrImage, renderTranslatedImage, parseOcrBoxes, type OcrBox } from "@/lib/imageTranslate";
+import { assetKindFor, nextThumbnail, type AssetTarget } from "@/lib/productAssets";
 import { audit } from "@/lib/audit";
 
 export type AssetFormState = { error?: string; ok?: number };
@@ -22,29 +23,44 @@ function revalidateProduct(productId: string): void {
 }
 
 /**
- * 썸네일(Product.image)을 첫 대표이미지에 맞춘다.
+ * 썸네일(Product.image)을 자산에 맞춘다.
  *
  * 썸네일을 자산과 따로 복사해 두니 번역·삭제·순서변경 때마다 어긋났다.
  * 실제로 썸네일만 중국어로 남거나(번역 대상에서 빠짐), 자산을 지웠을 때
  * 파일이 사라져 깨진 썸네일이 생겼다(운영 데이터에서 2건 확인).
- * 자산이 바뀔 때마다 첫 MAIN(없으면 첫 자산)으로 다시 맞춘다.
+ * 규칙은 nextThumbnail 에 있다 — 대표이미지가 없는 상품의 썸네일은 건드리지 않는다.
+ *
+ * @param replacing 이번 작업으로 없어지는 파일 URL
  */
-async function syncProductThumbnail(productId: string): Promise<void> {
-  const assets = await db.productAsset.findMany({
-    where: { productId },
-    orderBy: { sortOrder: "asc" },
-    select: { url: true, kind: true },
-  });
-  const next = assets.find((a) => a.kind === "MAIN")?.url ?? assets[0]?.url ?? "";
-  await db.product.updateMany({
-    where: { id: productId, NOT: { image: next } },
-    data: { image: next },
-  });
+async function syncProductThumbnail(
+  productId: string,
+  replacing?: string,
+): Promise<void> {
+  const [product, assets] = await Promise.all([
+    db.product.findUnique({ where: { id: productId }, select: { image: true } }),
+    db.productAsset.findMany({
+      where: { productId },
+      orderBy: { sortOrder: "asc" },
+      select: { url: true, kind: true },
+    }),
+  ]);
+  if (!product) return;
+  const next = nextThumbnail(product.image, assets, replacing);
+  if (next === null) return;
+  await db.product.update({ where: { id: productId }, data: { image: next } });
+}
+
+/** 업로드 폼의 "어느 자리에 올릴지" 값 */
+function targetOf(formData: FormData): AssetTarget {
+  return formData.get("target") === "MAIN" ? "MAIN" : "DETAIL";
 }
 
 /**
- * 상세페이지 이미지/GIF 업로드 (여러 장 한 번에).
- * GIF 는 kind=GIF, 나머지는 kind=DETAIL 로 저장되어 상품 상세 하단에 순서대로 렌더된다.
+ * 상품 이미지 업로드 (여러 장 한 번에).
+ *
+ * 대표이미지(kind=MAIN)는 상세 상단 갤러리와 썸네일에, 상세페이지 이미지
+ * (kind=DETAIL·GIF)는 상세 하단에 순서대로 렌더된다.
+ * 대표이미지는 기존 대표이미지 **뒤에** 끼워 넣어 대표 → 상세 순서를 지킨다.
  */
 export async function addProductAssets(
   productId: string,
@@ -62,11 +78,27 @@ export async function addProductAssets(
   if (files.length === 0) return { error: "업로드할 파일을 선택해주세요." };
   if (files.length > 30) return { error: "한 번에 30장까지 올릴 수 있습니다." };
 
-  const last = await db.productAsset.aggregate({
-    where: { productId },
-    _max: { sortOrder: true },
-  });
-  let order = (last._max.sortOrder ?? -1) + 1;
+  const target = targetOf(formData);
+  let order: number;
+  if (target === "MAIN") {
+    const lastMain = await db.productAsset.findFirst({
+      where: { productId, kind: "MAIN" },
+      orderBy: { sortOrder: "desc" },
+      select: { sortOrder: true },
+    });
+    order = (lastMain?.sortOrder ?? -1) + 1;
+    // 뒤에 있는 상세·옵션 이미지를 밀어 자리를 만든다
+    await db.productAsset.updateMany({
+      where: { productId, sortOrder: { gte: order } },
+      data: { sortOrder: { increment: files.length } },
+    });
+  } else {
+    const last = await db.productAsset.aggregate({
+      where: { productId },
+      _max: { sortOrder: true },
+    });
+    order = (last._max.sortOrder ?? -1) + 1;
+  }
 
   let saved = 0;
   for (const file of files) {
@@ -81,7 +113,7 @@ export async function addProductAssets(
     await db.productAsset.create({
       data: {
         productId,
-        kind: file.type === "image/gif" ? "GIF" : "DETAIL",
+        kind: assetKindFor(target, { mime: file.type, url: result.url }),
         url: result.url,
         bytes: file.size,
         sortOrder: order++,
@@ -94,11 +126,37 @@ export async function addProductAssets(
     action: "ASSET_ADD",
     target: "product",
     targetId: productId,
-    summary: `상세 이미지 ${saved}장 추가`,
+    summary: `${target === "MAIN" ? "대표" : "상세"} 이미지 ${saved}장 추가`,
   });
   await syncProductThumbnail(productId);
   revalidateProduct(productId);
   return { ok: saved };
+}
+
+/**
+ * 이미 올린 이미지의 자리(대표 ↔ 상세)를 바꾼다.
+ *
+ * 예전에는 업로드가 무조건 상세로만 저장돼서, 대표이미지로 쓰려던 것도
+ * 상품 상세의 갤러리·다운로드 목록에 안 잡혔다. 다시 올리지 않고 고칠 수 있어야 한다.
+ */
+export async function setAssetTarget(assetId: string, target: AssetTarget): Promise<void> {
+  await requireAdmin();
+  const asset = await db.productAsset.findUnique({ where: { id: assetId } });
+  if (!asset) return;
+
+  const kind = assetKindFor(target, { url: asset.url });
+  if (kind === asset.kind) return;
+
+  await db.productAsset.update({ where: { id: assetId }, data: { kind } });
+  await audit({
+    action: "ASSET_KIND",
+    target: "product",
+    targetId: asset.productId,
+    summary: `이미지 자리 변경 (${asset.kind} → ${kind})`,
+    meta: { assetId },
+  });
+  await syncProductThumbnail(asset.productId);
+  revalidateProduct(asset.productId);
 }
 
 export async function deleteProductAsset(assetId: string): Promise<void> {
@@ -116,11 +174,11 @@ export async function deleteProductAsset(assetId: string): Promise<void> {
     action: "ASSET_DELETE",
     target: "product",
     targetId: asset.productId,
-    summary: `상세 이미지 1장 삭제 (${asset.kind})`,
+    summary: `상품 이미지 1장 삭제 (${asset.kind})`,
     meta: { url: asset.url },
   });
-  // 지운 게 썸네일이었다면 남은 대표이미지로 다시 맞춘다 (깨진 썸네일 방지)
-  await syncProductThumbnail(asset.productId);
+  // 지운 게 썸네일이었다면 남은 이미지로 다시 맞춘다 (깨진 썸네일 방지)
+  await syncProductThumbnail(asset.productId, asset.url);
   revalidateProduct(asset.productId);
 }
 
@@ -154,8 +212,8 @@ async function swapTranslatedFile(
       bytes: rendered.data.byteLength,
     },
   });
-  // 썸네일은 항상 첫 대표이미지를 따라간다
-  await syncProductThumbnail(asset.productId);
+  // 이 자산이 썸네일이었다면 새 번역본을 따라간다 (중국어 썸네일이 남지 않도록)
+  await syncProductThumbnail(asset.productId, asset.url);
   return { ok: true };
 }
 
@@ -272,7 +330,7 @@ export async function revertAssetTranslation(assetId: string): Promise<void> {
       bytes: original?.data.byteLength ?? asset.bytes,
     },
   });
-  await syncProductThumbnail(asset.productId);
+  await syncProductThumbnail(asset.productId, asset.url);
   await audit({
     action: "ASSET_TRANSLATE",
     target: "product",

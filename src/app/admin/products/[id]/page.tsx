@@ -53,7 +53,9 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
       />
 
       <div className="mt-6">
-        <Panel title={`상세페이지 이미지 (${product.assets.length})`}>
+        <Panel
+          title={`상품 이미지 (대표 ${product.assets.filter((a) => a.kind === "MAIN").length} · 상세 ${product.assets.filter((a) => a.kind !== "MAIN").length})`}
+        >
           <ProductAssetsManager
             productId={product.id}
             assets={product.assets.map((a) => ({

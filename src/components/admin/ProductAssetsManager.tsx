@@ -10,6 +10,7 @@ import {
   translateProductAsset,
   updateAssetTranslation,
   revertAssetTranslation,
+  setAssetTarget,
   type AssetFormState,
   type TranslateState,
 } from "@/lib/actions/admin-assets";
@@ -28,6 +29,14 @@ export interface AssetRow {
 }
 
 const kb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
+
+/** 타일에 붙는 자리 표시 — 대표만 강조한다 (상세가 대부분이라) */
+const KIND_LABEL: Record<string, string> = {
+  MAIN: "대표",
+  DETAIL: "상세",
+  GIF: "GIF",
+  OPTION: "옵션",
+};
 
 interface BoxItem {
   zh: string;
@@ -203,9 +212,11 @@ function TranslationEditor({ asset, onClose }: { asset: AssetRow; onClose: () =>
 }
 
 /**
- * 상세페이지 이미지/GIF 관리.
- * 여기 올린 이미지는 상품 상세 하단에 순서대로 이어 붙어 렌더되고,
- * 회원의 '판매자료 다운로드' 목록에도 함께 나온다.
+ * 상품 이미지 관리 — 대표이미지와 상세페이지 이미지/GIF.
+ *
+ * 대표이미지(MAIN)는 상품 상세 상단 갤러리와 목록 썸네일에, 상세페이지 이미지
+ * (DETAIL·GIF)는 상세 하단에 순서대로 이어 붙는다. 둘 다 회원의 '판매자료 다운로드'
+ * 목록에 종류별로 나뉘어 나오므로, 자리를 잘못 잡으면 대표이미지 묶음이 비어 버린다.
  * 이미지 속 중국어는 골라서 한국어로 번역할 수 있다 (원본 보존, 문구 수정 가능).
  */
 export function ProductAssetsManager({
@@ -220,6 +231,10 @@ export function ProductAssetsManager({
   const fileRef = useRef<HTMLInputElement>(null);
   // 몇 장 골랐는지 즉시 보여준다 — "첨부가 됐는지" 확인용
   const [picked, setPicked] = useState(0);
+  // 대표이미지가 아직 없으면 대표부터 올리는 게 맞다
+  const [target, setTarget] = useState<"MAIN" | "DETAIL">(
+    assets.some((a) => a.kind === "MAIN") ? "DETAIL" : "MAIN",
+  );
 
   // 번역 대상 선택 + 진행 상태
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -312,7 +327,8 @@ export function ProductAssetsManager({
     <div>
       {assets.length === 0 ? (
         <p className="text-[13px] text-muted">
-          아직 상세 이미지가 없습니다. 아래에서 올리면 상품 상세 하단에 순서대로 표시됩니다.
+          아직 등록된 이미지가 없습니다. 아래에서 <b>대표이미지</b>(상세 상단 갤러리·목록
+          썸네일)와 <b>상세페이지 이미지</b>를 각각 올릴 수 있습니다.
         </p>
       ) : (
         <>
@@ -422,12 +438,29 @@ export function ProductAssetsManager({
                   )}
                 </label>
                 <div className="mt-1 flex items-center justify-between text-[10px] text-muted">
-                  <span className="font-bold">
+                  <span className="flex items-center gap-1 font-bold">
                     {i + 1}
-                    {a.kind === "GIF" && <span className="ml-1 bg-ink-deep px-1 py-px font-extrabold text-white">GIF</span>}
+                    <span
+                      className={`px-1 py-px font-extrabold ${
+                        a.kind === "MAIN"
+                          ? "bg-brand-500 text-white"
+                          : "border border-hairline text-muted"
+                      }`}
+                    >
+                      {KIND_LABEL[a.kind] ?? a.kind}
+                    </span>
                   </span>
                   <span>{kb(a.bytes)}</span>
                 </div>
+                {/* 대표 ↔ 상세 자리 바꾸기 — 잘못 올렸을 때 다시 올리지 않아도 되게 */}
+                <form action={setAssetTarget.bind(null, a.id, a.kind === "MAIN" ? "DETAIL" : "MAIN")}>
+                  <button
+                    type="submit"
+                    className="mt-1 w-full border border-hairline py-0.5 text-[10px] font-bold text-ink-deep hover:border-ink-deep"
+                  >
+                    {a.kind === "MAIN" ? "상세로 내리기" : "대표로 올리기"}
+                  </button>
+                </form>
                 <div className="mt-1 flex items-center justify-between text-[11px]">
                   <span className="flex gap-1">
                     <form action={moveProductAsset.bind(null, a.id, "up")}>
@@ -475,8 +508,34 @@ export function ProductAssetsManager({
         const fd = new FormData(e.currentTarget);
         startTransition(() => formAction(fd));
       }} className="mt-4 space-y-2 border-t border-hairline-soft pt-4">
+        <span className={labelCls}>어느 자리에 올릴까요?</span>
+        <div className="flex flex-wrap gap-2">
+          {([
+            { v: "MAIN", label: "대표이미지", help: "상세 상단 갤러리 · 목록 썸네일" },
+            { v: "DETAIL", label: "상세페이지 이미지", help: "상세 하단에 이어 붙는 긴 이미지" },
+          ] as const).map((t) => (
+            <label
+              key={t.v}
+              className={`flex-1 cursor-pointer border px-3 py-2 ${
+                target === t.v ? "border-ink-deep bg-canvas" : "border-hairline bg-white"
+              }`}
+            >
+              <input
+                type="radio"
+                name="target"
+                value={t.v}
+                checked={target === t.v}
+                onChange={() => setTarget(t.v)}
+                className="mr-1.5 accent-ink-deep"
+              />
+              <span className="text-[13px] font-bold text-ink-deep">{t.label}</span>
+              <span className="mt-0.5 block text-[11px] text-muted">{t.help}</span>
+            </label>
+          ))}
+        </div>
+
         <label htmlFor="asset-files" className={labelCls}>
-          상세 이미지 추가 (여러 장 선택 가능)
+          {target === "MAIN" ? "대표이미지" : "상세 이미지"} 추가 (여러 장 선택 가능)
         </label>
         <input
           id="asset-files"
@@ -492,8 +551,9 @@ export function ProductAssetsManager({
           <p className="text-[12px] font-bold text-ink-deep">{picked}장 선택됨 — 아래 버튼을 눌러야 업로드됩니다.</p>
         )}
         <p className={helpCls}>
-          JPG·PNG·WebP·GIF, 장당 5MB 이하. 위에서부터 순서대로 상세페이지에 이어 붙습니다.
-          움직이는 GIF 는 그대로 움직입니다.
+          JPG·PNG·WebP·GIF, 장당 5MB 이하. 대표이미지는 상세 상단 갤러리에, 상세페이지
+          이미지는 그 아래에 순서대로 이어 붙습니다. 움직이는 GIF 는 그대로 움직입니다.
+          잘못 올렸으면 타일의 <b>대표로 올리기 / 상세로 내리기</b>로 바꿀 수 있습니다.
         </p>
         {state.error && <p className={errorCls}>{state.error}</p>}
         {state.ok !== undefined && !state.error && (
