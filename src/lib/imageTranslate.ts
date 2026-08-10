@@ -348,7 +348,8 @@ async function translateTexts(items: string[], strict = false): Promise<string[]
  * GIF 는 Gemini 가 받지 않으므로 첫 프레임을 PNG 로 뽑아 보낸다
  * (이 상세 GIF 들은 글자가 고정이고 제품만 움직이는 구조 — 실물로 확인).
  */
-export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
+/** 이미지에서 중국어·일본어 문구와 좌표를 뽑는다 (번역 전 / 번역 후 검수 공용) */
+async function extractForeign(data: Buffer, mime: string): Promise<OcrBox[]> {
   let sendData = data;
   let sendMime = mime;
   if (mime === "image/gif") {
@@ -370,11 +371,15 @@ export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
   );
   // ko 는 아직 없다 — zh 를 임시로 채워 좌표·색 검증만 통과시킨다
   const rawItems = jsonArrayOf(parts);
-  const extracted = parseOcrBoxes(
+  return parseOcrBoxes(
     Array.isArray(rawItems)
       ? rawItems.map((r) => ({ ...(r as Record<string, unknown>), ko: (r as Record<string, unknown>).zh }))
       : [],
   ).filter((b) => isForeignSource(b.zh));
+}
+
+export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
+  const extracted = await extractForeign(data, mime);
   if (extracted.length === 0) return [];
 
   // 글자가 없는 영역을 글자로 착각한 오탐을 대비로 걸러낸다
@@ -1344,6 +1349,11 @@ async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer;
  * 환경변수로 바꿔 끼울 수 있게 열어 둔다.
  */
 const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image";
+/**
+ * 재생성 시도 횟수 — 검수에서 걸리면 다시 뽑는다.
+ * 모델은 매번 다르게 그리므로 한 번 어긋나도 다음 판은 멀쩡한 경우가 많다.
+ */
+const REGEN_ATTEMPTS = 3;
 
 function regenPrompt(boxes: OcrBox[]): string {
   // 유지·지움으로 지정한 항목은 재생성 대상에서 빼야 모델이 건드리지 않는다
@@ -1351,37 +1361,25 @@ function regenPrompt(boxes: OcrBox[]): string {
     .filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim())
     .map((b) => `- "${b.zh}" → "${sanitizeSymbols(b.ko)}"`)
     .join("\n");
-  return `이 이미지를 다시 생성하되, 이미지 안의 외국어 텍스트를 아래에 지정한 한국어로 정확히 바꿔주세요.
+  return `이 이미지의 중국어·일본어 글자를 아래 한국어로 바꾼 이미지를 만들어 주세요.
 
-교체할 문구 (반드시 이 번역을 그대로, 하나도 빠짐없이 사용):
+바꿀 문구 (반드시 이 번역 그대로, 하나도 빠짐없이):
 ${tlist}
 
-규칙:
-- 제품 사진, 모델 사진, 배경, 색상, 레이아웃, 장식, 로고는 원본 픽셀과 완전히 동일하게 유지
-- 각 문구는 원문이 있던 바로 그 자리에, 같은 크기·굵기·색·정렬로
-- 세로쓰기 문구는 세로쓰기 그대로 유지
-- 라틴 문자 브랜드명과 영어 문장은 그대로 유지
-- 위 목록에 없는 글자·워터마크·도장은 다시 그리지 말고 원본 그대로 둘 것 (왜곡 금지)
-- 지정한 번역 외의 다른 문구를 만들어내지 말 것
-- 이미지의 가로세로 비율과 구도를 원본 그대로 유지`;
+가장 중요한 규칙:
+- 원문 글자는 반드시 지우고 그 자리에 한국어만 남긴다. 원문을 그대로 두고 옆이나 아래에 한국어를 덧붙이면 안 된다.
+- 결과 이미지에 중국어·일본어가 한 글자라도 남으면 실패다. 표·스펙 목록처럼 작은 글씨가 빽빽한 칸도 빠짐없이 바꾼다.
+
+절대 규칙:
+- 글자 말고는 전부 원본 그대로 — 제품 사진, 모델, 배경, 그라데이션, 장식, 도형, 아이콘, 로고, 배지, 띠, 레이아웃, 가로세로 비율, 해상도
+- 각 문구는 원문이 있던 자리에 원문과 같은 서체 느낌·크기·굵기·색·정렬로
+- 세로쓰기는 세로쓰기 그대로
+- 라틴 문자 브랜드명·모델명·숫자·단위(mm, MIN, MAH, dB 등)는 그대로 둘 것
+- 위 목록에 없는 글자는 다시 그리지 말고 원본 그대로 둘 것
+- 목록에 없는 문구를 새로 만들어 넣지 말 것
+- 띠·배지·버튼의 위치와 모양을 옮기거나 바꾸지 말 것`;
 }
 
-/**
- * 재생성본에서 "글자 영역만" 오려 원본에 합성한다.
- *
- * 재생성은 그림 전체를 다시 그리므로 글자 밖 배경에도 미세한 재생성
- * 잡음이 남는다(실사용 지적: "글자 뒤가 지글지글"). 글자 박스(여유 포함)
- * 안쪽만 재생성본을 쓰고 나머지는 원본 픽셀을 그대로 두면, 원본 보존과
- * 자연스러운 글자를 동시에 얻는다. 경계는 페더링으로 티가 안 나게 섞는다.
- */
-export function compositeParams(bw: number, bh: number): { padX: number; padY: number; feather: number } {
-  // 한국어가 원문보다 길어질 수 있어 가로 여유를 넉넉히,
-  // 재생성 글자가 원문 박스보다 위아래로 밀릴 수 있어 세로 여유는 더 넉넉히
-  // (여유가 모자라면 글자 끝이 페더링에 잘려 희미해진다 — 실측)
-  const padX = Math.max(18, bw * 0.25);
-  const padY = Math.max(16, bh * 0.5);
-  return { padX, padY, feather: Math.min(12, Math.max(6, Math.min(padX, padY) * 0.5)) };
-}
 
 /**
  * 재생성 모델은 작은 가로 글씨를 자주 뭉갠다(실사례: 일본어 장식 문구가
@@ -1398,11 +1396,6 @@ export function isVerticalBox(box: [number, number, number, number], W: number, 
   return bh > bw * 2.5;
 }
 
-export function isSmallOverlayBox(box: [number, number, number, number], W: number, H: number): boolean {
-  const [ymin, , ymax] = box;
-  const bh = ((ymax - ymin) / 1000) * H;
-  return bh < SMALL_BOX_PX && !isVerticalBox(box, W, H);
-}
 
 /**
  * 여백을 옆 내용에 닿기 전까지로 줄인다.
@@ -1495,275 +1488,14 @@ function rowStdev(
   return Math.sqrt(Math.max(0, sq / n - mean * mean));
 }
 
-/**
- * 문구 바로 옆에 다른 내용(번역 대상이 아닌 숫자·단위 등)이 붙어 있는가.
- *
- * 이런 문구에 재생성 패치를 쓰면 안 된다 — 재생성은 줄 전체를 다시 그리므로
- * 패치 경계에서 글자가 어긋난다. 실사례 "不低于53MIN": 여백이 넓으면 "5"를
- * 덮어 53분→3분이 되고, 여백을 줄이면 재생성이 그린 "최소53"과 원본 "53MIN"이
- * 겹쳐 "최소5353MIN"이 된다. 둘 다 스펙 오류라, 이런 박스는 오버레이로
- * 정확히 박스 안에서만 처리한다.
- */
-export function isCrowdedBox(
-  nearestContentPx: number,
-  boxHeightPx: number,
-): boolean {
-  return nearestContentPx < Math.max(10, boxHeightPx * 0.45);
-}
 
-/** 박스 좌우에서 가장 가까운 내용까지의 거리(px) */
-function nearestContentDistance(
-  origPixels: Uint8ClampedArray,
-  b: PxBox,
-  W: number,
-  H: number,
-  limit: number,
-): number {
-  const ty0 = Math.max(0, Math.round(b.y0));
-  const ty1 = Math.min(H, Math.round(b.y1));
-  const th = MIN_TEXT_STDDEV * 0.8;
-  let best = limit;
-  for (let d = 1; d <= limit; d++) {
-    if (
-      columnStdev(origPixels, W, Math.round(b.x1) + d, ty0, ty1) > th ||
-      columnStdev(origPixels, W, Math.round(b.x0) - d, ty0, ty1) > th
-    ) {
-      best = d;
-      break;
-    }
-  }
-  return best;
-}
 
-/** 박스 하나를 재생성본→원본 위에 페더링 패치 */
-function patchOne(
-  od: Uint8ClampedArray,
-  rd: Uint8ClampedArray,
-  it: OcrBox,
-  W: number,
-  H: number,
-): void {
-  const b = toPixelBox(it.box, W, H);
-  const { padX, padY, feather } = compositeParams(b.x1 - b.x0, b.y1 - b.y0);
-  const x0 = Math.max(0, Math.round(b.x0 - padX));
-  const y0 = Math.max(0, Math.round(b.y0 - padY));
-  const x1 = Math.min(W, Math.round(b.x1 + padX));
-  const y1 = Math.min(H, Math.round(b.y1 + padY));
 
-  for (let y = y0; y < y1; y++) {
-    // 가장자리로 갈수록 원본 비중을 높인다 (경계 티 제거)
-    const ay = Math.min(1, Math.min(y - y0, y1 - 1 - y) / feather);
-    for (let x = x0; x < x1; x++) {
-      const ax = Math.min(1, Math.min(x - x0, x1 - 1 - x) / feather);
-      const a = Math.max(0, Math.min(ay, ax));
-      if (a <= 0) continue;
-      const i = (y * W + x) * 4;
-      od[i] = Math.round(rd[i] * a + od[i] * (1 - a));
-      od[i + 1] = Math.round(rd[i + 1] * a + od[i + 1] * (1 - a));
-      od[i + 2] = Math.round(rd[i + 2] * a + od[i + 2] * (1 - a));
-    }
-  }
-}
 
-/** 박스 영역을 원본 픽셀로 되돌린다 (검수에서 걸린 세로쓰기 등) */
-function restoreOne(
-  od: Uint8ClampedArray,
-  origPixels: Uint8ClampedArray,
-  it: OcrBox,
-  W: number,
-  H: number,
-): void {
-  const b = toPixelBox(it.box, W, H);
-  const { padX, padY } = compositeParams(b.x1 - b.x0, b.y1 - b.y0);
-  const x0 = Math.max(0, Math.round(b.x0 - padX));
-  const y0 = Math.max(0, Math.round(b.y0 - padY));
-  const x1 = Math.min(W, Math.round(b.x1 + padX));
-  const y1 = Math.min(H, Math.round(b.y1 + padY));
-  for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x1; x++) {
-      const i = (y * W + x) * 4;
-      od[i] = origPixels[i];
-      od[i + 1] = origPixels[i + 1];
-      od[i + 2] = origPixels[i + 2];
-      od[i + 3] = 255;
-    }
-  }
-}
 
-/* ── 자동 검수: 완성본에 외국어·깨진 글자가 남았는지 ───────── */
 
-const VERIFY_PROMPT = `이 이미지에서 한국어·영어·숫자가 아닌 글자(중국어, 일본어, 획이 깨지거나 뭉개져 읽을 수 없는 글자)가 보이는 영역을 모두 찾아주세요.
 
-각 영역마다 JSON 배열 원소로:
-- box: [ymin, xmin, ymax, xmax] — 0~1000 정규화
 
-없으면 빈 배열. JSON 배열만 출력.`;
-
-async function detectForeignText(png: Buffer): Promise<[number, number, number, number][]> {
-  const parts = await callGemini(
-    MODEL,
-    [{ inline_data: { mime_type: "image/png", data: png.toString("base64") } }, { text: VERIFY_PROMPT }],
-    {
-      maxOutputTokens: 2000,
-      responseMimeType: "application/json",
-      thinkingConfig: { thinkingLevel: "minimal" },
-    },
-  );
-  const raw = jsonArrayOf(parts);
-  if (!Array.isArray(raw)) return [];
-  const out: [number, number, number, number][] = [];
-  for (const r of raw) {
-    const box = (r as Record<string, unknown>)?.box;
-    if (!Array.isArray(box) || box.length !== 4) continue;
-    const nums = box.map(Number);
-    if (nums.some((n) => !Number.isFinite(n) || n < 0 || n > 1000)) continue;
-    out.push(nums as [number, number, number, number]);
-  }
-  return out;
-}
-
-/**
- * 씨앗으로 지목된 사각형과 맞닿은 사각형들을 전부 끌어모은다(전이적).
- *
- * 왜 필요한가: 재생성 패치는 박스마다 여유를 두고 칠하므로 이웃 박스 영역을
- * 침범한다. 검수에 걸린 박스만 원본으로 되돌리면, 이웃이 침범해 그려 놓은
- * 글자는 되돌림 범위 밖이라 그대로 남고, 그 위에 다시 그리게 된다 →
- * 같은 문구가 두 번 찍힌다(실사례: "직경 3CM"이 작게·크게 이중 렌더).
- * 맞닿은 것끼리 한 덩어리로 묶어 함께 되돌리고 함께 다시 그려야 한다.
- */
-export function groupTouching(rects: PxBox[], seed: number[]): number[] {
-  const touches = (a: PxBox, b: PxBox) =>
-    a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
-  const chosen = new Set(seed);
-  for (let grew = true; grew; ) {
-    grew = false;
-    for (let i = 0; i < rects.length; i++) {
-      if (chosen.has(i)) continue;
-      for (const j of chosen) {
-        if (touches(rects[i], rects[j])) {
-          chosen.add(i);
-          grew = true;
-          break;
-        }
-      }
-    }
-  }
-  return [...chosen].sort((a, b) => a - b);
-}
-
-/** 재생성 패치가 실제로 칠하는 사각형 (박스 + 합성 여유) */
-function patchRect(it: OcrBox, W: number, H: number): PxBox {
-  const p = toPixelBox(it.box, W, H);
-  const { padX, padY } = compositeParams(p.x1 - p.x0, p.y1 - p.y0);
-  return {
-    x0: Math.max(0, p.x0 - padX),
-    y0: Math.max(0, p.y0 - padY),
-    x1: Math.min(W, p.x1 + padX),
-    y1: Math.min(H, p.y1 + padY),
-  };
-}
-
-/** 검수에서 걸린 영역이 우리 박스와 겹치는가 (걸린 영역의 중심이 박스 안) */
-function flaggedHits(flag: [number, number, number, number], it: OcrBox): boolean {
-  const cy = (flag[0] + flag[2]) / 2;
-  const cx = (flag[1] + flag[3]) / 2;
-  const [ymin, xmin, ymax, xmax] = it.box;
-  const my = (ymax - ymin) * 0.3;
-  const mx = (xmax - xmin) * 0.3;
-  return cy >= ymin - my && cy <= ymax + my && cx >= xmin - mx && cx <= xmax + mx;
-}
-
-/**
- * 원본 + 재생성본 + 좌표로 최종 합성본을 만든다 (기존 번역본 소급 보정에도 사용).
- *
- * 1) 큰 글씨·세로쓰기: 재생성본에서 패치 (자연스러운 서체)
- * 2) 작은 가로 글씨: 오버레이로 확정 렌더 (재생성이 뭉개는 영역 — 실측)
- * 3) verify=true 면 완성본을 모델로 검수 — 외국어·깨진 글자가 남은 박스는
- *    가로쓰기 → 오버레이 재처리, 세로쓰기 → 원본 복원. 검수 실패는 무시.
- */
-export async function compositeTranslatedStill(
-  originalData: Buffer,
-  regenData: Buffer,
-  mime: string,
-  boxes: OcrBox[],
-  verify = true,
-): Promise<{ data: Buffer; mime: string }> {
-  ensureFonts();
-  const meta = await sharp(originalData).metadata();
-  const W = meta.width ?? 0;
-  const H = meta.height ?? 0;
-  if (!W || !H) throw new Error("이미지 크기를 읽을 수 없습니다.");
-
-  const [orig, regen] = await Promise.all([loadImage(originalData), loadImage(regenData)]);
-  const canvas = createCanvas(W, H);
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(orig, 0, 0, W, H);
-  const origPixels = ctx.getImageData(0, 0, W, H).data.slice();
-
-  const regenCanvas = createCanvas(W, H);
-  const rctx = regenCanvas.getContext("2d");
-  rctx.drawImage(regen, 0, 0, W, H);
-  const rd = rctx.getImageData(0, 0, W, H).data;
-
-  // 재생성 패치가 위험한 박스(작은 가로 글씨, 옆에 내용이 붙은 문구)는
-  // 오버레이로 — 박스 안에서만 정확히 지우고 그린다
-  const active = boxes.filter((b) => {
-    const mode = b.mode ?? "translate";
-    if (mode === "keep") return false; // 손대지 않음
-    return mode === "erase" || b.ko.trim().length > 0;
-  });
-  const useOverlay = (b: OcrBox): boolean => {
-    // 어드민이 지움·위치·크기·굵기를 손댄 항목은 재생성이 지킬 수 없다
-    if (hasManualOverride(b)) return true;
-    if (isSmallOverlayBox(b.box, W, H)) return true;
-    if (isVerticalBox(b.box, W, H)) return false; // 세로쓰기는 오버레이가 못 그린다
-    const px = toPixelBox(b.box, W, H);
-    const dist = nearestContentDistance(origPixels, px, W, H, 40);
-    return isCrowdedBox(dist, px.y1 - px.y0);
-  };
-  const patchBoxes = active.filter((b) => !useOverlay(b));
-  const overlayBoxes = active.filter(useOverlay);
-
-  const out = ctx.getImageData(0, 0, W, H);
-  for (const it of patchBoxes) patchOne(out.data, rd, it, W, H);
-  ctx.putImageData(out, 0, 0);
-  if (overlayBoxes.length > 0) paintBoxes(ctx, W, H, overlayBoxes, origPixels);
-
-  // 자동 검수 — 재생성이 문구를 빠뜨리거나 뭉갠 박스를 잡아 재처리한다
-  if (verify && patchBoxes.length > 0) {
-    try {
-      const flags = await detectForeignText(canvas.toBuffer("image/png"));
-      const seed = patchBoxes
-        .map((b, i) => (flags.some((f) => flaggedHits(f, b)) ? i : -1))
-        .filter((i) => i >= 0);
-      if (seed.length > 0) {
-        // 패치 영역이 맞닿은 이웃까지 함께 되돌린다 — 안 그러면 이웃이 흘린
-        // 글자가 남아 그 위에 다시 그려진다(같은 문구 이중 렌더)
-        const rects = patchBoxes.map((b) => patchRect(b, W, H));
-        const bad = groupTouching(rects, seed).map((i) => patchBoxes[i]);
-        const horiz = bad.filter((b) => !isVerticalBox(b.box, W, H));
-
-        const img = ctx.getImageData(0, 0, W, H);
-        for (const it of bad) restoreOne(img.data, origPixels, it, W, H);
-        ctx.putImageData(img, 0, 0);
-        // 세로쓰기는 원본 유지 (오버레이가 세로를 못 그림)
-        if (horiz.length > 0) paintBoxes(ctx, W, H, horiz, origPixels);
-
-        // 재처리 뒤에도 남으면 깨진 이미지를 내보내느니 전체를 오버레이로 다시
-        // 만든다 — 모델 호출이 없어 결과가 항상 같고, 실측에서 가장 깨끗했다
-        const after = await detectForeignText(canvas.toBuffer("image/png"));
-        if (active.some((b) => after.some((f) => flaggedHits(f, b)))) {
-          return renderStill(originalData, mime, active);
-        }
-      }
-    } catch {
-      // 검수는 보강 장치 — 실패해도 합성 결과는 그대로 쓴다
-    }
-  }
-
-  if (mime === "image/png") return { data: canvas.toBuffer("image/png"), mime };
-  return { data: canvas.toBuffer("image/jpeg", 95), mime: "image/jpeg" };
-}
 
 async function regenerateStill(
   data: Buffer,
@@ -1798,10 +1530,59 @@ async function regenerateStill(
     throw new Error(`재생성 비율 불일치 (${W}x${H} → ${ow}x${oh})`);
   }
 
-  // 원본 크기로 복원한 뒤, 글자 영역만 원본에 합성한다 —
-  // 재생성본을 통째로 쓰면 글자 밖 배경에 재생성 잡음이 남는다(실사용 지적)
-  const resizedRegen = await sharp(out).resize(W, H, { fit: "fill" }).png().toBuffer();
-  return compositeTranslatedStill(data, resizedRegen, mime, boxes);
+  // 모델이 만든 그림을 그대로 쓴다. 글자 영역만 오려 붙이던 예전 방식은
+  // 결국 "네모를 덧대는" 자국을 남겨서 버렸다 — 모델은 원문 획을 지우고
+  // 그 자리 배경까지 다시 그리므로, 통째로 쓸 때가 가장 자연스럽다.
+  const sized = sharp(out).resize(W, H, { fit: "fill" });
+  if (mime === "image/png") return { data: await sized.png().toBuffer(), mime };
+  return { data: await sized.jpeg({ quality: 95 }).toBuffer(), mime: "image/jpeg" };
+}
+
+/**
+ * 이미지 모델에 맡기면 안 되는 경우 — 직접 그리는 오버레이로 간다.
+ *
+ * 모델은 "이 문구를 저 자리에 이 크기로" 같은 지시를 지키지 못한다. 어드민이
+ * 위치·크기·굵기를 손봤거나 "지움"으로 표시했다면 그 지시가 결과의 전부이므로
+ * 모델에 넘길 수 없다. 바꿀 문구가 아예 없을 때도 마찬가지.
+ */
+export function mustOverlay(boxes: OcrBox[]): boolean {
+  if (boxes.some((b) => hasManualOverride(b) || b.mode === "erase")) return true;
+  return !boxes.some((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
+}
+
+/** 검수에서 걸린 영역이 우리 박스와 겹치는가 (걸린 영역의 중심이 박스 안) */
+export function flaggedHits(flag: [number, number, number, number], it: OcrBox): boolean {
+  const cy = (flag[0] + flag[2]) / 2;
+  const cx = (flag[1] + flag[3]) / 2;
+  const [ymin, xmin, ymax, xmax] = it.box;
+  const my = (ymax - ymin) * 0.3;
+  const mx = (xmax - xmin) * 0.3;
+  return cy >= ymin - my && cy <= ymax + my && cx >= xmin - mx && cx <= xmax + mx;
+}
+
+/**
+ * 우리가 바꾸라고 시킨 자리에 아직 원문이 남았는지.
+ *
+ * "이미지에 중국어가 하나라도 보이면 실패"로 보면 안 된다 — 제품 포장·간판·
+ * 로고처럼 사진 안에 찍힌 중국어는 번역 대상이 아닌데 검수가 그것까지 집어낸다.
+ * 실제로 그렇게 만들었더니 멀쩡한 결과가 4장 중 4장 다 버려졌다.
+ *
+ * 검사에는 OCR 과 같은 추출기를 쓴다. "외국어로 보이나?"를 모델이 판단하게 했더니
+ * 작은 한글까지 깨진 글자로 집어냈고, 정작 "제头工厂"처럼 반만 번역된 것은 놓쳤다.
+ */
+async function leftoverInBoxes(
+  out: Buffer,
+  mime: string,
+  boxes: OcrBox[],
+): Promise<boolean> {
+  try {
+    const found = await extractForeign(out, mime);
+    const targets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
+    return found.some((f) => targets.some((b) => flaggedHits(f.box, b)));
+  } catch {
+    // 검수 자체가 실패하면 결과를 살린다 (검수는 보강 장치일 뿐)
+    return false;
+  }
 }
 
 /** 번역 이미지를 만든다. 문구 수정 후 재생성에도 그대로 쓴다. */
@@ -1810,23 +1591,35 @@ export async function renderTranslatedImage(
   mime: string,
   boxes: OcrBox[],
   /**
-   * 이미지 모델로 글자 영역을 다시 그리게 할지.
+   * false 로 주면 이미지 모델을 쓰지 않고 글자를 직접 그린다(오버레이).
    *
-   * 기본은 끔. 재생성은 결과가 매번 달라서 같은 이미지도 됐다 깨졌다 한다 —
-   * 실측에서 원문이 안 지워진 채 한글이 겹쳐 그려지거나 같은 문구가 두 번
-   * 찍히는 사고가 났다. 지우기를 픽셀 기반으로 고친 뒤로는 덧그리기 쪽이
-   * 원본 배지·장식까지 그대로 남기면서 결과도 항상 같다.
+   * 기본은 모델 재생성이다. 오버레이는 원문 획을 지운 자리를 우리가 메워야
+   * 해서 배경이 흐르는 곳마다 덧댄 자국이 남았다 — 어떤 색으로 메울지를
+   * 아무리 고쳐도 없앨 수 없는 한계였다. 모델은 배경까지 다시 그리므로
+   * 자국이 아예 생기지 않는다(실상품 이미지로 확인).
    */
   opts: { regenerate?: boolean } = {},
 ): Promise<{ data: Buffer; mime: string }> {
   ensureFonts();
+  // GIF 는 프레임마다 그림이 미묘하게 달라져 애니메이션이 떨린다 — 오버레이 유지
   if (mime === "image/gif") return renderGif(data, boxes);
-  if (!opts.regenerate) return renderStill(data, mime, boxes);
-  try {
-    return await regenerateStill(data, mime, boxes);
-  } catch (e) {
-    // 이미지 모델 실패(한도·비율 붕괴 등) 시 오버레이 방식으로라도 결과를 준다
-    console.warn(`[imageTranslate] 재생성 실패 — 오버레이 폴백: ${e instanceof Error ? e.message : e}`);
-    return renderStill(data, mime, boxes);
+  if (opts.regenerate === false) return renderStill(data, mime, boxes);
+
+  if (mustOverlay(boxes)) return renderStill(data, mime, boxes);
+
+  // 모델은 가끔 원문을 지우지 않고 한국어를 덧붙인다(빽빽한 스펙표에서 관측).
+  // 검수에서 걸리면 한 번 더 뽑고, 그래도 남으면 오버레이로 내려간다 —
+  // 중국어가 남은 이미지를 내보내느니 자국이 조금 있는 편이 낫다.
+  let reason = "";
+  for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
+    try {
+      const out = await regenerateStill(data, mime, boxes);
+      if (!(await leftoverInBoxes(out.data, out.mime, boxes))) return out;
+      reason = "원문이 남음";
+    } catch (e) {
+      reason = e instanceof Error ? e.message : String(e);
+    }
   }
+  console.warn(`[imageTranslate] 재생성 실패(${REGEN_ATTEMPTS}회) — 오버레이 폴백: ${reason}`);
+  return renderStill(data, mime, boxes);
 }

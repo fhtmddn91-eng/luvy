@@ -10,23 +10,22 @@ import {
   hasHanzi,
   mergeDuplicateFrames,
   isVerticalBox,
-  isSmallOverlayBox,
   isForeignSource,
   safePad,
-  isCrowdedBox,
   extendOverLeftover,
-  groupTouching,
   median,
   cleanEdge,
   groupBySize,
   unifySizes,
   hasManualOverride,
+  mustOverlay,
   planErase,
   stripForeign,
   inpaint,
   percentilePass,
   eraseGlyphs,
   backgroundRef,
+  type OcrBox,
 } from "./imageTranslate";
 
 describe("parseOcrBoxes — 모델 응답 검증", () => {
@@ -128,26 +127,6 @@ describe("isForeignSource — 번역 대상 원문 판별", () => {
     expect(isForeignSource("LAYLA VIBRATOR")).toBe(false);
     expect(isForeignSource("FOREPLAY MOMENT TIDE")).toBe(false);
     expect(isForeignSource("216g / 56dB")).toBe(false);
-  });
-});
-
-describe("박스 분류 — 재생성 패치 vs 오버레이", () => {
-  // 실사례 (1440x1440): 일본어 장식 문구 box y599-613 → 높이 약 20px
-  const decoBox: [number, number, number, number] = [599, 866, 613, 963];
-  // 세로쓰기 "产品代言人" box y587-680 x396-418 → 높이 134px, 폭 32px
-  const vertBox: [number, number, number, number] = [587, 396, 680, 418];
-  // 큰 제목 box y34-203 → 높이 243px
-  const titleBox: [number, number, number, number] = [34, 308, 203, 977];
-
-  it("작은 가로 글씨는 오버레이 대상 (재생성이 뭉개는 영역 — 실측)", () => {
-    expect(isSmallOverlayBox(decoBox, 1440, 1440)).toBe(true);
-    expect(isSmallOverlayBox(titleBox, 1440, 1440)).toBe(false);
-  });
-
-  it("세로쓰기는 오버레이 금지 (재생성이 잘 그리고 오버레이는 못 그림)", () => {
-    expect(isVerticalBox(vertBox, 1440, 1440)).toBe(true);
-    expect(isSmallOverlayBox(vertBox, 1440, 1440)).toBe(false);
-    expect(isVerticalBox(titleBox, 1440, 1440)).toBe(false);
   });
 });
 
@@ -363,23 +342,6 @@ describe("extendOverLeftover — 잔여 획 덮기", () => {
   });
 });
 
-describe("isCrowdedBox — 옆에 내용이 붙은 문구 판별", () => {
-  it("가까이 내용이 있으면 오버레이 대상 (실사례: 不低于53MIN)", () => {
-    expect(isCrowdedBox(5, 30)).toBe(true);   // 30px 글자 옆 5px 지점에 숫자
-    expect(isCrowdedBox(13, 30)).toBe(true);  // 13 < 13.5
-  });
-
-  it("충분히 떨어져 있으면 재생성 패치를 쓴다", () => {
-    expect(isCrowdedBox(40, 30)).toBe(false);
-    expect(isCrowdedBox(20, 30)).toBe(false);
-  });
-
-  it("작은 글자도 최소 10px 는 확보돼야 한다", () => {
-    expect(isCrowdedBox(6, 12)).toBe(true);
-    expect(isCrowdedBox(12, 12)).toBe(false);
-  });
-});
-
 describe("toPixelBox — 좌표 변환 + 여백", () => {
   it("정규화 좌표를 픽셀로 바꾸고 6% 여백을 준다 (원문 잔상 방지)", () => {
     const b = toPixelBox([0, 0, 500, 1000], 800, 400);
@@ -388,36 +350,6 @@ describe("toPixelBox — 좌표 변환 + 여백", () => {
     expect(b.x1).toBe(800);
     expect(b.y1).toBeGreaterThan(200); // 200 + 여백
     expect(b.y1).toBeLessThanOrEqual(400);
-  });
-});
-
-describe("groupTouching — 이중 렌더 방지", () => {
-  const r = (x0: number, y0: number, x1: number, y1: number) => ({ x0, y0, x1, y1 });
-
-  it("맞닿은 이웃까지 함께 되돌릴 대상으로 끌어온다", () => {
-    // 실사례: "직경 3CM" 박스만 되돌리자 바로 아래 문구가 흘려 놓은 글자가
-    // 남아 그 위에 다시 그려졌다 → 같은 문구가 두 번 찍혔다
-    const rects = [r(0, 0, 100, 40), r(0, 35, 100, 75), r(0, 200, 100, 240)];
-    expect(groupTouching(rects, [0])).toEqual([0, 1]);
-  });
-
-  it("전이적으로 확장한다 (A-B, B-C 면 A도 C를 끌어온다)", () => {
-    const rects = [r(0, 0, 100, 40), r(0, 35, 100, 75), r(0, 70, 100, 110)];
-    expect(groupTouching(rects, [0])).toEqual([0, 1, 2]);
-  });
-
-  it("떨어져 있는 박스는 건드리지 않는다", () => {
-    const rects = [r(0, 0, 100, 40), r(0, 200, 100, 240)];
-    expect(groupTouching(rects, [0])).toEqual([0]);
-  });
-
-  it("씨앗이 여러 개여도 중복 없이 합친다", () => {
-    const rects = [r(0, 0, 50, 40), r(0, 200, 50, 240), r(0, 35, 50, 75)];
-    expect(groupTouching(rects, [0, 1])).toEqual([0, 1, 2]);
-  });
-
-  it("씨앗이 없으면 아무것도 고르지 않는다", () => {
-    expect(groupTouching([r(0, 0, 10, 10)], [])).toEqual([]);
   });
 });
 
@@ -466,5 +398,37 @@ describe("groupBySize / unifySizes — 글자 크기 통일", () => {
 
   it("묶음에 하나뿐이면 그대로 둔다", () => {
     expect(unifySizes([0, 1], [12, 30])).toEqual([12, 30]);
+  });
+});
+
+describe("mustOverlay — 이미지 모델에 맡길 수 없는 경우", () => {
+  const box = (over: Partial<OcrBox> = {}): OcrBox => ({
+    box: [10, 10, 60, 300],
+    zh: "快速伸缩",
+    ko: "고속 신축",
+    bg: "#ffffff",
+    fg: "#000000",
+    bold: true,
+    solid_bg: false,
+    ...over,
+  });
+
+  it("보통 번역 항목은 모델에 맡긴다", () => {
+    expect(mustOverlay([box()])).toBe(false);
+  });
+
+  it("어드민이 위치·크기·굵기를 손댔으면 오버레이 (모델이 못 지킨다)", () => {
+    expect(mustOverlay([box(), box({ dy: 6 })])).toBe(true);
+    expect(mustOverlay([box({ scale: 1.2 })])).toBe(true);
+  });
+
+  it("지움으로 표시한 항목이 있으면 오버레이", () => {
+    expect(mustOverlay([box({ mode: "erase" })])).toBe(true);
+  });
+
+  it("바꿀 문구가 없으면 오버레이", () => {
+    expect(mustOverlay([box({ ko: "  " })])).toBe(true);
+    expect(mustOverlay([box({ mode: "keep" })])).toBe(true);
+    expect(mustOverlay([])).toBe(true);
   });
 });

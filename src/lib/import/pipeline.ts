@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "@/lib/db";
 import { parse1688 } from "./parse1688";
 import { mirrorImages } from "./mirror";
+import { translateProductImages } from "./translateAssets";
 import { translateDraft } from "./translate";
 import type { ImportPayload } from "./types";
 
@@ -195,11 +196,31 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
       },
     });
 
+    // 이미지 속 중국어 번역은 장당 십수 초가 걸린다. 수집 응답을 붙잡아 두면
+    // 상세페이지가 많은 상품에서 요청이 끊기므로, 뒤에서 돌리고 결과만 기록에
+    // 남긴다. 운영자는 어드민을 새로고침하면 번역된 이미지를 본다.
+    void translateProductImages(product.id)
+      .then((r) =>
+        db.importJob.update({
+          where: { id: job.id },
+          data: {
+            error: [
+              partialIssues.join(" / "),
+              `이미지 번역 ${r.done}장${r.failed > 0 ? ` (실패 ${r.failed}장)` : ""}`,
+            ]
+              .filter(Boolean)
+              .join(" / ")
+              .slice(0, 500),
+          },
+        }),
+      )
+      .catch((e) => console.warn(`[import] 이미지 번역 일괄 실패: ${e}`));
+
     return {
       ok: true,
       jobId: job.id,
       productId: product.id,
-      message: `수집 완료: ${translation.name}`,
+      message: `수집 완료: ${translation.name} — 이미지 번역은 뒤에서 진행 중입니다.`,
       detail: {
         koTitle: translation.name,
         translated: translation.translated,
