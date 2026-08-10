@@ -187,3 +187,25 @@ export async function readBizCert(
     return null;
   }
 }
+
+/**
+ * 다른 곳에서 아직 쓰는 파일이면 지우지 않는다.
+ *
+ * 썸네일(Product.image)은 첫 대표이미지와 **같은 파일을 가리킨다**.
+ * 그래서 썸네일을 새로 올릴 때 옛 파일을 그냥 지우면 그 파일을 쓰던
+ * 상세 이미지까지 깨진다(실사례: 상품 2개의 상세 이미지가 빈 칸이 됐다).
+ */
+export async function deleteUploadIfUnused(
+  url: string,
+  opts: { exceptAssetId?: string } = {},
+): Promise<void> {
+  if (!url.startsWith("/uploads/")) return;
+  const stillUsed = await db.productAsset.count({
+    where: {
+      OR: [{ url }, { originalUrl: url }],
+      ...(opts.exceptAssetId ? { NOT: { id: opts.exceptAssetId } } : {}),
+    },
+  });
+  if (stillUsed > 0) return;
+  await deleteImageUpload(url);
+}

@@ -936,7 +936,7 @@ async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer;
  * Imagen 계열은 predict 방식의 텍스트→이미지라 편집에 못 쓴다.
  * 환경변수로 바꿔 끼울 수 있게 열어 둔다.
  */
-const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3-pro-image";
+const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image";
 
 function regenPrompt(boxes: OcrBox[]): string {
   // 유지·지움으로 지정한 항목은 재생성 대상에서 빼야 모델이 건드리지 않는다

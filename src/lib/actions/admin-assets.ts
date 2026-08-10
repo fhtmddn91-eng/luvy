@@ -8,6 +8,7 @@ import {
   saveImageUpload,
   saveImageBuffer,
   deleteImageUpload,
+  deleteUploadIfUnused,
   readPublicUpload,
 } from "@/lib/storage";
 import { ocrImage, renderTranslatedImage, parseOcrBoxes, type OcrBox } from "@/lib/imageTranslate";
@@ -105,11 +106,11 @@ export async function deleteProductAsset(assetId: string): Promise<void> {
   const asset = await db.productAsset.findUnique({ where: { id: assetId } });
   if (!asset) return;
   await db.productAsset.delete({ where: { id: assetId } });
-  // /uploads/ 파일도 정리 (1688 수집분 등 다른 경로면 deleteImageUpload 가 무시)
-  await deleteImageUpload(asset.url);
+  // /uploads/ 파일도 정리 — 다른 자산이 같은 파일을 쓰고 있으면 남긴다
+  await deleteUploadIfUnused(asset.url);
   // 번역된 이미지면 보존해 둔 원본도 함께 정리
   if (asset.originalUrl && asset.originalUrl !== asset.url) {
-    await deleteImageUpload(asset.originalUrl);
+    await deleteUploadIfUnused(asset.originalUrl);
   }
   await audit({
     action: "ASSET_DELETE",
@@ -141,8 +142,8 @@ async function swapTranslatedFile(
   const saved = await saveImageBuffer(rendered.data, rendered.mime, 15 * 1024 * 1024);
   if (!saved.ok) return { error: `번역본 저장 실패: ${saved.error}` };
 
-  // 이전 번역본 파일 정리 (원본은 남긴다)
-  if (asset.url !== sourceUrl) await deleteImageUpload(asset.url);
+  // 이전 번역본 파일 정리 (원본은 남긴다). 다른 자산이 같은 파일을 쓰면 남긴다
+  if (asset.url !== sourceUrl) await deleteUploadIfUnused(asset.url, { exceptAssetId: asset.id });
 
   await db.productAsset.update({
     where: { id: asset.id },
@@ -258,7 +259,9 @@ export async function revertAssetTranslation(assetId: string): Promise<void> {
   if (!asset?.originalUrl) return;
 
   const original = await readPublicUpload(path.basename(asset.originalUrl));
-  if (asset.url !== asset.originalUrl) await deleteImageUpload(asset.url);
+  if (asset.url !== asset.originalUrl) {
+    await deleteUploadIfUnused(asset.url, { exceptAssetId: asset.id });
+  }
 
   await db.productAsset.update({
     where: { id: assetId },

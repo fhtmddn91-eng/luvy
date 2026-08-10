@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
-import { saveImageUpload, deleteImageUpload } from "@/lib/storage";
+import { saveImageUpload, deleteImageUpload, deleteUploadIfUnused } from "@/lib/storage";
 import { normalizeSku, skuError } from "@/lib/sku";
 import { categorySetFor, keepKnown } from "@/lib/productCategories";
 
@@ -208,10 +208,11 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
   const image = await handleImage(formData);
   if ("error" in image) return { error: image.error };
 
-  // 새 이미지가 업로드되면 이전 업로드 파일은 정리
+  // 새 이미지가 업로드되면 이전 업로드 파일은 정리.
+  // 단 썸네일은 상세 이미지와 같은 파일을 가리키므로, 아직 쓰는 곳이 있으면 남긴다
   if (image.url) {
     const prev = await db.product.findUnique({ where: { id }, select: { image: true } });
-    if (prev?.image) await deleteImageUpload(prev.image);
+    if (prev?.image) await deleteUploadIfUnused(prev.image);
   }
 
   // 티어와 카테고리는 매번 통째로 갈아끼운다 (부분 수정이면 지운 항목이 남는다)
@@ -269,6 +270,7 @@ export async function deleteProduct(id: string): Promise<void> {
   // 업로드 이미지를 함께 정리하지 않으면 디스크에 고아 파일이 계속 쌓인다.
   const product = await db.product.findUnique({ where: { id }, select: { image: true, name: true } });
   await db.product.delete({ where: { id } });
+  // 상품이 지워지면 자산도 cascade 로 사라지므로 썸네일 파일은 그대로 정리한다
   if (product?.image) await deleteImageUpload(product.image);
   await audit({
     action: "PRODUCT_DELETE",
