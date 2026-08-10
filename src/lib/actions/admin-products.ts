@@ -28,12 +28,36 @@ async function categoryRows(
  * 업로드 파일이 있으면 저장하고 URL을, 없으면 undefined(기존 유지)를 반환.
  * 실패 시 문자열 에러.
  */
-async function handleImage(formData: FormData): Promise<{ url?: string } | { error: string }> {
+async function handleImage(
+  formData: FormData,
+): Promise<{ url?: string; bytes?: number } | { error: string }> {
   const file = formData.get("imageFile");
   if (!(file instanceof File) || file.size === 0) return {};
   const saved = await saveImageUpload(file);
   if (!saved.ok) return { error: saved.error };
-  return { url: saved.url };
+  return { url: saved.url, bytes: file.size };
+}
+
+/**
+ * 폼에서 올린 썸네일을 첫 대표이미지로도 등록한다.
+ *
+ * 썸네일(Product.image)은 자산이 아니어서, 직접 등록한 상품은 이미지를 넣어도
+ * 상세 상단 갤러리와 판매자료 다운로드에 한 장도 안 잡혔다 — 자산이 0건이면
+ * 다운로드 구역 자체가 사라진다. "썸네일 = 첫 대표이미지"라는 규칙을 데이터로도
+ * 지키면 썸네일·갤러리·다운로드가 언제나 같은 것을 가리킨다.
+ */
+async function registerThumbnailAsset(
+  productId: string,
+  url: string,
+  bytes: number,
+): Promise<void> {
+  await db.productAsset.updateMany({
+    where: { productId },
+    data: { sortOrder: { increment: 1 } },
+  });
+  await db.productAsset.create({
+    data: { productId, kind: "MAIN", url, bytes, sortOrder: 0 },
+  });
 }
 
 /**
@@ -182,6 +206,7 @@ export async function createProduct(_prev: ProductFormState, formData: FormData)
     },
   });
   await syncOptions(created.id, parseOptions(formData));
+  if (image.url) await registerThumbnailAsset(created.id, image.url, image.bytes ?? 0);
   await audit({
     action: "PRODUCT_CREATE",
     target: "product",
@@ -231,6 +256,7 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
     }),
   ]);
   await syncOptions(id, parseOptions(formData));
+  if (image.url) await registerThumbnailAsset(id, image.url, image.bytes ?? 0);
   await audit({
     action: "PRODUCT_UPDATE",
     target: "product",
