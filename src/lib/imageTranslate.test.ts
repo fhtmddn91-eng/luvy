@@ -21,7 +21,9 @@ import {
   groupBySize,
   unifySizes,
   hasManualOverride,
-  borderUniformity,
+  planErase,
+  stripForeign,
+  backgroundRef,
 } from "./imageTranslate";
 
 describe("parseOcrBoxes — 모델 응답 검증", () => {
@@ -162,21 +164,76 @@ describe("safePad — 옆 내용 침범 방지", () => {
   });
 });
 
-describe("borderUniformity — 배경을 주변에서 추정", () => {
-  it("테두리가 거의 같은 색이면 단색으로 보고 그 색을 쓴다", () => {
-    const s = [[250, 240, 240], [252, 242, 241], [249, 239, 239]];
-    const r = borderUniformity(s);
-    expect(r.uniform).toBe(true);
-    expect(r.color[0]).toBeGreaterThan(245);
+describe("planErase — 지운 자리를 무엇으로 채울지", () => {
+  /** 한 변을 같은 색으로 채운 표본 */
+  const side = (rgb: [number, number, number], n = 20) => Array.from({ length: n }, () => [...rgb]);
+  /** 한 변이 a→b 로 서서히 변하는 표본 */
+  const ramp = (a: number, b: number, n = 20) =>
+    Array.from({ length: n }, (_, i) => {
+      const v = Math.round(a + ((b - a) * i) / (n - 1));
+      return [v, v, v];
+    });
+  const g = (v: number) => [v, v, v] as [number, number, number];
+
+  it("네 변이 같은 색이면 그 색으로 평평하게 칠한다", () => {
+    const r = planErase([side(g(250)), side(g(250)), side(g(250)), side(g(250))]);
+    expect(r.how).toBe("flat");
+    expect(r.how === "flat" && r.color[0]).toBe(250);
   });
 
-  it("테두리가 크게 변하면 보간으로 처리한다 (사진·그라데이션)", () => {
-    const s = [[255, 255, 255], [20, 20, 20], [130, 90, 200]];
-    expect(borderUniformity(s).uniform).toBe(false);
+  it("위아래 색이 다르면 보간한다 (세로 그라데이션)", () => {
+    // 예전 판정은 표본을 한 통에 섞어 퍼짐만 봐서 이걸 단색으로 통과시켰고,
+    // 그 결과 노란 띠 위에 밝은 네모 자국이 남았다
+    expect(planErase([side(g(240)), side(g(224)), null, null]).how).toBe("blend");
+  });
+
+  it("좌우 색이 다르면 보간한다 (사진 배경)", () => {
+    expect(planErase([null, null, side(g(255)), side(g(228))]).how).toBe("blend");
+  });
+
+  it("배경은 단색인데 한 변만 다른 물체가 스치면 평평하게 칠한다", () => {
+    // 실사례: 노란 화살표가 "기능형" 박스 변에 물렸고, 이걸 배경 변화로 오판해
+    // 보간하자 화살표 색이 박스 전체로 늘어나 세로 줄무늬가 생겼다
+    const bg = g(235);
+    const arrow = [
+      ...Array.from({ length: 14 }, () => [...bg]),
+      ...Array.from({ length: 6 }, () => [250, 220, 120]),
+    ];
+    const r = planErase([arrow, side(bg), side(bg), side(bg)]);
+    expect(r.how).toBe("flat");
+    expect(r.how === "flat" && r.color[0]).toBe(235);
+  });
+
+  it("한 변이 통째로 옆 줄 글자에 덮여도 나머지로 배경을 잡는다", () => {
+    const bg = g(240);
+    const r = planErase([side(bg), side(g(25)), side(bg), side(bg)]);
+    expect(r.how).toBe("flat");
+    expect(r.how === "flat" && r.color[0]).toBe(240);
   });
 
   it("표본이 없으면 흰색으로 안전하게 처리한다", () => {
-    expect(borderUniformity([])).toEqual({ uniform: true, color: [255, 255, 255] });
+    expect(planErase([null, null, null, null])).toEqual({ how: "flat", color: [255, 255, 255] });
+  });
+
+  it("완만한 그라데이션은 보간으로 간다", () => {
+    expect(planErase([ramp(255, 230), ramp(250, 225), ramp(255, 250), ramp(230, 225)]).how).toBe("blend");
+  });
+});
+
+describe("stripForeign — 배경이 아닌 것만 걷어낸다", () => {
+  it("사진의 명암은 남기고 다른 물체만 대표색으로 되돌린다", () => {
+    const ref: [number, number, number] = [235, 230, 225];
+    const series = [
+      [240, 236, 230], // 사진의 밝은 부분 — 남는다
+      [250, 220, 120], // 노란 화살표 — 걷어낸다
+      [228, 222, 218], // 사진의 어두운 부분 — 남는다
+    ];
+    expect(stripForeign(series, ref)).toEqual([[240, 236, 230], ref, [228, 222, 218]]);
+  });
+
+  it("backgroundRef 는 물체가 섞여도 다수인 배경색을 집는다", () => {
+    const bg = Array.from({ length: 8 }, () => [235, 230, 225]);
+    expect(backgroundRef([bg, [[10, 10, 10], [20, 20, 20]], null, null])).toEqual([235, 230, 225]);
   });
 });
 
@@ -306,19 +363,6 @@ describe("median / cleanEdge — 테두리에 걸친 글자 배제", () => {
   it("완만한 그라데이션은 손대지 않는다", () => {
     const raw = [200, 205, 210, 215, 220, 225, 230];
     expect(cleanEdge(raw)).toEqual(raw);
-  });
-});
-
-describe("borderUniformity — 글자가 테두리에 닿은 경우", () => {
-  it("표본 다수가 배경이면 글자 획이 섞여도 단색으로 본다", () => {
-    // 실사례: 박스가 글자에 딱 붙어 테두리 표본에 획이 섞였고,
-    // 평균·표준편차로 판단하던 예전 코드는 "그라데이션"으로 오판해
-    // 보간이 글자를 줄무늬로 늘렸다
-    const bg = Array.from({ length: 9 }, () => [240, 238, 238]);
-    const stroke = [[30, 20, 25], [28, 22, 24]];
-    const r = borderUniformity([...bg, ...stroke]);
-    expect(r.uniform).toBe(true);
-    expect(r.color[0]).toBe(240);
   });
 });
 

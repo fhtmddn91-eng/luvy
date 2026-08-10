@@ -471,8 +471,8 @@ export function toPixelBox(
  * 달라도 "네모 박스를 씌운 듯한" 자국이 남았다(실사용 지적: 배경 없는 제목에
  * 검은 박스, 사진 위 흰 박스). 모델 값을 믿지 않고 박스 바로 바깥의 테두리
  * 픽셀을 표본으로 삼는다.
- *  - 테두리가 거의 균일하면(단색 카드·버튼) 그 색으로 채운다 → 경계가 안 보인다
- *  - 테두리가 변하면(그라데이션·사진) 네 변에서 이중선형 보간해 결을 잇는다
+ *  - 테두리가 **모든 변에서 같은 한 색**이면(단색 카드·버튼) 그 색으로 채운다
+ *  - 조금이라도 변하면(그라데이션·사진) 네 변에서 이중선형 보간해 결을 잇는다
  */
 export function median(xs: number[]): number {
   if (xs.length === 0) return 0;
@@ -481,63 +481,144 @@ export function median(xs: number[]): number {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-/** 배경으로 볼 수 없을 만큼 튀는 표본으로 판단하는 기준 (0~255) */
-const OUTLIER = 24;
+/* ── 테두리가 진짜 "한 색"인지 판정 ──────────────────────────────
+ *
+ * 예전 판정은 네 변의 표본을 한 통에 섞어 퍼짐만 봤다. 그래서 은은한
+ * 그라데이션(노란 띠)이나 흐린 사진 배경이 "단색"으로 통과했고, 그 위에
+ * 상수색 사각형을 칠해 **글자를 네모에 담아 덧붙인 자국**이 남았다
+ * (운영 이미지 737개 문구 중 258개에서 경계 단차 확인).
+ *
+ * 이제 두 가지를 따로 본다.
+ *  1. 한 변 안에서 색이 흐르는가 (사진·좌우 그라데이션)
+ *  2. 변끼리 색이 다른가 (위아래 그라데이션)
+ * 둘 중 하나라도 걸리면 단색이 아니다 → 보간으로 결을 잇는다.
+ */
 
-export function borderUniformity(samples: number[][]): { uniform: boolean; color: [number, number, number] } {
-  if (samples.length === 0) return { uniform: true, color: [255, 255, 255] };
-  /*
-   * 평균이 아니라 중앙값을 쓴다.
-   * 글자가 박스 테두리에 닿아 있으면 표본에 글자 획이 섞여 들어오는데,
-   * 평균은 그것에 끌려가고 표준편차도 커져 "그라데이션"으로 오판한다.
-   * 그러면 보간이 글자 색을 박스 전체로 늘려 줄무늬를 만든다(실사례:
-   * "직경 3CM" 줄이 지워지지 않고 획이 늘어나 한글과 겹쳐 보였다).
-   * 중앙값은 표본 절반이 배경이면 배경색을 그대로 집는다.
-   */
-  const color = [0, 1, 2].map((c) => Math.round(median(samples.map((s) => s[c])))) as [
-    number,
-    number,
-    number,
-  ];
-  const dev = samples.map((s) =>
-    Math.max(Math.abs(s[0] - color[0]), Math.abs(s[1] - color[1]), Math.abs(s[2] - color[2])),
-  );
-  const kept = samples.filter((_, i) => dev[i] <= OUTLIER);
-  const spread = kept.length
-    ? Math.sqrt(
-        kept.reduce((t, s) => t + [0, 1, 2].reduce((u, c) => u + (s[c] - color[c]) ** 2, 0) / 3, 0) /
-          kept.length,
-      )
-    : Infinity;
-  return {
-    // 표본 절반 이상이 한 색에 모이고 퍼짐이 작으면 단색 — 그 색으로 칠해도 티가 안 난다
-    uniform: kept.length >= samples.length * 0.5 && spread <= 10,
-    color,
-  };
+/** 마주보는 변끼리 색 차이 판정 기준 (0~255). 이보다 크면 배경이 흐르는 것 */
+const FLAT_GAP = 3;
+
+/**
+ * 테두리 표본이 배경 대표색에서 이만큼 넘게 벗어나면 배경이 아니라
+ * **다른 물체**(화살표·도형·옆 줄의 글자)로 본다. 사진의 명암은 이보다 가깝다.
+ */
+const FOREIGN_OBJECT = 48;
+
+/**
+ * 한 변의 대표색.
+ * 글자 획이 걸친 자리는 cleanEdge 가 이웃 값으로 바꾼 뒤에 잰다 —
+ * 획 하나에 끌려가면 배경색을 잘못 집는다.
+ */
+export function edgeColor(series: number[][] | null): [number, number, number] | null {
+  if (!series || series.length < 3) return null;
+  return [0, 1, 2].map((c) =>
+    Math.round(median(cleanEdge(series.map((s) => s[c])))),
+  ) as [number, number, number];
+}
+
+const gap = (a: [number, number, number], b: [number, number, number]): number =>
+  Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]));
+
+/** 네 변 표본 전체의 대표색 — 이 박스 주변의 "배경은 대체로 이 색" */
+export function backgroundRef(sides: (number[][] | null)[]): [number, number, number] {
+  const all = sides.filter((s): s is number[][] => s !== null).flat();
+  if (all.length === 0) return [255, 255, 255];
+  return [0, 1, 2].map((c) => median(all.map((s) => s[c]))) as [number, number, number];
 }
 
 /**
- * 박스 바깥 1~3px 링의 픽셀 표본.
- * 1px 만 보면 글자가 테두리에 닿았을 때 표본이 통째로 오염된다.
+ * 변에서 **다른 물체**가 물린 자리를 배경 대표색으로 되돌린다.
+ *
+ * cleanEdge 는 좁은 이웃만 보므로 획 하나는 지우지만, 변을 길게 덮는 것
+ * (화살표·도형·바로 아래 줄의 큰 글자)은 그대로 남는다. 그 값을 보간에 넣으면
+ * 색이 박스 전체로 늘어나 줄무늬가 됐다(실사례: 노란 화살표 옆 "기능형").
+ * 사진의 명암은 배경 대표색에서 그리 멀지 않지만 다른 물체는 훨씬 멀다 —
+ * 이 차이로 갈라 사진의 결은 살리고 물체만 걷어낸다.
  */
-function sampleBorder(d: Uint8ClampedArray, W: number, H: number, b: PxBox): number[][] {
+export function stripForeign(series: number[][], ref: [number, number, number]): number[][] {
+  return series.map((s) =>
+    Math.max(...[0, 1, 2].map((c) => Math.abs(s[c] - ref[c]))) > FOREIGN_OBJECT
+      ? [...ref]
+      : s,
+  );
+}
+
+export type EraseFill =
+  /** 네 변이 한 색 — 그 색으로 평평하게 칠한다 */
+  | { how: "flat"; color: [number, number, number] }
+  /** 색이 흐른다 — 네 변에서 보간해 결을 잇는다 */
+  | { how: "blend" };
+
+/**
+ * 지운 자리를 무엇으로 채울지. sides 는 [위, 아래, 왼쪽, 오른쪽] 순서.
+ *
+ * 두 가지가 핵심이다.
+ *
+ * 1. **다른 물체를 걷어낸 뒤에** 판단한다. 배경은 단색인데 변에 화살표나 옆 줄
+ *    글자만 물린 경우, 걷어내기 전에 보면 "색이 흐른다"로 오판한다.
+ * 2. 판단은 변 **안의** 흔들림이 아니라 **마주보는 변끼리의 색 차이**로 한다.
+ *    진짜 그라데이션은 위↔아래(또는 왼쪽↔오른쪽) 색이 다르다는 게 신호다.
+ *    변 안의 흔들림으로 재면, 배경은 평평한데 장식 글자가 변을 스친 경우까지
+ *    보간으로 넘어가 그 색이 박스 전체로 늘어난다(실사례: "기능형" 세로 줄무늬).
+ */
+export function planErase(sides: (number[][] | null)[]): EraseFill {
+  const ref = backgroundRef(sides);
+  const med = sides.map((s) => edgeColor(s && stripForeign(s, ref)));
+
+  const spread = (a: number, b: number): number =>
+    med[a] && med[b] ? gap(med[a]!, med[b]!) : 0;
+  // 위↔아래, 왼쪽↔오른쪽
+  const varies = Math.max(spread(0, 1), spread(2, 3)) > FLAT_GAP;
+  if (varies) return { how: "blend" };
+
+  const known = med.filter((m): m is [number, number, number] => m !== null);
+  const color = (
+    known.length > 0
+      ? [0, 1, 2].map((c) => Math.round(median(known.map((m) => m[c]))))
+      : [...ref]
+  ) as [number, number, number];
+  return { how: "flat", color };
+}
+
+/**
+ * 네 변 각각의 색 흐름. 변을 따라가는 **순서 있는** 표본이라야
+ * "이 변 안에서 색이 흐르는가"를 잴 수 있다.
+ * 각 지점은 바깥 1~3px 의 중앙값 — 글자가 테두리에 닿아도 덜 오염된다.
+ */
+export function sampleSides(
+  d: Uint8ClampedArray,
+  W: number,
+  H: number,
+  b: PxBox,
+): (number[][] | null)[] {
   const x0 = Math.round(b.x0);
   const y0 = Math.round(b.y0);
   const x1 = Math.round(b.x1);
   const y1 = Math.round(b.y1);
-  const out: number[][] = [];
-  const at = (x: number, y: number) => {
-    if (x < 0 || y < 0 || x >= W || y >= H) return;
-    const i = (y * W + x) * 4;
-    out.push([d[i], d[i + 1], d[i + 2]]);
+  const px = (x: number, y: number, c: number) =>
+    x < 0 || y < 0 || x >= W || y >= H ? NaN : d[(y * W + x) * 4 + c];
+
+  /** 변을 따라가며 각 지점의 색을 읽는다. 지점마다 바깥 1~3px 의 중앙값 */
+  const side = (at: (t: number, o: number) => [number, number], n: number) => {
+    const out: number[][] = [];
+    const step = Math.max(1, Math.floor(n / 64));
+    for (let t = 0; t < n; t += step) {
+      const rgb: number[] = [];
+      for (let c = 0; c < 3; c++) {
+        const depth = [1, 2, 3].map((o) => px(...at(t, o), c)).filter((v) => !Number.isNaN(v));
+        if (depth.length === 0) break;
+        rgb.push(median(depth));
+      }
+      if (rgb.length === 3) out.push(rgb);
+    }
+    return out.length >= 3 ? out : null;
   };
-  const stepX = Math.max(1, Math.floor((x1 - x0) / 24));
-  const stepY = Math.max(1, Math.floor((y1 - y0) / 24));
-  for (let o = 1; o <= 3; o++) {
-    for (let x = x0; x <= x1; x += stepX) { at(x, y0 - o); at(x, y1 + o); }
-    for (let y = y0; y <= y1; y += stepY) { at(x0 - o, y); at(x1 + o, y); }
-  }
-  return out;
+
+  return [
+    side((t, o) => [x0 + t, y0 - o], x1 - x0), // 위
+    side((t, o) => [x0 + t, y1 + o], x1 - x0), // 아래
+    side((t, o) => [x0 - o, y0 + t], y1 - y0), // 왼쪽
+    side((t, o) => [x1 + o, y0 + t], y1 - y0), // 오른쪽
+  ];
 }
 
 /**
@@ -573,6 +654,20 @@ function eraseBilinear(d: Uint8ClampedArray, W: number, H: number, b: PxBox): vo
     bottom: cleanEdge(Array.from({ length: x1 - x0 }, (_, k) => px(x0 + k, y1, c))),
   }));
 
+  // 변에 물린 다른 물체(화살표·도형·옆 줄 글자)를 걷어낸다 — 그대로 늘리면 줄무늬가 된다
+  const ref = [0, 1, 2].map((c) =>
+    median([...edges[c].left, ...edges[c].right, ...edges[c].top, ...edges[c].bottom]),
+  ) as [number, number, number];
+  for (const key of ["left", "right", "top", "bottom"] as const) {
+    const n = edges[0][key].length;
+    for (let k = 0; k < n; k++) {
+      const off = Math.max(...[0, 1, 2].map((c) => Math.abs(edges[c][key][k] - ref[c])));
+      if (off > FOREIGN_OBJECT) {
+        for (let c = 0; c < 3; c++) edges[c][key][k] = ref[c];
+      }
+    }
+  }
+
   for (let y = y0; y < y1; y++) {
     const ty = (y - y0) / spanY;
     for (let x = x0; x < x1; x++) {
@@ -599,14 +694,14 @@ function eraseRegion(ctx: SKRSContext2D, width: number, height: number, b: PxBox
   if (x1 - x0 < 2 || y1 - y0 < 2) return;
 
   const img = ctx.getImageData(0, 0, width, height);
-  const { uniform, color } = borderUniformity(sampleBorder(img.data, width, height, b));
-  if (uniform) {
-    ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
-    ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+  const plan = planErase(sampleSides(img.data, width, height, b));
+  if (plan.how === "blend") {
+    eraseBilinear(img.data, width, height, b);
+    ctx.putImageData(img, 0, 0);
     return;
   }
-  eraseBilinear(img.data, width, height, b);
-  ctx.putImageData(img, 0, 0);
+  ctx.fillStyle = `rgb(${plan.color[0]},${plan.color[1]},${plan.color[2]})`;
+  ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
 }
 
 /**
