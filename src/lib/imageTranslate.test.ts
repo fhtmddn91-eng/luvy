@@ -23,6 +23,8 @@ import {
   regionIsStatic,
   inventedInBox,
   textBands,
+  textCoverage,
+  truncatedTail,
   planErase,
   stripForeign,
   inpaint,
@@ -587,5 +589,61 @@ describe("textBands — 글자 띠 자르기 (안전 필터 우회)", () => {
 
   it("문구가 없으면 빈 배열", () => {
     expect(textBands([], 1000, 1000)).toEqual([]);
+  });
+});
+
+describe("textCoverage — 번역문이 잘렸는지", () => {
+  it("그대로 찍혔으면 1", () => {
+    expect(textCoverage("10단계 진동, 쉴 새 없는 파도처럼", "10단계 진동, 쉴 새 없는 파도처럼")).toBe(1);
+  });
+
+  it("공백·문장부호 차이는 무시한다 (모델이 흘리기 쉬운 부분)", () => {
+    expect(textCoverage("비밀 배송/OEM", "비밀배송 OEM")).toBe(1);
+  });
+
+  it("잘린 문구를 잡아낸다 (실사례: 뒷말이 통째로 사라짐)", () => {
+    // 원문 "前后10频震颤，一浪接一浪" → "10단계 진동, 쉴 새 없는 ㅈ" 로 잘려 그려졌다
+    const c = textCoverage("10단계 진동, 쉴 새 없는 파도처럼", "10단계 진동, 쉴 새 없는 ㅈ");
+    expect(c).toBeLessThan(0.8);
+  });
+
+  it("OCR 이 한두 글자 흘려도 통과시킨다 (오탐 방지)", () => {
+    expect(textCoverage("스마트 온열 기능", "스마트 온열 기능")).toBe(1);
+    expect(textCoverage("스마트 온열 기능", "스마트 온얼 기능")).toBeGreaterThan(0.8);
+  });
+
+  it("딴 말이 찍혔으면 낮게 나온다", () => {
+    expect(textCoverage("고속 신축", "제품 정보")).toBeLessThan(0.8);
+  });
+
+  it("기대 문구가 비면 1, 읽힌 글자가 없으면 0", () => {
+    expect(textCoverage("", "아무거나")).toBe(1);
+    expect(textCoverage("고속 신축", "")).toBe(0);
+  });
+});
+
+describe("truncatedTail — 뒤가 잘린 문구", () => {
+  it("비율로는 통과하던 짧은 잘림을 잡는다 (실측: 0.83 으로 새어나감)", () => {
+    const ko = "앞뒤 10단계 진동, 쉼 없는 자극";
+    const seen = "앞뒤 10단계 진동, 쉼 없는";
+    expect(textCoverage(ko, seen)).toBeGreaterThan(0.8); // 비율 검사는 놓친다
+    expect(truncatedTail(ko, seen)).toBe(true); // 잘림 검사가 잡는다
+  });
+
+  it("끝 글자 하나는 OCR 오차로 보고 넘긴다", () => {
+    expect(truncatedTail("고속 신축 기능", "고속 신축 기")).toBe(false);
+  });
+
+  it("다 찍혔으면 잘림이 아니다", () => {
+    expect(truncatedTail("고속 신축", "고속 신축")).toBe(false);
+    expect(truncatedTail("고속 신축", "고속 신축 기능")).toBe(false);
+  });
+
+  it("앞부분이 다르면 잘림이 아니다 (딴 말은 비율 검사 몫)", () => {
+    expect(truncatedTail("고속 신축 기능", "저속 신축")).toBe(false);
+  });
+
+  it("아무것도 못 읽었으면 잘림으로 보지 않는다 (오탐 방지)", () => {
+    expect(truncatedTail("고속 신축", "")).toBe(false);
   });
 });

@@ -1952,14 +1952,106 @@ export function flaggedHits(flag: [number, number, number, number], it: OcrBox):
  * 검사에는 OCR 과 같은 추출기를 쓴다. "외국어로 보이나?"를 모델이 판단하게 했더니
  * 작은 한글까지 깨진 글자로 집어냈고, 정작 "제头工厂"처럼 반만 번역된 것은 놓쳤다.
  */
+const TRANSCRIBE_PROMPT = `이 이미지에 보이는 글자를 줄 단위로 모두 그대로 옮겨 적어주세요. 번역하지 마세요.
+
+각 줄마다 JSON 배열 원소로:
+- box: [ymin, xmin, ymax, xmax] — 0~1000 정규화
+- text: 보이는 그대로 (잘렸으면 잘린 채로, 없는 글자를 채워 넣지 말 것)
+
+글자가 없으면 빈 배열. JSON 배열만 출력.`;
+
+/** 완성본에 실제로 찍힌 글자를 줄 단위로 읽어온다 (원문 잔류·잘림 검사 공용) */
+async function transcribeText(
+  data: Buffer,
+  mime: string,
+): Promise<{ box: [number, number, number, number]; text: string }[]> {
+  const parts = await callGemini(
+    MODEL,
+    [{ inline_data: { mime_type: mime, data: data.toString("base64") } }, { text: TRANSCRIBE_PROMPT }],
+    { maxOutputTokens: 8000, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "minimal" } },
+  );
+  const raw = jsonArrayOf(parts);
+  if (!Array.isArray(raw)) return [];
+  const out: { box: [number, number, number, number]; text: string }[] = [];
+  for (const r of raw) {
+    const row = r as Record<string, unknown>;
+    const box = row?.box;
+    const text = String(row?.text ?? "");
+    if (!Array.isArray(box) || box.length !== 4 || !text) continue;
+    const nums = box.map(Number);
+    if (nums.some((n) => !Number.isFinite(n) || n < 0 || n > 1000)) continue;
+    out.push({ box: nums as [number, number, number, number], text });
+  }
+  return out;
+}
+
+/** 비교용 정규화 — 공백·문장부호는 모델이 흘리기 쉬워 뺀다 */
+const forCompare = (s: string): string => s.replace(/[\s.,·:;!?()[\]{}'"“”‘’\-–—/+]/g, "");
+
+/**
+ * 기대한 문구가 실제로 다 찍혔는지 0~1 로 — 순서를 지킨 최장 공통 부분수열 비율.
+ *
+ * 실사례: "쉴 새 없는 파도처럼" 이 자리에 안 맞자 모델이 "쉴 새 없는 ㅈ" 로 잘라
+ * 그렸다. 중국어가 아니라 검수를 그냥 통과했다. 글자 수로만 보면 잘림을 놓치므로
+ * (모델이 다른 말을 지어내도 길이는 맞을 수 있다) 순서까지 보는 비율을 쓴다.
+ */
+export function textCoverage(expected: string, observed: string): number {
+  const e = forCompare(expected);
+  const o = forCompare(observed);
+  if (e.length === 0) return 1;
+  if (o.length === 0) return 0;
+  // LCS 길이 (행 하나만 굴린다)
+  let prev = new Uint16Array(o.length + 1);
+  let cur = new Uint16Array(o.length + 1);
+  for (let i = 1; i <= e.length; i++) {
+    for (let j = 1; j <= o.length; j++) {
+      cur[j] = e[i - 1] === o[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+    }
+    [prev, cur] = [cur, prev];
+    cur.fill(0);
+  }
+  return prev[o.length] / e.length;
+}
+
+/** 이 아래로 떨어지면 문구가 잘렸거나 딴 말이 찍힌 것 (OCR 오차 여유 포함) */
+const COVERAGE_MIN = 0.8;
+
+/**
+ * 뒤가 잘렸는지 — 찍힌 글자가 기대 문구의 "앞부분 그대로"인데 짧을 때.
+ *
+ * 비율만 보면 짧은 문구의 잘림을 놓친다: "앞뒤 10단계 진동, 쉼 없는 자극"에서
+ * "자극"이 날아가도 12자 중 10자라 0.83 이라 통과했다(실측). 앞부분이 정확히
+ * 일치하면서 뒤가 없는 건 OCR 오차가 아니라 잘림이므로 따로 잡는다.
+ * 한 글자 차이는 OCR 이 끝 글자를 흘린 것일 수 있어 두 글자부터 본다.
+ */
+export function truncatedTail(expected: string, observed: string, minMissing = 2): boolean {
+  const e = forCompare(expected);
+  const o = forCompare(observed);
+  return o.length > 0 && e.length - o.length >= minMissing && e.startsWith(o);
+}
+
+/**
+ * 다시 손봐야 하는 문구를 고른다 — 원문이 남았거나, 번역문이 잘렸거나.
+ *
+ * 두 검사 모두 "완성본에 찍힌 글자"에서 나오므로 모델 호출은 한 번이다.
+ */
 async function flaggedBoxes(
   out: Buffer,
   mime: string,
   targets: OcrBox[],
+  /** 번역문이 다 찍혔는지도 볼지. 글자를 아직 안 그린 "지우기 결과"에는 끈다 */
+  checkCoverage = true,
 ): Promise<OcrBox[]> {
   try {
-    const found = await extractForeign(out, mime);
-    return targets.filter((b) => found.some((f) => flaggedHits(f.box, b)));
+    const lines = await transcribeText(out, mime);
+    if (lines.length === 0) return [];
+    return targets.filter((b) => {
+      const hits = lines.filter((l) => flaggedHits(l.box, b));
+      if (hits.some((l) => isForeignSource(l.text))) return true; // 원문 잔류
+      if (!checkCoverage || hits.length === 0) return false; // 못 읽은 자리는 건드리지 않는다
+      const seen = hits.map((l) => l.text).join(" ");
+      return textCoverage(b.ko, seen) < COVERAGE_MIN || truncatedTail(b.ko, seen);
+    });
   } catch {
     // 검수 자체가 실패하면 결과를 살린다 (검수는 보강 장치일 뿐)
     return [];
@@ -1970,8 +2062,9 @@ async function leftoverInBoxes(
   out: Buffer,
   mime: string,
   targets: OcrBox[],
+  checkCoverage = true,
 ): Promise<boolean> {
-  return (await flaggedBoxes(out, mime, targets)).length > 0;
+  return (await flaggedBoxes(out, mime, targets, checkCoverage)).length > 0;
 }
 
 /** 번역 이미지를 만든다. 문구 수정 후 재생성에도 그대로 쓴다. */
@@ -2008,7 +2101,7 @@ export async function renderTranslatedImage(
     for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
       try {
         const cleaned = await eraseViaModel(data, mime, removals);
-        if (await leftoverInBoxes(cleaned, "image/png", removals)) {
+        if (await leftoverInBoxes(cleaned, "image/png", removals, false)) {
           reason = "원문이 남음";
           continue;
         }
