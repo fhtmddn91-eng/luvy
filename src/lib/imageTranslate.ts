@@ -1513,8 +1513,11 @@ const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image";
 /**
  * 재생성 시도 횟수 — 검수에서 걸리면 다시 뽑는다.
  * 모델은 매번 다르게 그리므로 한 번 어긋나도 다음 판은 멀쩡한 경우가 많다.
+ * 3회로 돌려본 결과 3번째에 성공하는 경우는 드물었고(대부분 같은 버릇으로
+ * 재실패), 시도마다 생성비가 나가므로 2회로 줄였다. 실패해도 부분 보정·띠·
+ * 오버레이 사다리가 받아준다.
  */
-const REGEN_ATTEMPTS = 3;
+const REGEN_ATTEMPTS = 2;
 
 function regenPrompt(boxes: OcrBox[]): string {
   // 유지·지움으로 지정한 항목은 재생성 대상에서 빼야 모델이 건드리지 않는다

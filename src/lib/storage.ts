@@ -31,9 +31,21 @@ export type UploadResult = { ok: true; url: string } | { ok: false; error: strin
 const newName = (ext: string) =>
   `${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${ext}`;
 
-async function insertPublic(name: string, mime: string, data: Buffer): Promise<void> {
+async function insertPublic(
+  name: string,
+  mime: string,
+  data: Buffer,
+  sourceUrl?: string,
+): Promise<void> {
   await db.storedFile.create({
-    data: { name, mime, access: "public", bytes: data.byteLength, data: new Uint8Array(data) },
+    data: {
+      name,
+      mime,
+      access: "public",
+      bytes: data.byteLength,
+      data: new Uint8Array(data),
+      ...(sourceUrl ? { sourceUrl } : {}),
+    },
   });
 }
 
@@ -63,6 +75,8 @@ export async function saveImageBuffer(
   data: Buffer,
   mime: string,
   maxBytes = MAX_BYTES,
+  /** 미러링 원본 주소 — 있으면 캐시 키로 저장해 같은 이미지를 두 번 받지 않는다 */
+  sourceUrl?: string,
 ): Promise<UploadResult> {
   const ext = EXT_BY_MIME[mime];
   if (!ext) return { ok: false, error: `지원하지 않는 이미지 형식입니다 (${mime}).` };
@@ -76,7 +90,7 @@ export async function saveImageBuffer(
   }
 
   const name = newName(ext);
-  await insertPublic(name, mime, data);
+  await insertPublic(name, mime, data, sourceUrl);
   return { ok: true, url: `/uploads/${name}` };
 }
 

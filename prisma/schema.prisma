@@ -361,6 +361,13 @@ model StoredFile {
   bytes     Int
   data      Bytes
   createdAt DateTime @default(now())
+
+  // 미러링 원본 주소 — 같은 원격 이미지를 두 번 내려받지 않기 위한 캐시 키.
+  // 1688 판매자는 배지·배너를 여러 상품에 재사용하므로, 이걸 기억해 두면
+  // 다운로드·저장·이미지 번역 비용이 상품 수만큼 중복으로 나가지 않는다.
+  sourceUrl String?
+
+  @@index([sourceUrl])
 }
 
 model AuditLog {

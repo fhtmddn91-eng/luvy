@@ -33,6 +33,26 @@ async function translateOne(asset: {
   // 이미 번역된 장은 건너뛴다 (재시도 시 원본을 두 번 덮지 않도록)
   if (asset.originalUrl) return "skipped";
 
+  // 같은 원본 파일을 다른 상품에서 이미 번역했으면 그 결과를 그대로 쓴다 —
+  // 1688 판매자가 돌려쓰는 배지·배너는 파일이 공유되므로(미러 캐시) 여기서
+  // 걸리고, 모델 호출이 한 번도 안 나간다.
+  const sibling = await db.productAsset.findFirst({
+    where: { originalUrl: asset.url, NOT: { id: asset.id } },
+    select: { url: true, ocrData: true, bytes: true },
+  });
+  if (sibling) {
+    await db.productAsset.update({
+      where: { id: asset.id },
+      data: {
+        url: sibling.url,
+        originalUrl: asset.url,
+        ocrData: sibling.ocrData,
+        bytes: sibling.bytes,
+      },
+    });
+    return "done";
+  }
+
   const file = await readPublicUpload(path.basename(asset.url));
   if (!file) return "failed";
 

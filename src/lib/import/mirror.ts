@@ -1,4 +1,5 @@
 import "server-only";
+import { db } from "@/lib/db";
 import { saveImageBuffer } from "@/lib/storage";
 import { normalizeImageUrl } from "./parse1688";
 
@@ -32,6 +33,15 @@ async function fetchOne(rawUrl: string): Promise<MirroredImage | { error: string
   const url = normalizeImageUrl(rawUrl);
   if (!url) return { error: "허용되지 않은 이미지 주소" };
 
+  // 같은 원격 이미지를 이미 받아뒀으면 재사용 — 1688 판매자는 배지·배너를
+  // 여러 상품에 돌려쓰므로 다운로드·저장이 상품 수만큼 중복되는 걸 막는다.
+  // (이미 번역까지 된 파일이면 번역 재사용은 translateAssets 쪽에서 이어진다)
+  const cached = await db.storedFile.findFirst({
+    where: { sourceUrl: url },
+    select: { name: true, bytes: true },
+  });
+  if (cached) return { sourceUrl: url, url: `/uploads/${cached.name}`, bytes: cached.bytes };
+
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -51,7 +61,7 @@ async function fetchOne(rawUrl: string): Promise<MirroredImage | { error: string
     if (!mime.startsWith("image/")) return { error: `이미지가 아님 (${mime || "unknown"})` };
 
     const buf = Buffer.from(await res.arrayBuffer());
-    const saved = await saveImageBuffer(buf, mime, MIRROR_MAX_BYTES);
+    const saved = await saveImageBuffer(buf, mime, MIRROR_MAX_BYTES, url);
     if (!saved.ok) return { error: saved.error };
 
     return { sourceUrl: url, url: saved.url, bytes: buf.byteLength };

@@ -5,6 +5,8 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
+import { translateProductImages } from "@/lib/import/translateAssets";
+import { sourceForUrl } from "@/lib/import/sources";
 import { saveImageUpload, deleteImageUpload, deleteUploadIfUnused } from "@/lib/storage";
 import { normalizeSku, skuError } from "@/lib/sku";
 import { categorySetFor, keepKnown } from "@/lib/productCategories";
@@ -257,6 +259,7 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
   ]);
   await syncOptions(id, parseOptions(formData));
   if (image.url) await registerThumbnailAsset(id, image.url, image.bytes ?? 0);
+  if (fields.status === "ACTIVE") await translateOnPublish(id);
   await audit({
     action: "PRODUCT_UPDATE",
     target: "product",
@@ -277,10 +280,39 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
   redirect("/admin/products");
 }
 
+/**
+ * 판매 전환 시점에 이미지 번역을 돌린다 (1688 등 번역이 필요한 소스만).
+ *
+ * 수집 시점에 번역하면 안 파는 상품 번역비까지 나간다 — 수집분 상당수는
+ * 가격을 못 맞춰 그대로 묻힌다(장당 ~$0.05). 판매로 전환하는 상품만 돌리면
+ * 실제로 손님이 볼 이미지에만 비용이 든다. 이미 번역된 장·글자 없는 장은
+ * translateProductImages 안에서 걸러진다.
+ */
+async function translateOnPublish(productId: string): Promise<void> {
+  const p = await db.product.findUnique({
+    where: { id: productId },
+    select: { sourceUrl: true },
+  });
+  if (!p?.sourceUrl || sourceForUrl(p.sourceUrl)?.translate !== true) return;
+  const untranslated = await db.productAsset.count({
+    where: { productId, originalUrl: null },
+  });
+  if (untranslated === 0) return;
+  // 장당 십수 초 × 수십 장 — 응답을 붙잡지 않고 뒤에서 돌린다.
+  // 운영자는 어드민을 새로고침하면 번역된 이미지를 본다.
+  void translateProductImages(productId)
+    .then((r) => {
+      if (r.done > 0) revalidatePath(`/products/${productId}`);
+      console.log(`[publish] 이미지 번역 ${r.done}장 (실패 ${r.failed} · 건너뜀 ${r.skipped})`);
+    })
+    .catch((e) => console.warn(`[publish] 이미지 번역 실패: ${e}`));
+}
+
 export async function setProductStatus(id: string, status: "ACTIVE" | "HIDDEN"): Promise<void> {
   await requireAdmin();
   const p = await db.product.findUnique({ where: { id }, select: { name: true } });
   await db.product.update({ where: { id }, data: { status } });
+  if (status === "ACTIVE") await translateOnPublish(id);
   await audit({
     action: "PRODUCT_STATUS",
     target: "product",

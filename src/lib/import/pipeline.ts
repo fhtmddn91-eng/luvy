@@ -2,7 +2,6 @@ import "server-only";
 import { db } from "@/lib/db";
 import { parse1688 } from "./parse1688";
 import { mirrorImages } from "./mirror";
-import { translateProductImages } from "./translateAssets";
 import { translateDraft, asIsDraft } from "./translate";
 import { sourceById } from "./sources";
 import type { ImportPayload } from "./types";
@@ -211,27 +210,10 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
       },
     });
 
-    // 이미지 속 중국어 번역은 장당 십수 초가 걸린다. 수집 응답을 붙잡아 두면
-    // 상세페이지가 많은 상품에서 요청이 끊기므로, 뒤에서 돌리고 결과만 기록에
-    // 남긴다. 운영자는 어드민을 새로고침하면 번역된 이미지를 본다.
-    // 국내 도매처 이미지는 이미 한국어이므로 건너뛴다.
-    if (site?.translate !== false) void translateProductImages(product.id)
-      .then((r) =>
-        db.importJob.update({
-          where: { id: job.id },
-          data: {
-            error: [
-              partialIssues.join(" / "),
-              `이미지 번역 ${r.done}장${r.failed > 0 ? ` (실패 ${r.failed}장)` : ""}`,
-            ]
-              .filter(Boolean)
-              .join(" / ")
-              .slice(0, 500),
-          },
-        }),
-      )
-      .catch((e) => console.warn(`[import] 이미지 번역 일괄 실패: ${e}`));
-
+    // 이미지 속 중국어 번역은 여기서 돌리지 않는다 — 수집 상품은 숨김으로
+    // 들어오고 상당수는 판매까지 가지 않는데, 수집 시점에 다 번역하면 안 파는
+    // 상품 번역비까지 나간다(장당 ~$0.05, 실제 크레딧 소진 사고). "판매" 전환
+    // 시점(setProductStatus)에 자동으로 돌린다.
     return {
       ok: true,
       jobId: job.id,
@@ -239,7 +221,7 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
       message:
         site?.translate === false
           ? `수집 완료: ${translation.name}`
-          : `수집 완료: ${translation.name} — 이미지 번역은 뒤에서 진행 중입니다.`,
+          : `수집 완료: ${translation.name} — 이미지 번역은 판매 전환 시 자동 실행됩니다.`,
       detail: {
         koTitle: translation.name,
         translated: translation.translated,
