@@ -2046,6 +2046,37 @@ export async function regenerateByBands(
   return { data: canvas.toBuffer("image/jpeg", 90), mime: "image/jpeg" };
 }
 
+/**
+ * 재생성본에서 "글자 영역만" 오려 원본에 얹는다 — GIF 정지 패치와 같은 방식.
+ *
+ * 모델은 그림 전체를 다시 그린다. 통째로 쓰면 글자는 좋아도 글자 밖 픽셀
+ * (제품 질감·로고·워터마크)까지 미세하게 달라진다 — 실측: 글자 밖 픽셀의
+ * 5~15%가 밝기 10 이상 변했다. 글자 패치만 페더링으로 얹으면 글자 밖은
+ * 원본과 바이트 단위로 같다. 패치 경계 사고(글자 넘침·원문 잔류)는 뒤의
+ * 판독 검수(flaggedBoxes)가 잡는다 — 예전에 패치 방식을 접었던 건 이 검수가
+ * 없던 시절 얘기다.
+ */
+async function compositeTextPatches(
+  original: Buffer,
+  regenPng: Buffer,
+  /** 모델이 다시 그린 영역의 박스들 — 호출한 쪽이 무엇을 얹을지 정한다 */
+  targets: OcrBox[],
+  W: number,
+  H: number,
+): Promise<Canvas> {
+  const rects = targets.map((b) => gifPatchRect(b, W, H));
+  const regenRaw = new Uint8Array(await sharp(regenPng).ensureAlpha().raw().toBuffer());
+  const overlay = buildPatchOverlay(regenRaw, W, H, rects);
+  const overlayPng = await sharp(overlay, { raw: { width: W, height: H, channels: 4 } })
+    .png()
+    .toBuffer();
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(await loadImage(original), 0, 0, W, H);
+  ctx.drawImage(await loadImage(overlayPng), 0, 0);
+  return canvas;
+}
+
 async function regenerateStill(
   data: Buffer,
   mime: string,
@@ -2056,12 +2087,11 @@ async function regenerateStill(
   const H = meta.height ?? 0;
   if (!W || !H) throw new Error("이미지 크기를 읽을 수 없습니다.");
 
-  // 모델이 만든 그림을 그대로 쓴다. 글자 영역만 오려 붙이던 예전 방식은
-  // 결국 "네모를 덧대는" 자국을 남겨서 버렸다 — 모델은 원문 획을 지우고
-  // 그 자리 배경까지 다시 그리므로, 통째로 쓸 때가 가장 자연스럽다.
   const png = await callImageEdit(data, mime, regenPrompt(boxes), W, H);
-  if (mime === "image/png") return { data: png, mime };
-  return { data: await sharp(png).jpeg({ quality: 95 }).toBuffer(), mime: "image/jpeg" };
+  const targets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
+  const canvas = await compositeTextPatches(data, png, targets, W, H);
+  if (mime === "image/png") return { data: canvas.toBuffer("image/png"), mime };
+  return { data: canvas.toBuffer("image/jpeg", 95), mime: "image/jpeg" };
 }
 
 /**
@@ -2329,7 +2359,9 @@ export async function renderTranslatedImage(
             continue;
           }
         }
-        return drawTextOnly(cleaned, mime, boxes);
+        // 지운 자리 패치만 원본에 얹는다 — 글자 밖 픽셀 드리프트 방지 (재생성과 동일)
+        const patched = await compositeTextPatches(data, cleaned, removals, W, H);
+        return drawTextOnly(patched.toBuffer("image/png"), mime, boxes);
       } catch (e) {
         reason = e instanceof Error ? e.message : String(e);
       }
