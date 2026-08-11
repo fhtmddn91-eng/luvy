@@ -79,6 +79,25 @@ const SYSTEM = `당신은 한국 성인용품 B2B 도매몰의 상품 등록 담
 - categorySlug 는 주어진 목록에서만 선택합니다. 애매하면 가장 가까운 것을 고르세요.
 - 반드시 JSON 객체만 출력합니다. 코드펜스·설명 금지.`;
 
+/**
+ * 국내 도매처용 — 원문이 이미 한국어이므로 번역 없이 그대로 쓴다.
+ *
+ * 번역기를 태우면 멀쩡한 한국어를 다시 써서 문구가 바뀌고, 호출 비용과
+ * 시간만 든다. 카테고리는 관리자가 가격을 넣을 때 함께 고르므로 비워 둔다.
+ */
+export function asIsDraft(draft: ImportDraft): Translation {
+  const attrs = draft.rawAttributes.map((a) => `${a.label}: ${a.value}`).join("\n");
+  return {
+    name: draft.rawTitle,
+    description: [attrs ? `[상품 정보]\n${attrs}` : "", `\n[원본] ${draft.sourceUrl}`]
+      .filter(Boolean)
+      .join("\n")
+      .trim(),
+    categorySlug: "",
+    translated: true, // 번역이 필요 없는 것이지 실패한 게 아니다 — 경고를 띄우지 않는다
+  };
+}
+
 export async function translateDraft(draft: ImportDraft): Promise<Translation> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return fallback(draft, "GEMINI_API_KEY 미설정");

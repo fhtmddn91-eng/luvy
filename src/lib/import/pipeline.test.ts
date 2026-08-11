@@ -3,9 +3,9 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/db", () => ({ db: {} }));
 vi.mock("./mirror", () => ({ mirrorImages: async () => ({ images: [], failures: [] }) }));
-vi.mock("./translate", () => ({ translateDraft: async () => ({}) }));
+vi.mock("./translate", () => ({ translateDraft: async () => ({}), asIsDraft: () => ({}) }));
 
-import { buildAssetRows } from "./pipeline";
+import { buildAssetRows, supplyPriceNote } from "./pipeline";
 
 const img = (n: string) => ({ url: `/uploads/${n}`, bytes: 1000 });
 
@@ -43,5 +43,25 @@ describe("buildAssetRows — 수집 이미지 순서", () => {
 
   it("빈 목록도 안전하게 처리한다", () => {
     expect(buildAssetRows([], [], [])).toEqual([]);
+  });
+});
+
+describe("supplyPriceNote — 매입가 메모", () => {
+  it("국내 도매처는 원화로 적는다", () => {
+    expect(supplyPriceNote([{ price: 12000 }], "도라도라", "KRW")).toContain("[도라도라 참고가] 12,000원");
+  });
+
+  it("1688 은 위안화 기호를 붙인다", () => {
+    expect(supplyPriceNote([{ price: 15.5 }], "1688", "CNY")).toContain("[1688 참고가] ¥15.5");
+  });
+
+  it("여러 구간이면 최저~최고로 적는다", () => {
+    const s = supplyPriceNote([{ price: 9000 }, { price: 12000 }], "핑크박스", "KRW");
+    expect(s).toContain("9,000원 ~ 12,000원");
+  });
+
+  it("가격이 없으면 아무것도 붙이지 않는다", () => {
+    expect(supplyPriceNote([], "도라도라", "KRW")).toBe("");
+    expect(supplyPriceNote([{ price: 0 }], "도라도라", "KRW")).toBe("");
   });
 });

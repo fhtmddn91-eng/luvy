@@ -3,7 +3,8 @@ import { db } from "@/lib/db";
 import { parse1688 } from "./parse1688";
 import { mirrorImages } from "./mirror";
 import { translateProductImages } from "./translateAssets";
-import { translateDraft } from "./translate";
+import { translateDraft, asIsDraft } from "./translate";
+import { sourceById } from "./sources";
 import type { ImportPayload } from "./types";
 
 /**
@@ -11,8 +12,26 @@ import type { ImportPayload } from "./types";
  * 생성된 상품은 항상 HIDDEN — 가격은 사람이 확정해야 하므로 자동 판매 전환하지 않는다.
  */
 
-/** CNY 단가는 참고용으로만 쓰고, 원화 판매가는 관리자가 직접 넣는다. */
+/** 매입 단가는 참고용으로만 쓰고, 판매가는 관리자가 직접 넣는다. */
 const PLACEHOLDER_TIER = { minQty: 1, unitPrice: 0 };
+
+/** 설명 끝에 붙일 매입가 메모. 통화 기호와 안내 문구가 도매처마다 다르다. */
+export function supplyPriceNote(
+  tiers: { price: number }[],
+  label: string,
+  currency: "CNY" | "KRW",
+): string {
+  const prices = tiers.map((t) => t.price).filter((p) => p > 0);
+  if (prices.length === 0) return "";
+  const unit = currency === "KRW" ? "원" : "";
+  const sign = currency === "KRW" ? "" : "¥";
+  const fmt = (n: number) => `${sign}${n.toLocaleString("ko-KR")}${unit}`;
+  const lo = Math.min(...prices);
+  const hi = Math.max(...prices);
+  const range = hi > lo ? `${fmt(lo)} ~ ${fmt(hi)}` : fmt(lo);
+  const memo = currency === "KRW" ? "매입가 — 도매가 산정용" : "위안화 원가 — 도매가 산정용";
+  return `\n\n[${label} 참고가] ${range} (${memo})`;
+}
 
 export interface MirroredRow {
   url: string;
@@ -114,11 +133,13 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
 
   try {
     // 이미지 미러링과 번역은 서로 독립이라 동시에 진행한다
+    // 국내 도매처는 원문이 이미 한국어라 번역기를 태우지 않는다
+    const site = sourceById(draft.source);
     const [mainReport, detailReport, optionReport, translation] = await Promise.all([
       mirrorImages(draft.mainImages),
       mirrorImages(draft.detailImages),
       mirrorImages(draft.optionImages),
-      translateDraft(draft),
+      site?.translate === false ? Promise.resolve(asIsDraft(draft)) : translateDraft(draft),
     ]);
 
     const failures = [
@@ -141,15 +162,9 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
       i.url.endsWith(".gif"),
     ).length;
 
-    // 1688 원가(CNY)를 설명 끝에 참고로 남긴다 — 도매가를 정할 때
-    // 1688 을 다시 열어보지 않아도 되게. 판매가 자동 책정에는 쓰지 않는다.
-    const cny = draft.tiers.map((t) => t.price).filter((p) => p > 0);
-    const refPrice =
-      cny.length > 0
-        ? `\n\n[1688 참고가] ¥${Math.min(...cny)}${
-            Math.max(...cny) > Math.min(...cny) ? ` ~ ¥${Math.max(...cny)}` : ""
-          } (위안화 원가 — 도매가 산정용)`
-        : "";
+    // 매입가를 설명 끝에 참고로 남긴다 — 도매가를 정할 때 원본 사이트를
+    // 다시 열어보지 않아도 되게. 판매가 자동 책정에는 쓰지 않는다.
+    const refPrice = supplyPriceNote(draft.tiers, site?.label ?? draft.source, site?.currency ?? "CNY");
     const description = (translation.description + refPrice).slice(0, 4000);
 
     // 번역이 찍어준 카테고리가 실제로 있는 것인지 확인한다.
@@ -199,7 +214,8 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
     // 이미지 속 중국어 번역은 장당 십수 초가 걸린다. 수집 응답을 붙잡아 두면
     // 상세페이지가 많은 상품에서 요청이 끊기므로, 뒤에서 돌리고 결과만 기록에
     // 남긴다. 운영자는 어드민을 새로고침하면 번역된 이미지를 본다.
-    void translateProductImages(product.id)
+    // 국내 도매처 이미지는 이미 한국어이므로 건너뛴다.
+    if (site?.translate !== false) void translateProductImages(product.id)
       .then((r) =>
         db.importJob.update({
           where: { id: job.id },
@@ -220,7 +236,10 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
       ok: true,
       jobId: job.id,
       productId: product.id,
-      message: `수집 완료: ${translation.name} — 이미지 번역은 뒤에서 진행 중입니다.`,
+      message:
+        site?.translate === false
+          ? `수집 완료: ${translation.name}`
+          : `수집 완료: ${translation.name} — 이미지 번역은 뒤에서 진행 중입니다.`,
       detail: {
         koTitle: translation.name,
         translated: translation.translated,
