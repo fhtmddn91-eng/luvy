@@ -25,6 +25,8 @@ import {
   textBands,
   textCoverage,
   truncatedTail,
+  mergeOverlappingBoxes,
+  splitTwoLines,
   planErase,
   stripForeign,
   inpaint,
@@ -645,5 +647,84 @@ describe("truncatedTail — 뒤가 잘린 문구", () => {
 
   it("아무것도 못 읽었으면 잘림으로 보지 않는다 (오탐 방지)", () => {
     expect(truncatedTail("고속 신축", "")).toBe(false);
+  });
+});
+
+describe("mergeOverlappingBoxes — 포개져 그려지는 문구 병합", () => {
+  const b = (box: [number, number, number, number], over: Partial<OcrBox> = {}): OcrBox => ({
+    box,
+    zh: "字",
+    ko: "글",
+    bg: "#ffffff",
+    fg: "#000000",
+    bold: false,
+    solid_bg: true,
+    ...over,
+  });
+
+  it("크게 겹치는 두 박스를 읽는 순서로 합친다 (실사례: GIF 부제 겹침)", () => {
+    const r = mergeOverlappingBoxes(
+      [b([100, 100, 160, 900], { ko: "매 순간의 열정을" }), b([120, 100, 180, 900], { ko: "선사하는 쾌감" })],
+      1000,
+      1000,
+    );
+    expect(r).toHaveLength(1);
+    expect(r[0].ko).toBe("매 순간의 열정을 선사하는 쾌감");
+    expect(r[0].box).toEqual([100, 100, 180, 900]);
+  });
+
+  it("떨어져 있는 박스는 건드리지 않는다", () => {
+    const r = mergeOverlappingBoxes([b([100, 100, 160, 900]), b([300, 100, 360, 900])], 1000, 1000);
+    expect(r).toHaveLength(2);
+  });
+
+  it("수동 조정한 박스는 합치지 않는다 (운영자가 자리를 정했다)", () => {
+    const r = mergeOverlappingBoxes(
+      [b([100, 100, 160, 900]), b([120, 100, 180, 900], { dy: 5 })],
+      1000,
+      1000,
+    );
+    expect(r).toHaveLength(2);
+  });
+
+  it("세로로 겹쳐도 색이 다르면 합치지 않는다 (빨간 제목 + 검정 부제)", () => {
+    const r = mergeOverlappingBoxes(
+      [b([100, 100, 160, 900], { fg: "#cc0000" }), b([155, 100, 210, 900])],
+      1000,
+      1000,
+    );
+    expect(r).toHaveLength(2);
+  });
+
+  it("가로로 어긋난 박스는 합치지 않는다 (옆에 놓인 다른 항목)", () => {
+    const r = mergeOverlappingBoxes(
+      [b([100, 100, 160, 400]), b([150, 500, 210, 900])],
+      1000,
+      1000,
+    );
+    expect(r).toHaveLength(2);
+  });
+
+  it("병합 결과는 줄 구조를 남긴다 — 두 줄이 한 줄로 뭉개지지 않게", () => {
+    const r = mergeOverlappingBoxes(
+      [b([100, 100, 160, 900], { ko: "첫 줄" }), b([155, 100, 210, 900], { ko: "둘째 줄" })],
+      1000,
+      1000,
+    );
+    expect(r[0].lines).toEqual(["첫 줄", "둘째 줄"]);
+  });
+});
+
+describe("splitTwoLines — 긴 문구 두 줄 나누기", () => {
+  it("가운데에서 가장 가까운 공백에서 나눈다", () => {
+    expect(splitTwoLines("매 순간의 열정을 선사하는 쾌감")).toEqual(["매 순간의 열정을", "선사하는 쾌감"]);
+  });
+
+  it("공백이 없으면 null (한 줄 유지)", () => {
+    expect(splitTwoLines("고속신축진동")).toBeNull();
+  });
+
+  it("한쪽이 너무 짧아지면 null", () => {
+    expect(splitTwoLines("아 진동바이브레이터")).toBeNull();
   });
 });

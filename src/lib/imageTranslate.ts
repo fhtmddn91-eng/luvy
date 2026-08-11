@@ -1152,6 +1152,105 @@ export function unifySizes(groups: number[], fitted: number[], floor = 0.75): nu
   return out;
 }
 
+/** 병합 결과 — 줄 구조를 살려서 그리기 위해 원래 줄들을 함께 넘긴다 */
+export type MergedBox = OcrBox & { lines?: string[] };
+
+/**
+ * 세로로 겹쳐 잡힌 "같은 문단의 줄들"을 한 덩어리로 합친다.
+ *
+ * OCR 이 문단을 줄 단위로 잡을 때 줄 박스끼리 세로로 살짝 겹치면, 각 박스
+ * 중앙에 그린 번역문이 포개져 읽을 수 없게 된다(실사례: GIF 부제 두 줄).
+ * 겹침 면적은 얼마 안 돼서 면적 기준으로는 못 잡는다 — "가로로 나란하고,
+ * 세로로 겹치고, 색·굵기가 같은" 줄들을 문단으로 보고 union 박스에 줄들을
+ * 차례로 그린다. 색이 다른 줄(빨간 제목 + 검정 부제)은 합치면 색이 뭉개지므로
+ * 놔둔다. 수동 조정한 박스는 운영자가 자리를 정한 것이므로 건드리지 않는다.
+ */
+export function mergeOverlappingBoxes(boxes: OcrBox[], W: number, H: number): MergedBox[] {
+  const eligible = (b: OcrBox) =>
+    (b.mode ?? "translate") === "translate" &&
+    b.ko.trim() !== "" &&
+    !hasManualOverride(b) &&
+    !isVerticalBox(b.box, W, H);
+
+  /** 가로 구간이 어느 정도 겹치는가 (좁은 쪽 폭 대비) */
+  const xOverlap = (a: OcrBox, b: OcrBox): number => {
+    const iv = Math.min(a.box[3], b.box[3]) - Math.max(a.box[1], b.box[1]);
+    if (iv <= 0) return 0;
+    return iv / Math.max(1, Math.min(a.box[3] - a.box[1], b.box[3] - b.box[1]));
+  };
+  const sameStyle = (a: OcrBox, b: OcrBox): boolean =>
+    a.fg.toLowerCase() === b.fg.toLowerCase() && (a.bold ?? false) === (b.bold ?? false);
+  /** 세로로 실제 겹치는가 — 겹치지 않는 줄은 그대로 둬도 충돌하지 않는다 */
+  const yTouch = (a: OcrBox, b: OcrBox): boolean => a.box[0] < b.box[2] && b.box[0] < a.box[2];
+
+  const used = new Array(boxes.length).fill(false);
+  const out: MergedBox[] = [];
+  for (let i = 0; i < boxes.length; i++) {
+    if (used[i]) continue;
+    if (!eligible(boxes[i])) {
+      out.push(boxes[i]);
+      continue;
+    }
+    const members = [boxes[i]];
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (let j = 0; j < boxes.length; j++) {
+        if (used[j] || j === i || !eligible(boxes[j]) || members.includes(boxes[j])) continue;
+        const hit = members.some(
+          (m) => yTouch(m, boxes[j]) && xOverlap(m, boxes[j]) >= 0.3 && sameStyle(m, boxes[j]),
+        );
+        if (!hit) continue;
+        used[j] = true;
+        members.push(boxes[j]);
+        grew = true;
+      }
+    }
+    if (members.length > 1) {
+      // 읽는 순서(위→아래, 왼→오른쪽)로 줄을 정렬해 union 박스에 담는다
+      members.sort((a, z) => a.box[0] - z.box[0] || a.box[1] - z.box[1]);
+      out.push({
+        ...members[0],
+        box: [
+          Math.min(...members.map((m) => m.box[0])),
+          Math.min(...members.map((m) => m.box[1])),
+          Math.max(...members.map((m) => m.box[2])),
+          Math.max(...members.map((m) => m.box[3])),
+        ],
+        zh: members.map((m) => m.zh).join(" "),
+        ko: members.map((m) => m.ko.trim()).join(" "),
+        lines: members.map((m) => m.ko.trim()),
+      });
+    } else {
+      out.push(boxes[i]);
+    }
+  }
+  return out;
+}
+
+/**
+ * 두 줄로 나눌 위치 — 가운데에서 가장 가까운 공백.
+ * 나눌 공백이 없거나 어느 한쪽이 너무 짧으면 null (한 줄 유지).
+ */
+export function splitTwoLines(ko: string): [string, string] | null {
+  const mid = ko.length / 2;
+  let best = -1;
+  let bd = Infinity;
+  for (let i = 1; i < ko.length - 1; i++) {
+    if (ko[i] !== " ") continue;
+    const d = Math.abs(i - mid);
+    if (d < bd) {
+      bd = d;
+      best = i;
+    }
+  }
+  if (best < 0) return null;
+  const a = ko.slice(0, best).trim();
+  const b = ko.slice(best + 1).trim();
+  if (a.length < 2 || b.length < 2) return null;
+  return [a, b];
+}
+
 function paintBoxes(
   ctx: SKRSContext2D,
   width: number,
@@ -1164,6 +1263,8 @@ function paintBoxes(
   interface Plan {
     it: OcrBox;
     ko: string;
+    /** 그릴 줄들 — 두 줄 배치가 유리하면 2개 */
+    lines: string[];
     b: PxBox;
     bw: number;
     bh: number;
@@ -1172,8 +1273,11 @@ function paintBoxes(
     fitted: number;
   }
 
+  // 겹치는 박스를 먼저 합친다 — 안 합치면 번역문이 포개져 그려진다
+  const mergedBoxes = mergeOverlappingBoxes(boxes, width, height);
+
   const plans: Plan[] = [];
-  for (const it of boxes) {
+  for (const it of mergedBoxes) {
     const mode = it.mode ?? "translate";
     if (mode === "keep") continue; // 손대지 않음 — 원문 그대로
 
@@ -1194,6 +1298,7 @@ function paintBoxes(
     plans.push({
       it,
       ko,
+      lines: it.lines && it.lines.length > 1 ? it.lines : [ko],
       b,
       bw,
       bh,
@@ -1203,21 +1308,44 @@ function paintBoxes(
     });
   }
 
-  // 박스에 들어가는 최대 크기를 먼저 구한다
-  for (const p of plans) {
+  /** 여러 줄이 박스에 들어가는 최대 글자 크기 (안 들어가면 6까지 줄인다) */
+  const fitLines = (p: Plan, lines: string[]): number => {
     let size = Math.floor(p.bh);
     while (size > 6) {
       ctx.font = `${size}px "${p.family}"`;
-      const m = ctx.measureText(p.ko);
-      const textH = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
-      if (m.width <= p.bw * 0.94 && textH <= p.bh * 0.82) break;
+      let maxW = 0;
+      let totalH = 0;
+      for (const ln of lines) {
+        const m = ctx.measureText(ln);
+        maxW = Math.max(maxW, m.width);
+        totalH += m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
+      }
+      totalH += (lines.length - 1) * size * 0.3; // 줄 간격
+      if (maxW <= p.bw * 0.94 && totalH <= p.bh * 0.82) break;
       size -= 1;
     }
-    p.fitted = size;
+    return size;
+  };
+
+  // 박스에 들어가는 최대 크기를 먼저 구한다.
+  // 긴 문구가 한 줄로 우겨넣어져 깨알만해지면(실사례: 병합된 부제), 박스가
+  // 충분히 높을 때 두 줄로 나눠 본다 — 눈에 띄게 커질 때만 채택한다.
+  for (const p of plans) {
+    p.fitted = fitLines(p, p.lines);
+    if (p.vertical || p.lines.length > 1) continue;
+    if (p.fitted >= p.bh * 0.45) continue; // 한 줄로도 충분히 크다
+    const two = splitTwoLines(p.ko);
+    if (!two) continue;
+    const size2 = fitLines(p, two);
+    if (size2 >= p.fitted * 1.35) {
+      p.lines = two;
+      p.fitted = size2;
+    }
   }
 
   // 원문에서 같은 크기였던 가로쓰기 문구끼리 크기를 통일한다
-  const flat = plans.filter((p) => !p.vertical);
+  // (두 줄로 나눈 문구는 크기 기준이 달라 통일 대상에서 뺀다)
+  const flat = plans.filter((p) => !p.vertical && p.lines.length === 1);
   if (flat.length > 1) {
     const heights = flat.map((p) => ((p.it.box[2] - p.it.box[0]) / 1000) * height);
     const unified = unifySizes(groupBySize(heights), flat.map((p) => p.fitted));
@@ -1255,13 +1383,17 @@ function paintBoxes(
     // 통일된 크기에 어드민 배율을 곱한다 (키우거나 줄일 수 있게)
     const size = Math.max(6, Math.round(p.fitted * (it.scale ?? 1)));
     ctx.font = `${size}px "${family}"`;
-    const metrics = ctx.measureText(ko);
-    const textH = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
-    ctx.fillText(
-      ko,
-      b.x0 + (bw - metrics.width) / 2 + offX,
-      b.y0 + (bh - textH) / 2 + metrics.actualBoundingBoxAscent + offY,
-    );
+    const gap = size * 0.3; // 줄 간격
+    const measured = p.lines.map((ln) => {
+      const m = ctx.measureText(ln);
+      return { ln, w: m.width, asc: m.actualBoundingBoxAscent, h: m.actualBoundingBoxAscent + m.actualBoundingBoxDescent };
+    });
+    const blockH = measured.reduce((s, m) => s + m.h, 0) + gap * (measured.length - 1);
+    let y = b.y0 + (bh - blockH) / 2 + offY;
+    for (const m of measured) {
+      ctx.fillText(m.ln, b.x0 + (bw - m.w) / 2 + offX, y + m.asc);
+      y += m.h + gap;
+    }
   }
 }
 
