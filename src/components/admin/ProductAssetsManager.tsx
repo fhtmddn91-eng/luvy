@@ -59,7 +59,17 @@ const WEIGHTS = [
   { v: "ExtraBold", label: "아주 굵게" },
 ];
 
-/** 문구 한 줄의 편집 컨트롤 — 처리방식·위치·크기·굵기 */
+/**
+ * 문구 한 줄의 편집 컨트롤 — 처리방식·위치·크기·굵기.
+ *
+ * 번역문 input 은 defaultValue, 처리방식·위치·크기는 useState 초기값 — **둘 다
+ * 마운트될 때 한 번만** item 을 읽는다. 그래서 이 컴포넌트가 재사용되면 왼쪽
+ * 원문(zh)만 새 값으로 바뀌고 오른쪽 입력은 앞 이미지 값이 남는다. 운영에서
+ * "원문과 수정 문구가 다르게 보이는데 새로고침하면 맞다"로 신고된 증상이 이것이고,
+ * 그 상태로 저장하면 엉뚱한 문구가 실제로 들어간다.
+ * 고치는 방법은 값을 밀어넣는 게 아니라 **key 로 새로 마운트시키는 것**이다
+ * (호출부의 key 두 곳 참고).
+ */
 function BoxRow({ item, index }: { item: BoxItem; index: number }) {
   const [mode, setMode] = useState<string>(item.mode ?? "translate");
   const [dx, setDx] = useState<number>(item.dx ?? 0);
@@ -198,8 +208,11 @@ function TranslationEditor({ asset, onClose }: { asset: AssetRow; onClose: () =>
         </a>
 
         <form action={formAction} className="space-y-3">
+          {/* key 에 파일명을 섞는다 — 번역본은 저장할 때마다 새 파일로 바뀌므로,
+              편집기를 띄운 채 이 이미지가 다시 렌더되면(일괄 번역 등) 행이 새로
+              마운트돼 바뀐 문구를 읽는다. 순번만 쓰면 옛 값이 그대로 남는다. */}
           {items.map((it, i) => (
-            <BoxRow key={i} item={it} index={i} />
+            <BoxRow key={`${asset.url}#${i}`} item={it} index={i} />
           ))}
           {state.error && <p className={errorCls}>{state.error}</p>}
           <button type="submit" disabled={pending} className={btnPrimary}>
@@ -498,7 +511,15 @@ export function ProductAssetsManager({
           </ul>
 
           {editingAsset && (
-            <TranslationEditor asset={editingAsset} onClose={() => setEditing(null)} />
+            // key=자산 id — 없으면 편집기를 띄운 채 다른 이미지의 '문구 수정'을
+            // 눌렀을 때 React 가 같은 인스턴스를 재사용해, 왼쪽 원문만 새 이미지
+            // 것으로 바뀌고 번역문·처리방식은 앞 이미지 것이 그대로 남았다.
+            // (아래 BoxRow 주석 참고 — 폼이 전부 비제어 입력이라 벌어지는 일)
+            <TranslationEditor
+              key={editingAsset.id}
+              asset={editingAsset}
+              onClose={() => setEditing(null)}
+            />
           )}
         </>
       )}
