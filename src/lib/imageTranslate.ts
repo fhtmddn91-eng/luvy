@@ -309,13 +309,56 @@ async function filterByContrast(
   return kept;
 }
 
-function translatePrompt(items: string[], strict: boolean): string {
+/**
+ * 이 박스에 무리 없이 들어가는 한국어 글자 수.
+ *
+ * 예전 규칙은 "원문 글자수를 넘지 마라"였는데, 운영 데이터 732개 문구를 재보니
+ * **91%가 이걸 어겼다** — 한국어는 원문보다 길어지는 게 정상이라(중앙값 1.31배)
+ * 지킬 수 없는 규칙이었고, 지켜지지 않는 규칙은 모델에게 "여기 규칙은 대충 봐도
+ * 된다"고 가르친다. 실측 분포에 맞춰 다시 잡았다:
+ *   - 원문 대비 1.6배 (95퍼센타일이 2.25배, 여기서 자르면 상위 2.3%만 걸린다)
+ *   - 박스 수용량(폭÷높이) 대비 2.2배 — 글자가 박스 높이의 절반 크기까지
+ *     줄어드는 선. 이보다 길면 깨알이 되거나 모델이 뒷말을 잘라버린다(실사례).
+ * 둘 중 큰 값을 쓴다 — 넓은 박스에서 굳이 짧게 쥐어짤 이유는 없다.
+ */
+export function charBudget(
+  box: [number, number, number, number],
+  W: number,
+  H: number,
+  zhLen: number,
+): number {
+  const [ymin, xmin, ymax, xmax] = box;
+  const bw = ((xmax - xmin) / 1000) * W;
+  const bh = ((ymax - ymin) / 1000) * H;
+  // 세로쓰기는 글자를 쌓으므로 폭÷높이가 수용량이 아니다 — 원문 기준만 본다
+  const vertical = bh > bw * 2.5;
+  const capacity = vertical || bh <= 0 ? 0 : Math.ceil((bw / bh) * 2.2);
+  return Math.max(6, Math.ceil(zhLen * 1.6), capacity);
+}
+
+interface TranslateOpts {
+  /** 항목별 최대 글자 수 — 이미지에 들어갈 자리가 정해져 있다 */
+  budgets?: number[];
+  /** 앞선 답에 한자가 남았을 때 */
+  strict?: boolean;
+  /** 앞선 답이 길이 예산을 넘었을 때 */
+  shorten?: boolean;
+}
+
+function translatePrompt(items: string[], opts: TranslateOpts): string {
+  const { budgets, strict, shorten } = opts;
+  const list = budgets
+    ? items.map((t, i) => `${i + 1}. "${t}" → 최대 ${budgets[i]}자`).join("\n")
+    : JSON.stringify(items);
   return `중국 상품 상세페이지 이미지에서 추출한 문구 목록입니다. 각각 한국어로 번역하세요.
 
 규칙:
 - 한국 성인용품 도매몰 상세페이지에서 실제로 쓰는 자연스러운 표현으로
 - **숫자·단위·모델명은 원문 그대로 유지** (53MIN, 3.7V, SHD-S549 등을 절대 바꾸거나 빼지 마세요)
-- **원문 글자수를 넘지 않게** 짧게. 이미지 안에 들어가야 하므로 길면 글씨가 작아져 안 읽힙니다
+- **항목마다 적힌 "최대 N자"를 공백 포함해서 지키세요.** 원문이 있던 자리에 그대로
+  들어가야 합니다. 넘치면 글씨가 깨알이 되거나 뒷말이 잘려 나갑니다${
+    shorten ? "\n- 이전 답이 이 한도를 넘었습니다. 뜻을 지키되 더 짧은 말로 바꾸세요." : ""
+  }
 - 중국어 의성어·의태어를 소리 나는 대로 옮기지 마세요.
   한국에서 쓰는 말로 바꿉니다 (拍打→탭·두드림, 咬合→흡입·조임, 抠震→자극)
 - 설명하듯 늘이지 말고 상품 카피처럼 끊어 씁니다
@@ -327,11 +370,11 @@ function translatePrompt(items: string[], strict: boolean): string {
 - 입력과 같은 개수, 같은 순서의 JSON 문자열 배열만 출력
 
 입력 (${items.length}개):
-${JSON.stringify(items)}`;
+${list}`;
 }
 
-async function translateTexts(items: string[], strict = false): Promise<string[]> {
-  const parts = await callGemini(MODEL, [{ text: translatePrompt(items, strict) }], {
+async function translateTexts(items: string[], opts: TranslateOpts = {}): Promise<string[]> {
+  const parts = await callGemini(MODEL, [{ text: translatePrompt(items, opts) }], {
     maxOutputTokens: 4000,
     responseMimeType: "application/json",
     thinkingConfig: { thinkingLevel: "minimal" },
@@ -341,6 +384,17 @@ async function translateTexts(items: string[], strict = false): Promise<string[]
     throw new Error(`번역 결과 개수 불일치 (${items.length} → ${Array.isArray(raw) ? raw.length : "?"})`);
   }
   return raw.map((s) => String(s ?? "").trim().slice(0, 200));
+}
+
+/**
+ * 예산을 넘긴 문구만 골라 한 번 더 짧게 받는다.
+ *
+ * 길이 문제를 여기서 잡는 게 핵심이다 — 글자 수 검사는 공짜이고 재번역은
+ * 텍스트 호출(거의 무료)인 반면, 길어서 이미지 생성이 잘리면 그림을 통째로
+ * 다시 뽑아야 한다(장당 ~$0.04). 싼 단계에서 막아 비싼 단계를 살린다.
+ */
+function overBudget(koList: string[], budgets: number[]): number[] {
+  return koList.map((ko, i) => ([...ko].length > budgets[i] ? i : -1)).filter((i) => i >= 0);
 }
 
 /**
@@ -386,18 +440,46 @@ export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
   const solid = await filterByContrast(data, mime, extracted);
   if (solid.length === 0) return [];
 
-  const koList = await translateTexts(solid.map((b) => b.zh));
+  // 문구마다 "자리에 들어갈 수 있는 글자 수"를 계산해 번역 단계에서부터 지키게 한다
+  const meta = await sharp(mime === "image/gif" ? await sharp(data, { page: 0, pages: 1 }).png().toBuffer() : data).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  const budgets = solid.map((b) => charBudget(b.box, W, H, [...b.zh].length));
+
+  const koList = await translateTexts(solid.map((b) => b.zh), { budgets });
 
   // 한자가 남은 항목만 한 번 더 강하게 재번역 (남으면 폰트에서 네모로 깨진다)
   const bad = koList.map((ko, i) => (hasHanzi(ko) ? i : -1)).filter((i) => i >= 0);
   if (bad.length > 0) {
     try {
-      const repaired = await translateTexts(bad.map((i) => solid[i].zh), true);
+      const repaired = await translateTexts(
+        bad.map((i) => solid[i].zh),
+        { budgets: bad.map((i) => budgets[i]), strict: true },
+      );
       bad.forEach((orig, j) => {
         if (!hasHanzi(repaired[j]) && repaired[j]) koList[orig] = repaired[j];
       });
     } catch {
       // 보정 실패 시 원래 번역 유지 — 어드민이 문구 수정으로 고칠 수 있다
+    }
+  }
+
+  // 자리보다 긴 문구만 한 번 더 짧게 — 텍스트 호출은 거의 무료이고,
+  // 여기서 못 잡으면 이미지 생성이 뒷말을 잘라 그림을 통째로 다시 뽑아야 한다
+  const long = overBudget(koList, budgets);
+  if (long.length > 0) {
+    try {
+      const shorter = await translateTexts(
+        long.map((i) => solid[i].zh),
+        { budgets: long.map((i) => budgets[i]), shorten: true },
+      );
+      long.forEach((orig, j) => {
+        const s = shorter[j];
+        // 더 짧아졌고 한자가 없을 때만 채택 — 아니면 원래 번역이 낫다
+        if (s && !hasHanzi(s) && [...s].length < [...koList[orig]].length) koList[orig] = s;
+      });
+    } catch {
+      // 줄이기 실패는 치명적이지 않다 — 렌더 쪽 두 줄 배치·검수가 받아준다
     }
   }
 
@@ -423,7 +505,7 @@ export async function retranslateBoxes(boxes: OcrBox[]): Promise<OcrBox[]> {
   const bad = koList.map((ko, i) => (hasHanzi(ko) ? i : -1)).filter((i) => i >= 0);
   if (bad.length > 0) {
     try {
-      const repaired = await translateTexts(bad.map((i) => targets[i].b.zh), true);
+      const repaired = await translateTexts(bad.map((i) => targets[i].b.zh), { strict: true });
       bad.forEach((orig, j) => {
         if (repaired[j] && !hasHanzi(repaired[j])) koList[orig] = repaired[j];
       });

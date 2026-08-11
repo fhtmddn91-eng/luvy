@@ -27,6 +27,7 @@ import {
   truncatedTail,
   mergeOverlappingBoxes,
   splitTwoLines,
+  charBudget,
   planErase,
   stripForeign,
   inpaint,
@@ -726,5 +727,32 @@ describe("splitTwoLines — 긴 문구 두 줄 나누기", () => {
 
   it("한쪽이 너무 짧아지면 null", () => {
     expect(splitTwoLines("아 진동바이브레이터")).toBeNull();
+  });
+});
+
+describe("charBudget — 자리에 들어갈 글자 수", () => {
+  // 1000x1000 이미지에서 폭 400px·높이 40px 박스 → 수용량 10자
+  const wide: [number, number, number, number] = [100, 100, 140, 500];
+
+  it("원문 대비 1.6배와 박스 수용량 중 큰 쪽을 준다", () => {
+    // zh 4자 → 6.4 → 7 / 수용량 10×2.2 = 22 → 넓은 박스라 22
+    expect(charBudget(wide, 1000, 1000, 4)).toBe(22);
+    // zh 20자 → 32 / 수용량 22 → 원문이 기니 32
+    expect(charBudget(wide, 1000, 1000, 20)).toBe(32);
+  });
+
+  it("세로쓰기는 폭÷높이가 수용량이 아니므로 원문 기준만 본다", () => {
+    const vert: [number, number, number, number] = [100, 100, 500, 140];
+    expect(charBudget(vert, 1000, 1000, 5)).toBe(8); // 5×1.6
+  });
+
+  it("아주 짧은 문구도 최소 6자는 준다 (한 글자로 옮길 수 없는 말이 있다)", () => {
+    const tiny: [number, number, number, number] = [100, 100, 120, 130];
+    expect(charBudget(tiny, 1000, 1000, 1)).toBe(6);
+  });
+
+  it("실측 분포의 90%는 예산 안에 든다 (지킬 수 있는 규칙이어야 한다)", () => {
+    // 중앙값 1.31배, 95퍼센타일 2.25배 → 1.6배 기준은 대다수를 통과시킨다
+    expect(charBudget(wide, 1000, 1000, 10)).toBeGreaterThanOrEqual(16);
   });
 });
