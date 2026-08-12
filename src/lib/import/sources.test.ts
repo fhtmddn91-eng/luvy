@@ -31,12 +31,15 @@ describe("sources — 도매처 판별", () => {
     }
   });
 
-  it("Cafe24 3사는 cafe24 이미지 CDN 을 허용한다", () => {
-    for (const id of ["doradora", "pinkbox", "lovemall"]) {
+  it("cafe24 이미지 CDN 을 허용한다 — 리보스 포함", () => {
+    // 리보스는 자체 몰이지만 상세이미지를 rebossshop.cafe24.com 에 올린다(실측
+    // K-579). 처음엔 oxox.co.kr 만 열었다가 상세이미지가 전부 버려질 뻔했다.
+    for (const id of ["doradora", "pinkbox", "lovemall", "ribos"]) {
       expect(sourceById(id)!.imageHost.test("image.cafe24img.com")).toBe(true);
+      expect(sourceById(id)!.imageHost.test("rebossshop.cafe24.com")).toBe(true);
     }
-    // 다른 도매처 CDN 은 열어주지 않는다
-    expect(sourceById("ribos")!.imageHost.test("image.cafe24img.com")).toBe(false);
+    // 레드그룹은 아직 자기 도메인만 — 실측 전이므로 넓히지 않는다
+    expect(sourceById("redgroup")!.imageHost.test("image.cafe24img.com")).toBe(false);
   });
 
   it("id 는 중복되지 않는다", () => {

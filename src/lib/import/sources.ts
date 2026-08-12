@@ -82,7 +82,9 @@ export const SOURCES: SourceSite[] = [
     label: "리보스",
     domain: "oxox.co.kr",
     host: /(^|\.)oxox\.co\.kr$/i,
-    imageHost: /(^|\.)oxox\.co\.kr$/i,
+    // 대표이미지는 admin.oxox.co.kr, 상세이미지는 rebossshop.cafe24.com 에 있다
+    // (실측 K-579). cafe24 를 안 열면 상세이미지가 전부 버려진다.
+    imageHost: /(^|\.)(oxox\.co\.kr|cafe24img\.com|cafe24\.com)$/i,
     translate: false,
     currency: "KRW",
   },

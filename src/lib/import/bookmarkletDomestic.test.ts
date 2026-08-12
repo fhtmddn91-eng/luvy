@@ -86,4 +86,30 @@ describe("국내 수집 북마클릿", () => {
     // 문자열로 만드는 코드라 이스케이프 실수가 배포까지 살아 나간다
     expect(() => new Function(SRC)).not.toThrow();
   });
+
+  // ---- 리보스(자체 제작 몰) 실측 대응 — 2026-08 실페이지 K-579 에서 확인한 것들 ----
+
+  it("리보스 상품번호: p_view.php 의 p= 코드를 잡는다", () => {
+    expect(SRC).toContain("p_view");
+  });
+
+  it("리보스 이미지: cafe24 상세이미지 호스트가 화이트리스트에 있다", () => {
+    // 상세이미지가 rebossshop.cafe24.com 에 있다 — sources.ts 에서 안 열면 전부 버려진다
+    const table = JSON.parse(domesticSiteTable()) as { id: string; imageHost: string }[];
+    const ribos = table.find((r) => r.id === "ribos");
+    expect(new RegExp(ribos!.imageHost, "i").test("rebossshop.cafe24.com")).toBe(true);
+    expect(new RegExp(ribos!.imageHost, "i").test("admin.oxox.co.kr")).toBe(true);
+  });
+
+  it("확장자 없는 주소는 세지 않는다 (서버 검사와 일치)", () => {
+    // 리보스 투명 스페이서(product/uvblankgif)가 상세이미지 2장 중 1장으로
+    // 세어졌다 — 서버가 버리는 걸 북마클릿이 세면 알림 장수가 거짓말이 된다
+    expect(SRC).toContain("uvblankgif");
+  });
+
+  it("리보스 상품명·매입가 폴백이 들어 있다", () => {
+    expect(SRC).toContain("권장판매가");   // "K-579 상품명 [권장판매가:...]" 파싱
+    expect(SRC).toContain("판매가격");     // "판매가격 : 290,000원" 라벨 스캔
+    expect(SRC).toContain("상품");        // 본문 "상품코드 : K-579" 폴백
+  });
 });

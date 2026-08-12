@@ -67,6 +67,10 @@ export function buildDomesticBookmarkletSource(): string {
         var p = new URL(u, location.href);
         if (p.protocol !== 'http:' && p.protocol !== 'https:') return null;
         if (!IMG_HOST.test(p.hostname)) return null;
+        // 서버(normalizeImageUrlFor)와 같은 확장자 검사 — 안 맞추면 여기서 센 장수와
+        // 실제 등록 장수가 어긋난다. 리보스의 투명 스페이서(product/uvblankgif,
+        // 확장자 없음)가 상세이미지로 세어진 실사례.
+        if (!/\\.(jpe?g|png|gif|webp)$/i.test(p.pathname)) return null;
         return 'https://' + p.hostname + p.pathname;
       } catch(e){ return null; }
     }
@@ -89,7 +93,10 @@ export function buildDomesticBookmarkletSource(): string {
     function junkUrl(u){
       if (/\\.svg$/i.test(u)) return true;
       if (/echosting\\.cafe24\\.com/i.test(u)) return true;      // 카페24 관리·공용 에셋
-      return /\\/(?:skin|common|banner|btn|button|icon|icons|logo|bg|sns|mobile_skin)\\//i.test(u);
+      // design·category: 리보스(자체 몰)가 로고·통장이미지를 goods_img/design/ 에,
+      // 사이드바의 다른 상품 썸네일을 goods_img/category/ 에 둔다(실측 K-579).
+      // category 를 안 거르면 옆 상품 사진이 이 상품 상세로 딸려 들어온다.
+      return /\\/(?:skin|common|banner|btn|button|icon|icons|logo|bg|sns|mobile_skin|design|category)\\//i.test(u);
     }
     /** 상품 영역이 아닌 UI 블록 — 헤더·푸터·좌우 메뉴·배너·리뷰·추천 */
     var JUNK_AREA = 'header,footer,nav,aside,#header,#footer,#gnb,#lnb,#quick,'
@@ -146,11 +153,17 @@ export function buildDomesticBookmarkletSource(): string {
            || u.match(/[?&]branduid=([A-Za-z0-9_-]+)/i)      // 메이크샵
            || u.match(/[?&]goodsno=(\\d+)/i)                 // 고도몰
            || u.match(/[?&]goodsCd=([A-Za-z0-9_-]+)/i)
-           || u.match(/[?&](?:idx|pid|p_idx|it_id)=([A-Za-z0-9_-]+)/i);
+           || u.match(/[?&](?:idx|pid|p_idx|it_id)=([A-Za-z0-9_-]+)/i)
+           // 리보스: p_view.php?c=01/10&p=K-579 — 상품코드가 p= 에 온다.
+           // p= 는 다른 몰에서 페이지 번호로도 쓰여, p_view.php 경로일 때만 믿는다.
+           || (/p_view\\.php/i.test(u) ? u.match(/[?&]p=([A-Za-z0-9_-]+)/i) : null);
       if (m) return m[1];
       var inp = document.querySelector('input[name="product_no"],input[name="branduid"],input[name="goodsno"],input[name="it_id"]');
       if (inp && inp.value) return String(inp.value).trim();
       if (ld && (ld.sku || ld.productID)) return String(ld.sku || ld.productID).trim();
+      // 자체 제작 몰 폴백: 본문에 "상품코드 : K-579" 처럼 적어두는 곳이 많다
+      var bodyCode = (document.body.innerText || '').match(/상품\\s*코드\\s*[:：]\\s*([A-Za-z0-9_-]{2,40})/);
+      if (bodyCode) return bodyCode[1];
       return null;
     }
     var productNo = pickProductNo();
@@ -170,10 +183,34 @@ export function buildDomesticBookmarkletSource(): string {
         '.xans-product-detaildesign .name, .xans-product-detail .name, [class*="prdName"],'
         + '[class*="product-name"], [class*="goods_name"], .item_detail_tit, h1.tit, h2.name');
       var t = el ? (el.innerText || '').trim().split('\\n')[0] : '';
-      if (!t) t = (document.title || '').trim();
       return t;
     }
-    var title = String((ld && ld.name) || meta('og:title') || domTitle() || '').trim();
+    // 리보스: 메타데이터가 없고 상품명이 "K-579 더커 자동확장기 [권장판매가:497,000원 ]"
+    // 꼴의 맨 텍스트로만 있다(실측). 상품코드 머리와 [권장판매가...] 꼬리를 뗀다.
+    function titleFromRrpText(){
+      // 문서 순서로 훑으면 부모 TD(옆칸 안내문까지 포함)가 자식 FONT 보다 먼저
+      // 걸린다(실측 — 상품명 뒤에 "판매가격 : ..." 안내가 통째로 붙어 나옴).
+      // 가장 짧은 후보가 상품명만 담은 안쪽 요소다.
+      var best = '';
+      var els = document.querySelectorAll('font,b,strong,td,h1,h2,h3');
+      for (var i = 0; i < els.length; i++) {
+        var t = (els[i].innerText || '').replace(/\\s+/g, ' ').trim();
+        if (t.length < 200 && /\\[\\s*권장판매가/.test(t) && (!best || t.length < best.length)) best = t;
+      }
+      return best
+        ? best.replace(/\\[\\s*권장판매가[^\\]]*\\]?/, '')
+              .replace(new RegExp('^\\\\s*' + productNo + '\\\\s*'), '')
+              .trim()
+        : '';
+    }
+    // og:title 이 상품명이 아니라 쇼핑몰 이름만 담긴 사이트가 있다(리보스 실측:
+    // og:title="리보스"). 사이트 이름과 같으면 상품명이 아닌 것으로 보고 버린다.
+    function realTitle(t){
+      t = String(t || '').trim();
+      return t && t !== site.label ? t : '';
+    }
+    var title = realTitle(ld && ld.name) || realTitle(meta('og:title'))
+             || titleFromRrpText() || domTitle() || (document.title || '').trim();
 
     // ---------- 대표 이미지 ----------
     var main = [];
@@ -187,7 +224,9 @@ export function buildDomesticBookmarkletSource(): string {
     if (ogImg && !junkUrl(ogImg)) main.push(ogImg);
     main = main.concat(collect(
       '.xans-product-image, #prdImgList, .keyImg, .BigImage, .thumbnail,'
-      + '[class*="product-image"], [class*="goods_image"], [class*="detail_img"]', true));
+      + '[class*="product-image"], [class*="goods_image"], [class*="detail_img"],'
+      // 리보스: 클래스가 아예 없는 옛날 표 레이아웃 — 대표이미지는 경로로 잡는다
+      + 'img[src*="goods_img/product"]', true));
     main = uniq(main);
 
     // ---------- 옵션(SKU) 썸네일 ----------
@@ -208,6 +247,9 @@ export function buildDomesticBookmarkletSource(): string {
       document.querySelectorAll('img').forEach(function(i){
         if (i.closest && i.closest(JUNK_AREA)) return;
         if (i.naturalWidth > 0 && i.naturalWidth < 300) return;   // 아이콘·버튼 컷
+        // 가로로 긴 장식 띠(하단 로고 455×172, 은행 안내 405×37 — 리보스 실측)는
+        // 폭만 보면 통과한다. 상품 상세컷은 세로가 길므로 높이로 마저 거른다.
+        if (i.naturalHeight > 0 && i.naturalHeight < 200) return;
         var s = srcOf(i);
         if (s && !junkUrl(s)) detail.push(s);
       });
@@ -227,6 +269,13 @@ export function buildDomesticBookmarkletSource(): string {
         '#span_product_price_text, #span_product_price_sale, [id*="product_price"],'
         + '[class*="price"] .val, [class*="sale_price"], [class*="product-price"]');
       if (pe) price = num((pe.innerText || '').split(/[~\\n]/)[0]);
+    }
+    if (!price) {
+      // 자체 제작 몰 폴백: 셀렉터로 못 잡으면 "판매가격 : 290,000원" 꼴의
+      // 라벨 붙은 텍스트를 본문에서 찾는다(리보스 실측 — id·class 가 아예 없음).
+      // "권장판매가"(소비자 권장가)는 라벨이 달라 여기 안 걸린다 — 매입가만 잡힌다.
+      var pm = (document.body.innerText || '').match(/(?:판매가격|공급가격|공급가|회원가|도매가격|도매가)\\s*[:：]\\s*([\\d,]+)\\s*원/);
+      if (pm) price = num(pm[1]);
     }
 
     // ---------- 상품 정보 표 ----------
