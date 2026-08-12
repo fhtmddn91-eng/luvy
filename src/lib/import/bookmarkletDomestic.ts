@@ -94,6 +94,9 @@ export function buildDomesticBookmarkletSource(): string {
     function junkUrl(u){
       if (/\\.svg$/i.test(u)) return true;
       if (/echosting\\.cafe24\\.com/i.test(u)) return true;      // 카페24 관리·공용 에셋
+      // 파일명에 logo 가 든 것도 컷 — 레드그룹은 og:image 가 루트의
+      // regdroup_logo-s.png 라 디렉토리 검사(/logo/)를 빠져나갔다(실측).
+      if (/logo[^/]*$/i.test(u)) return true;
       // design·category: 리보스(자체 몰)가 로고·통장이미지를 goods_img/design/ 에,
       // 사이드바의 다른 상품 썸네일을 goods_img/category/ 에 둔다(실측 K-579).
       // category 를 안 거르면 옆 상품 사진이 이 상품 상세로 딸려 들어온다.

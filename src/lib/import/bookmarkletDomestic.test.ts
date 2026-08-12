@@ -131,4 +131,10 @@ describe("국내 수집 북마클릿", () => {
   it(".img 확장자(speedgabia)를 이미지로 인정한다", () => {
     expect(SRC).toContain("|img)$");
   });
+
+  it("파일명에 logo 가 들어간 이미지를 걸러낸다", () => {
+    // 레드그룹 og:image 가 루트의 regdroup_logo-s.png — /logo/ 디렉토리
+    // 검사만으로는 못 걸러 대표이미지 1번에 사이트 로고가 들어갔다(실측)
+    expect(SRC).toContain("logo[^/]*$");
+  });
 });
