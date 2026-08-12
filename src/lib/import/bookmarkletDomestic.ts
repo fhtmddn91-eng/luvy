@@ -70,7 +70,8 @@ export function buildDomesticBookmarkletSource(): string {
         // 서버(normalizeImageUrlFor)와 같은 확장자 검사 — 안 맞추면 여기서 센 장수와
         // 실제 등록 장수가 어긋난다. 리보스의 투명 스페이서(product/uvblankgif,
         // 확장자 없음)가 상세이미지로 세어진 실사례.
-        if (!/\\.(jpe?g|png|gif|webp)$/i.test(p.pathname)) return null;
+        // img: 레드그룹 이미지 서버(speedgabia)의 비표준 확장자 — 내용물은 GIF/JPEG.
+        if (!/\\.(jpe?g|png|gif|webp|img)$/i.test(p.pathname)) return null;
         return 'https://' + p.hostname + p.pathname;
       } catch(e){ return null; }
     }
@@ -99,10 +100,13 @@ export function buildDomesticBookmarkletSource(): string {
       return /\\/(?:skin|common|banner|btn|button|icon|icons|logo|bg|sns|mobile_skin|design|category)\\//i.test(u);
     }
     /** 상품 영역이 아닌 UI 블록 — 헤더·푸터·좌우 메뉴·배너·리뷰·추천 */
+    // notice: 레드그룹은 상세페이지의 "신상품" 추천 위젯이 #notice_864 에 들어 있어
+    // (실측), 안 거르면 옆 상품 대표이미지 18장이 이 상품 상세로 딸려 들어온다.
     var JUNK_AREA = 'header,footer,nav,aside,#header,#footer,#gnb,#lnb,#quick,'
       + '[class*="header"],[class*="footer"],[class*="gnb"],[class*="lnb"],[class*="quick"],'
       + '[class*="banner"],[class*="logo"],[class*="popup"],[class*="review"],[class*="recommend"],'
-      + '[class*="relation"],[class*="cart"],[class*="search"],[id*="header"],[id*="footer"]';
+      + '[class*="relation"],[class*="cart"],[class*="search"],[id*="header"],[id*="footer"],'
+      + '[class*="notice"],[id*="notice"]';
 
     /** 지연 로딩 이미지는 src 가 비어 있고 data-* 에 실제 주소가 들어 있다 */
     function srcOf(img){
@@ -154,6 +158,7 @@ export function buildDomesticBookmarkletSource(): string {
            || u.match(/[?&]goodsno=(\\d+)/i)                 // 고도몰
            || u.match(/[?&]goodsCd=([A-Za-z0-9_-]+)/i)
            || u.match(/[?&](?:idx|pid|p_idx|it_id)=([A-Za-z0-9_-]+)/i)
+           || u.match(/[?&]gcode=([A-Za-z0-9_-]+)/i)          // 레드그룹 (실측 gcode=1858)
            // 리보스: p_view.php?c=01/10&p=K-579 — 상품코드가 p= 에 온다.
            // p= 는 다른 몰에서 페이지 번호로도 쓰여, p_view.php 경로일 때만 믿는다.
            || (/p_view\\.php/i.test(u) ? u.match(/[?&]p=([A-Za-z0-9_-]+)/i) : null);
@@ -183,7 +188,15 @@ export function buildDomesticBookmarkletSource(): string {
         '.xans-product-detaildesign .name, .xans-product-detail .name, [class*="prdName"],'
         + '[class*="product-name"], [class*="goods_name"], .item_detail_tit, h1.tit, h2.name');
       var t = el ? (el.innerText || '').trim().split('\\n')[0] : '';
-      return t;
+      if (t) return t;
+      // 자체 제작 몰 폴백: 첫 번째 의미 있는 제목 태그. 레드그룹은 상품명이
+      // 맨 h2 로만 있다(실측 "[[한국총판]-최저가준수] [OTOUCH] 플레저 엔진").
+      var hs = document.querySelectorAll('h1,h2,h3');
+      for (var i = 0; i < hs.length; i++) {
+        var ht = (hs[i].innerText || '').trim().split('\\n')[0];
+        if (ht.length >= 5 && realTitle(ht)) return ht;
+      }
+      return '';
     }
     // 리보스: 메타데이터가 없고 상품명이 "K-579 더커 자동확장기 [권장판매가:497,000원 ]"
     // 꼴의 맨 텍스트로만 있다(실측). 상품코드 머리와 [권장판매가...] 꼬리를 뗀다.
@@ -204,10 +217,13 @@ export function buildDomesticBookmarkletSource(): string {
         : '';
     }
     // og:title 이 상품명이 아니라 쇼핑몰 이름만 담긴 사이트가 있다(리보스 실측:
-    // og:title="리보스"). 사이트 이름과 같으면 상품명이 아닌 것으로 보고 버린다.
+    // og:title="리보스", 레드그룹 실측: og:title="REDGROUP"). 한글 이름(label)과
+    // 영문 id 양쪽 다 대조해, 사이트 이름이면 상품명이 아닌 것으로 보고 버린다.
     function realTitle(t){
       t = String(t || '').trim();
-      return t && t !== site.label ? t : '';
+      if (!t || t === site.label) return '';
+      if (t.toLowerCase() === site.id.toLowerCase()) return '';
+      return t;
     }
     var title = realTitle(ld && ld.name) || realTitle(meta('og:title'))
              || titleFromRrpText() || domTitle() || (document.title || '').trim();
@@ -226,7 +242,9 @@ export function buildDomesticBookmarkletSource(): string {
       '.xans-product-image, #prdImgList, .keyImg, .BigImage, .thumbnail,'
       + '[class*="product-image"], [class*="goods_image"], [class*="detail_img"],'
       // 리보스: 클래스가 아예 없는 옛날 표 레이아웃 — 대표이미지는 경로로 잡는다
-      + 'img[src*="goods_img/product"]', true));
+      + 'img[src*="goods_img/product"],'
+      // 레드그룹: 상품 모듈이 #shop_view_모듈번호 (실측 #shop_view_136)
+      + '[id*="shop_view"]', true));
     main = uniq(main);
 
     // ---------- 옵션(SKU) 썸네일 ----------
@@ -242,7 +260,8 @@ export function buildDomesticBookmarkletSource(): string {
      */
     var detail = collect(
       '#prdDetail, #detail, .xans-product-additional, [class*="detail-cont"],'
-      + '[class*="detailArea"], [class*="goods_description"], [class*="prd-detail"]', false);
+      + '[class*="detailArea"], [class*="goods_description"], [class*="prd-detail"],'
+      + '#goods_detail', false);   // 레드그룹 상세설명 영역 (실측)
     if (detail.length === 0) {
       document.querySelectorAll('img').forEach(function(i){
         if (i.closest && i.closest(JUNK_AREA)) return;
@@ -267,6 +286,7 @@ export function buildDomesticBookmarkletSource(): string {
     if (!price) {
       var pe = document.querySelector(
         '#span_product_price_text, #span_product_price_sale, [id*="product_price"],'
+        + '#price_text,'   // 레드그룹 판매가 자리 (실측 — 최저판매가와 구분되는 유일한 표식)
         + '[class*="price"] .val, [class*="sale_price"], [class*="product-price"]');
       if (pe) price = num((pe.innerText || '').split(/[~\\n]/)[0]);
     }

@@ -38,8 +38,11 @@ describe("sources — 도매처 판별", () => {
       expect(sourceById(id)!.imageHost.test("image.cafe24img.com")).toBe(true);
       expect(sourceById(id)!.imageHost.test("rebossshop.cafe24.com")).toBe(true);
     }
-    // 레드그룹은 아직 자기 도메인만 — 실측 전이므로 넓히지 않는다
+    // 레드그룹은 cafe24 가 아니라 가비아 웹하드를 쓴다(실측 gcode=1858)
     expect(sourceById("redgroup")!.imageHost.test("image.cafe24img.com")).toBe(false);
+    expect(sourceById("redgroup")!.imageHost.test("redlove.speedgabia.com")).toBe(true);
+    // 다른 도매처가 speedgabia 를 쓰는 건 아니다
+    expect(sourceById("doradora")!.imageHost.test("redlove.speedgabia.com")).toBe(false);
   });
 
   it("id 는 중복되지 않는다", () => {

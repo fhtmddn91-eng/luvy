@@ -11,7 +11,12 @@
  *   transformPath — 원본 주소로 되돌리는 규칙 (1688 의 리사이즈 접미사 제거 등)
  */
 
-const IMAGE_EXT = /\.(jpe?g|png|gif|webp)$/i;
+/**
+ * img: 레드그룹 이미지 서버(speedgabia)가 확장자를 .img 로 붙인다(실측 —
+ * 내용물은 GIF/JPEG). 확장자는 1차 필터일 뿐, 진짜 형식 판정은 미러링 때
+ * 매직 바이트로 하므로 (mirror.ts) 넓혀도 임의 파일이 저장되지는 않는다.
+ */
+const IMAGE_EXT = /\.(jpe?g|png|gif|webp|img)$/i;
 
 /**
  * 프로토콜 보정 → 호스트 검증 → (사이트별 변환) → 확장자 확인.

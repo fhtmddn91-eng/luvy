@@ -93,7 +93,9 @@ export const SOURCES: SourceSite[] = [
     label: "레드그룹",
     domain: "redgroup.co.kr",
     host: /(^|\.)redgroup\.co\.kr$/i,
-    imageHost: /(^|\.)redgroup\.co\.kr$/i,
+    // 이미지가 자기 서버가 아니라 가비아 웹하드(redlove.speedgabia.com)에 있다
+    // (실측 gcode=1858 — 대표는 .img 확장자, 상세는 /products/*.jpg)
+    imageHost: /(^|\.)(redgroup\.co\.kr|speedgabia\.com)$/i,
     translate: false,
     currency: "KRW",
   },

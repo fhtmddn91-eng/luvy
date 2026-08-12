@@ -112,4 +112,23 @@ describe("국내 수집 북마클릿", () => {
     expect(SRC).toContain("판매가격");     // "판매가격 : 290,000원" 라벨 스캔
     expect(SRC).toContain("상품");        // 본문 "상품코드 : K-579" 폴백
   });
+
+  // ---- 레드그룹(자체 제작 몰) 실측 대응 — 2026-08 실페이지 gcode=1858 ----
+
+  it("레드그룹 상품번호·영역 셀렉터가 들어 있다", () => {
+    expect(SRC).toContain("gcode");        // page_714.php?cat_id=414&gcode=1858
+    expect(SRC).toContain("shop_view");    // 대표이미지 모듈 #shop_view_136
+    expect(SRC).toContain("goods_detail"); // 상세설명 영역 #goods_detail
+    expect(SRC).toContain("price_text");   // 판매가 자리 (최저판매가와 구분)
+  });
+
+  it("추천 위젯(notice)을 걸러 옆 상품이 섞이지 않는다", () => {
+    // 상세페이지의 신상품 위젯(#notice_864)에 다른 상품 대표이미지 18장이
+    // 큰 크기로 들어 있다(실측) — 안 거르면 엉뚱한 상품 사진이 등록된다
+    expect(SRC).toContain('[id*="notice"]');
+  });
+
+  it(".img 확장자(speedgabia)를 이미지로 인정한다", () => {
+    expect(SRC).toContain("|img)$");
+  });
 });

@@ -1,6 +1,7 @@
 import "server-only";
 import { db } from "@/lib/db";
 import { saveImageBuffer } from "@/lib/storage";
+import { sniffImage } from "@/lib/imageSniff";
 import { normalizeImageUrlFor } from "./imageUrl";
 import { normalizeImageUrl } from "./parse1688";
 
@@ -26,6 +27,15 @@ export interface MirrorOptions {
 }
 
 const MIRROR_MAX_BYTES = 8 * 1024 * 1024; // 8MB — 상세 이미지·GIF는 원본이 큼
+
+/** 매직 바이트 판별 결과 → 저장용 MIME. pdf 는 이미지가 아니므로 제외 */
+const MIME_BY_KIND: Record<string, string> = {
+  jpg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+  avif: "image/avif",
+};
 const FETCH_TIMEOUT_MS = 20_000;
 /** 한 번에 너무 많이 병렬로 때리면 CDN이 막으므로 소규모로 나눠 처리 */
 const CONCURRENCY = 4;
@@ -77,10 +87,18 @@ async function fetchOne(
     });
     if (!res.ok) return { error: `HTTP ${res.status}` };
 
-    const mime = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-    if (!mime.startsWith("image/")) return { error: `이미지가 아님 (${mime || "unknown"})` };
-
+    // 형식 판정은 헤더가 아니라 **내용(매직 바이트)** 으로 한다.
+    // 레드그룹 이미지 서버(speedgabia)는 멀쩡한 GIF 를 Content-Type: text/plain
+    // 으로 보낸다(실측 goods_m136_1858_L.img) — 헤더만 믿으면 전량 실패한다.
+    // 반대로 헤더가 image/* 라도 내용이 아니면 saveImageBuffer 가 거른다.
     const buf = Buffer.from(await res.arrayBuffer());
+    const kind = sniffImage(buf);
+    const mime = kind ? MIME_BY_KIND[kind] : null;
+    if (!mime) {
+      const header = (res.headers.get("content-type") ?? "unknown").split(";")[0].trim();
+      return { error: `이미지가 아님 (${header})` };
+    }
+
     const saved = await saveImageBuffer(buf, mime, MIRROR_MAX_BYTES, url);
     if (!saved.ok) return { error: saved.error };
 

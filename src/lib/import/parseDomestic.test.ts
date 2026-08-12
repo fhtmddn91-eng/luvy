@@ -172,6 +172,34 @@ describe("parseDomestic", () => {
     expect(r.draft.tiers).toEqual([{ minQty: 1, price: 18500 }]);
   });
 
+  it("레드그룹 payload — .img 확장자와 speedgabia 호스트를 받는다", () => {
+    // 실측 gcode=1858: 대표는 speedgabia 의 .img(내용물은 GIF), 상세는 .jpg.
+    // 형식 검증은 미러링 때 매직 바이트로 하므로 확장자는 1차 필터만 한다.
+    const redgroup = sourceById("redgroup") as SourceSite;
+    const r = parseDomestic(
+      {
+        url: "https://redgroup.co.kr/pages/page_714.php?cat_id=414&gcode=1858",
+        site: "redgroup",
+        extracted: {
+          productNo: "1858",
+          title: "[[한국총판]-최저가준수] [OTOUCH] 플레저 엔진",
+          mainImages: ["https://redlove.speedgabia.com/pages/upload/shop/goods_m136_1858_L.img"],
+          detailImages: ["https://redlove.speedgabia.com/products/pleasure_engine_st.jpg"],
+          optionImages: [],
+          price: 84000,
+          attributes: [],
+        },
+      },
+      redgroup,
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.draft.sourceId).toBe("redgroup:1858");
+    expect(r.draft.mainImages).toHaveLength(1);
+    expect(r.draft.detailImages).toHaveLength(1);
+    expect(r.draft.tiers).toEqual([{ minQty: 1, price: 84000 }]);
+  });
+
   it("쿼리스트링은 떼어 같은 이미지를 두 번 받지 않는다", () => {
     const r = parseDomestic(
       payload({ mainImages: [IMG, `${IMG}?v=2`], detailImages: [] }),
