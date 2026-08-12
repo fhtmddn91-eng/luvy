@@ -17,6 +17,12 @@ export interface SourceSite {
   /** 이 사이트인지 판별 (location.hostname 기준) */
   host: RegExp;
   /**
+   * 관리자 화면에 보여줄 대표 도메인.
+   * host 정규식에서 역산하면 표기가 깨지므로(`(^|\.)` 같은 문법이 섞여 나온다)
+   * 보여줄 문자열은 따로 적는다.
+   */
+  domain: string;
+  /**
    * 이미지 다운로드를 허용할 호스트.
    * payload 는 외부에서 오므로 아무 호스트나 받으면 서버가 내부망을 긁는
    * SSRF 통로가 된다. 사이트별로 실제 이미지가 올라오는 호스트만 연다.
@@ -38,6 +44,7 @@ export const SOURCES: SourceSite[] = [
   {
     id: "1688",
     label: "1688",
+    domain: "1688.com",
     host: /(^|\.)1688\.com$/i,
     imageHost: /(^|\.)alicdn\.com$/i,
     translate: true,
@@ -46,6 +53,7 @@ export const SOURCES: SourceSite[] = [
   {
     id: "doradora",
     label: "도라도라",
+    domain: "doradora.kr",
     host: /(^|\.)doradora\.kr$/i,
     imageHost: /(^|\.)(doradora\.kr|cafe24img\.com|cafe24\.com)$/i,
     translate: false,
@@ -54,6 +62,7 @@ export const SOURCES: SourceSite[] = [
   {
     id: "pinkbox",
     label: "핑크박스",
+    domain: "pinkboxb2b.com",
     host: /(^|\.)pinkboxb2b\.com$/i,
     imageHost: /(^|\.)(pinkboxb2b\.com|cafe24img\.com|cafe24\.com)$/i,
     translate: false,
@@ -62,6 +71,7 @@ export const SOURCES: SourceSite[] = [
   {
     id: "lovemall",
     label: "러브몰",
+    domain: "0625.co.kr",
     host: /(^|\.)0625\.co\.kr$/i,
     imageHost: /(^|\.)(0625\.co\.kr|cafe24img\.com|cafe24\.com)$/i,
     translate: false,
@@ -70,6 +80,7 @@ export const SOURCES: SourceSite[] = [
   {
     id: "ribos",
     label: "리보스",
+    domain: "oxox.co.kr",
     host: /(^|\.)oxox\.co\.kr$/i,
     imageHost: /(^|\.)oxox\.co\.kr$/i,
     translate: false,
@@ -78,6 +89,7 @@ export const SOURCES: SourceSite[] = [
   {
     id: "redgroup",
     label: "레드그룹",
+    domain: "redgroup.co.kr",
     host: /(^|\.)redgroup\.co\.kr$/i,
     imageHost: /(^|\.)redgroup\.co\.kr$/i,
     translate: false,

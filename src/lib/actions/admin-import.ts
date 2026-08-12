@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { runImport } from "@/lib/import/pipeline";
+import { runImport, siteForPayload } from "@/lib/import/pipeline";
 import type { ImportPayload } from "@/lib/import/types";
 
 export interface ImportFormState {
@@ -17,8 +17,12 @@ export interface ImportFormState {
 /**
  * 북마클릿이 복사해준 JSON을 붙여넣어 상품을 수집한다.
  * 같은 오리진 폼 액션이므로 관리자 세션이 정상 적용된다.
+ *
+ * 1688·국내 도매처를 함께 받는다 — 어느 도매처인지는 payload 의 URL 로
+ * 파이프라인이 판별하므로, 화면(1688 수집 / 국내 사이트 수집)이 달라도
+ * 액션은 하나면 된다. 붙여넣을 곳을 헷갈려도 정상 수집된다.
  */
-export async function importFrom1688(
+export async function importPastedProduct(
   _prev: ImportFormState,
   formData: FormData,
 ): Promise<ImportFormState> {
@@ -38,17 +42,19 @@ export async function importFrom1688(
       };
     }
   } else if (pasted.startsWith("http")) {
-    // URL만 붙여넣은 경우 — HTML은 봇 차단으로 못 읽으므로 안내
+    // URL만 붙여넣은 경우 — 1688은 봇 차단, 국내 도매처는 로그인 벽이라
+    // 서버가 페이지를 읽을 수 없다. 어느 쪽이든 북마클릿을 거쳐야 한다.
     return {
       ok: false,
       message:
-        "URL만으로는 수집할 수 없습니다. 1688은 서버 접근을 차단하므로, 해당 상품 페이지에서 북마클릿을 실행해 복사한 데이터를 붙여넣어 주세요.",
+        "URL만으로는 수집할 수 없습니다. 1688은 서버 접근을 차단하고 국내 도매처는 로그인해야 상품이 보이므로, 해당 상품 페이지에서 북마클릿을 실행해 복사한 데이터를 붙여넣어 주세요.",
     };
   } else {
     // 페이지 HTML을 그대로 붙여넣은 경우 (이미지만 회수하는 폴백)
     payload = { html: pasted, url: String(formData.get("url") ?? "") };
   }
 
+  const label = siteForPayload(payload)?.label ?? "1688";
   const result = await runImport(payload);
 
   await audit({
@@ -56,8 +62,8 @@ export async function importFrom1688(
     target: "product",
     targetId: result.productId ?? "",
     summary: result.ok
-      ? `1688 수집 성공 — ${result.detail?.koTitle ?? "제목 없음"}`
-      : `1688 수집 실패 — ${result.message}`,
+      ? `${label} 수집 성공 — ${result.detail?.koTitle ?? "제목 없음"}`
+      : `${label} 수집 실패 — ${result.message}`,
     meta: result.ok
       ? {
           images: (result.detail?.mainCount ?? 0) + (result.detail?.detailCount ?? 0),
@@ -68,6 +74,7 @@ export async function importFrom1688(
   });
 
   revalidatePath("/admin/import");
+  revalidatePath("/admin/import/domestic");
   revalidatePath("/admin/products");
 
   if (!result.ok) {
@@ -75,10 +82,17 @@ export async function importFrom1688(
   }
 
   const d = result.detail;
+  // 국내 도매처는 원문이 한국어라 번역을 안 돌린 것이지 실패한 게 아니다 —
+  // "AI 번역 적용"이라고 적으면 돌지도 않은 번역이 돈 것처럼 보인다.
+  const translates = siteForPayload(payload)?.translate !== false;
   const summary = d
     ? [
         `상품명: ${d.koTitle}`,
-        d.translated ? "AI 번역·카테고리 자동 분류 적용" : `번역 미적용 (${d.translateNote ?? "사유 불명"}) — 직접 수정 필요`,
+        d.translated
+          ? translates
+            ? "AI 번역·카테고리 자동 분류 적용"
+            : `${label} — 원문이 한국어라 번역 없이 그대로 등록 (API 비용 0)`
+          : `번역 미적용 (${d.translateNote ?? "사유 불명"}) — 직접 수정 필요`,
         `대표 이미지 ${d.mainCount}장 · 상세 이미지 ${d.detailCount}장${d.gifCount > 0 ? ` (GIF ${d.gifCount}장 포함)` : ""}`,
         d.failures.length > 0
           ? `내려받기 실패 ${d.failures.length}건: ${d.failures[0].reason}`
@@ -113,6 +127,7 @@ export async function deleteImportJob(formData: FormData): Promise<void> {
     summary: `수집 기록 삭제: ${job.koTitle || job.rawTitle || "(제목 없음)"}`,
   });
   revalidatePath("/admin/import");
+  revalidatePath("/admin/import/domestic");
 }
 
 /** 목록 비우기 — 완료·실패 기록을 한 번에 지운다(진행중은 남긴다). */
@@ -127,4 +142,5 @@ export async function clearImportJobs(): Promise<void> {
     summary: `수집 기록 일괄 삭제 ${count}건`,
   });
   revalidatePath("/admin/import");
+  revalidatePath("/admin/import/domestic");
 }

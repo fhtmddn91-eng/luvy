@@ -1,3 +1,4 @@
+import { normalizeImageUrlFor } from "./imageUrl";
 import type { ImportDraft, ImportPayload, ParseResult, RawTier } from "./types";
 
 /**
@@ -11,8 +12,6 @@ import type { ImportDraft, ImportPayload, ParseResult, RawTier } from "./types";
  * 서버가 내부망을 긁는 SSRF 통로가 된다. alicdn 계열만 허용한다.
  */
 const ALLOWED_IMAGE_HOST = /(^|\.)alicdn\.com$/i;
-
-const IMAGE_EXT = /\.(jpe?g|png|gif|webp)$/i;
 
 /**
  * 알리 CDN UI 에셋(플랫폼 로고·아이콘)은 URL 에 "-tps-가로-세로" 크기가 박혀 있다.
@@ -32,25 +31,16 @@ export function toOriginalImageUrl(raw: string): string {
   return raw.replace(/\.(jpe?g|png|gif|webp)_.*$/i, ".$1");
 }
 
-/** 프로토콜 보정 + 원본화 + 호스트 검증. 통과하지 못하면 null. */
+/**
+ * 프로토콜 보정 + 원본화 + 호스트 검증. 통과하지 못하면 null.
+ *
+ * 공통 관문은 normalizeImageUrlFor 하나를 쓴다(국내 도매처와 같은 코드).
+ * 여기서 더하는 것은 1688 고유 규칙 둘뿐 — 리사이즈 접미사 제거(확장자
+ * 검사 **전에** 돌려야 `x.gif_.webp` 가 살아난다)와 로고·아이콘 컷.
+ */
 export function normalizeImageUrl(raw: unknown): string | null {
-  if (typeof raw !== "string") return null;
-  let s = raw.trim();
-  if (!s) return null;
-  if (s.startsWith("//")) s = "https:" + s;
-  if (s.startsWith("http://")) s = "https://" + s.slice("http://".length);
-  if (!s.startsWith("https://")) return null;
-
-  let u: URL;
-  try {
-    u = new URL(s);
-  } catch {
-    return null;
-  }
-  if (!ALLOWED_IMAGE_HOST.test(u.hostname)) return null;
-
-  const original = toOriginalImageUrl(u.origin + u.pathname);
-  if (!IMAGE_EXT.test(original)) return null;
+  const original = normalizeImageUrlFor(raw, ALLOWED_IMAGE_HOST, toOriginalImageUrl);
+  if (!original) return null;
   const tps = original.match(SMALL_TPS_ASSET);
   if (tps && (Number(tps[1]) < 200 || Number(tps[2]) < 200)) return null;
   return original;

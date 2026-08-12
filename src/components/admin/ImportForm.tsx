@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import Link from "next/link";
-import { importFrom1688, type ImportFormState } from "@/lib/actions/admin-import";
+import { importPastedProduct, type ImportFormState } from "@/lib/actions/admin-import";
 import { Panel, btnPrimary } from "@/components/ui/Panel";
 import { areaCls, labelCls, helpCls } from "@/components/ui/form";
 
@@ -16,8 +16,18 @@ function RunButton() {
   );
 }
 
-export function ImportForm() {
-  const [state, formAction] = useActionState<ImportFormState, FormData>(importFrom1688, {});
+/**
+ * 수집 데이터 붙여넣기 폼. 1688·국내 사이트 화면이 함께 쓴다 —
+ * 서버 액션이 payload 의 URL 로 도매처를 판별하므로 폼은 안내 문구만 다르다.
+ */
+export function ImportForm({
+  placeholder = '1688 상품페이지에서 북마클릿을 실행한 뒤 Ctrl+V 로 붙여넣으세요. {"url":"https://detail.1688.com/offer/...","extracted":{...}}',
+  help = "페이지 HTML을 그대로 붙여넣어도 이미지만은 회수됩니다(제목·가격은 누락).",
+}: {
+  placeholder?: string;
+  help?: string;
+}) {
+  const [state, formAction] = useActionState<ImportFormState, FormData>(importPastedProduct, {});
 
   return (
     <form action={formAction} className="space-y-4">
@@ -26,12 +36,10 @@ export function ImportForm() {
         <textarea
           name="payload"
           rows={8}
-          placeholder='1688 상품페이지에서 북마클릿을 실행한 뒤 Ctrl+V 로 붙여넣으세요. {"url":"https://detail.1688.com/offer/...","extracted":{...}}'
+          placeholder={placeholder}
           className={`${areaCls} font-mono text-[12px]`}
         />
-        <p className={helpCls}>
-          페이지 HTML을 그대로 붙여넣어도 이미지만은 회수됩니다(제목·가격은 누락).
-        </p>
+        <p className={helpCls}>{help}</p>
 
         <div className="mt-4">
           <RunButton />

@@ -15,7 +15,9 @@ const groups: { heading: string; items: { href: string; label: string; exact?: b
       { href: "/admin/categories", label: "카테고리" },
       { href: "/admin/nav", label: "상단 메뉴" },
       { href: "/admin/home", label: "메인 상품 탭" },
-      { href: "/admin/import", label: "1688 수집" },
+      // 1688 은 상위 경로라 exact — 없으면 /admin/import/domestic 에서도 활성으로 보인다
+      { href: "/admin/import", label: "1688 수집", exact: true },
+      { href: "/admin/import/domestic", label: "국내 사이트" },
       { href: "/admin/banners", label: "배너 관리" },
       { href: "/admin/notices", label: "공지 관리" },
       { href: "/admin/faqs", label: "FAQ 관리" },

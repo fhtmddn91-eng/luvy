@@ -2,9 +2,8 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { dateFmt } from "@/lib/format";
-import { bookmarkletHref } from "@/lib/import/bookmarklet";
+import { domesticBookmarkletHref } from "@/lib/import/bookmarkletDomestic";
 import { SOURCES } from "@/lib/import/sources";
-import { isTranslatorConfigured } from "@/lib/import/translate";
 import { ImportForm } from "@/components/admin/ImportForm";
 import { BookmarkletLink } from "@/components/admin/BookmarkletLink";
 import { clearImportJobs, deleteImportJob } from "@/lib/actions/admin-import";
@@ -17,59 +16,47 @@ import {
   EmptyState,
 } from "@/components/ui/Panel";
 
-const DOMESTIC_IDS = SOURCES.filter((s) => s.id !== "1688").map((s) => s.id);
+const DOMESTIC = SOURCES.filter((s) => s.id !== "1688");
 
 const steps = [
-  "아래 [1688 수집] 버튼을 브라우저 북마크바로 드래그해 등록합니다. (최초 1회)",
-  "1688에 로그인한 뒤 가져올 상품의 상세페이지를 엽니다.",
+  "아래 [국내 수집] 버튼을 브라우저 북마크바로 드래그해 등록합니다. (최초 1회)",
+  "도매처에 로그인한 뒤 가져올 상품의 상세페이지를 엽니다.",
   "상세 이미지가 모두 뜨도록 페이지를 끝까지 스크롤합니다. (지연 로딩 때문에 필수)",
-  "북마크바의 [1688 수집]을 클릭하면 데이터가 클립보드에 복사됩니다.",
+  "북마크바의 [국내 수집]을 클릭하면 데이터가 클립보드에 복사됩니다.",
   "이 화면 아래 입력창에 붙여넣고 [수집 실행]을 누릅니다.",
 ];
 
-export default async function AdminImportPage() {
+export default async function AdminDomesticImportPage() {
   await requireAdmin();
 
-  // 국내 도매처 기록은 [국내 사이트] 화면이 따로 보여준다. 두 화면이 같은 목록을
-  // 보여주면 어느 쪽에서 지웠는지 헷갈린다 — sourceId 접두사(`사이트id:`)로 가른다.
+  // 국내 도매처 기록만 — sourceId 가 `사이트id:상품번호` 라 접두사로 갈린다
+  // (1688 은 offerId 숫자만 쓰므로 섞이지 않는다)
   const jobs = await db.importJob.findMany({
-    where: {
-      NOT: { OR: DOMESTIC_IDS.map((id) => ({ sourceId: { startsWith: `${id}:` } })) },
-    },
+    where: { OR: DOMESTIC.map((s) => ({ sourceId: { startsWith: `${s.id}:` } })) },
     orderBy: { createdAt: "desc" },
     take: 30,
   });
-
-  const aiReady = isTranslatorConfigured();
 
   return (
     <div>
       <PageHeader
         eyebrow="Catalog"
-        title="1688 상품 수집"
-        description="1688 상세페이지의 상품 정보·이미지·GIF를 가져와 상품 초안을 만듭니다."
+        title="국내 사이트 수집"
+        description="국내 도매처 상세페이지의 상품 정보와 이미지를 가져와 상품 초안을 만듭니다."
       />
-
-      {!aiReady && (
-        <div className="rise mb-4 border border-brand-500 bg-brand-50 px-5 py-4 text-[13px]">
-          <p className="font-bold text-brand-700">AI 번역이 꺼져 있습니다</p>
-          <p className="mt-1.5 text-ink-soft">
-            환경변수 <code className="bg-white px-1">GEMINI_API_KEY</code> 를 설정하면 상품명·설명
-            중→한 번역과 카테고리 자동 분류가 동작합니다. 지금은 수집은 되지만 원문(중국어)이 그대로
-            들어갑니다.
-          </p>
-        </div>
-      )}
 
       <div className="rise rise-1 grid gap-4 lg:grid-cols-[1fr_360px]">
         <div className="space-y-4">
-          <ImportForm />
+          <ImportForm
+            placeholder='국내 도매처 상품페이지에서 북마클릿을 실행한 뒤 Ctrl+V 로 붙여넣으세요. {"url":"https://doradora.kr/product/...","site":"doradora","extracted":{...}}'
+            help="1688 데이터를 여기에 붙여넣어도 정상 수집됩니다 — 주소를 보고 도매처를 알아서 판별합니다."
+          />
         </div>
 
         <div className="space-y-4">
           <Panel title="사용 방법">
             <div className="mb-4">
-              <BookmarkletLink href={bookmarkletHref()} label="⬇ 1688 수집" />
+              <BookmarkletLink href={domesticBookmarkletHref()} label="⬇ 국내 수집" />
             </div>
             <p className="mb-4 text-[12px] text-muted">
               ↑ 이 버튼을 <strong className="text-ink-deep">북마크바로 드래그</strong>하세요. (클릭이
@@ -85,17 +72,32 @@ export default async function AdminImportPage() {
             </ol>
           </Panel>
 
+          <Panel title="지원 도매처">
+            <ul className="space-y-2 text-[12.5px] text-ink-soft">
+              {DOMESTIC.map((s) => (
+                <li key={s.id} className="flex items-baseline justify-between gap-3">
+                  <span className="font-semibold text-ink-deep">{s.label}</span>
+                  <span className="font-mono text-[11px] text-muted">{s.domain}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-4 text-[12px] leading-relaxed text-muted">
+              목록에 없는 사이트에서 누르면 아무것도 수집하지 않고 경고만 띄웁니다. 도매처를 추가하려면
+              말씀해 주세요.
+            </p>
+          </Panel>
+
           <Panel title="동작 방식">
             <ul className="space-y-2 text-[12px] leading-relaxed text-muted">
               <li>
-                1688은 서버에서 직접 페이지를 읽으면 봇으로 차단합니다. 그래서 대표님이 로그인한
-                브라우저에서 데이터를 뽑아 넘기는 방식입니다.
+                국내 도매처는 로그인·사업자 승인 뒤에만 상품이 보입니다. 서버가 직접 읽으면 로그인
+                화면만 오므로, 대표님이 로그인한 브라우저에서 데이터를 뽑아 넘기는 방식입니다.
               </li>
-              <li>이미지·GIF는 CDN에서 서버가 직접 내려받아 LUVY에 보관합니다.</li>
               <li>
-                GIF는 원본(움직이는) 파일로 받도록 URL을 되돌려 처리합니다. 미리보기용 정적 이미지가
-                아닙니다.
+                원문이 이미 한국어라 <strong className="text-ink-deep">AI 번역을 돌리지 않습니다</strong>.
+                상품명·설명도, 이미지 속 글자도 그대로 씁니다 (번역 비용 0원).
               </li>
+              <li>이미지는 서버가 직접 내려받아 LUVY에 보관합니다.</li>
               <li>수집된 상품은 항상 <strong className="text-ink-deep">숨김·0원</strong>으로 등록됩니다.</li>
             </ul>
           </Panel>
@@ -120,12 +122,12 @@ export default async function AdminImportPage() {
           }
         >
           {jobs.length === 0 ? (
-            <EmptyState>아직 수집 이력이 없습니다.</EmptyState>
+            <EmptyState>아직 국내 사이트 수집 이력이 없습니다.</EmptyState>
           ) : (
             <TableWrap minWidth={760}>
               <thead>
                 <tr className="border-b border-hairline-soft">
-                  <Th>상품번호</Th>
+                  <Th>도매처 · 상품번호</Th>
                   <Th>상품명</Th>
                   <Th align="center">이미지</Th>
                   <Th align="center">상태</Th>

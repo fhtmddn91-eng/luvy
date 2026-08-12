@@ -1,14 +1,29 @@
 import "server-only";
 import { db } from "@/lib/db";
 import { saveImageBuffer } from "@/lib/storage";
+import { normalizeImageUrlFor } from "./imageUrl";
 import { normalizeImageUrl } from "./parse1688";
 
 /**
- * 원격 이미지(alicdn) → 로컬 미러링.
+ * 원격 이미지 → 로컬 미러링.
  *
- * 1688 상세 HTML은 봇 차단(X5Sec)이 걸려 서버에서 못 읽지만,
- * 이미지 CDN은 인증 없이 응답하므로 이미지/GIF는 서버에서 직접 받을 수 있다.
+ * 1688 상세 HTML은 봇 차단(X5Sec)이, 국내 도매처는 로그인 벽이 걸려 서버에서
+ * 페이지를 못 읽지만, 이미지는 인증 없이 응답하므로 서버에서 직접 받을 수 있다.
  */
+
+/**
+ * 도매처별로 달라지는 것 — 허용 이미지 호스트와 리퍼러.
+ *
+ * 생략하면 1688(alicdn) 기준으로 동작한다. 기본값을 1688 로 둔 이유는
+ * 이 함수의 호출부가 원래 1688 전용이었기 때문 — 국내 도매처를 붙이면서
+ * 기본 동작이 바뀌면 기존 경로가 조용히 달라진다.
+ */
+export interface MirrorOptions {
+  /** SourceSite.imageHost — SSRF 화이트리스트 */
+  imageHost?: RegExp;
+  /** 이미지 서버가 리퍼러를 보는 경우가 있어 원문 도메인을 넣어준다 */
+  referer?: string;
+}
 
 const MIRROR_MAX_BYTES = 8 * 1024 * 1024; // 8MB — 상세 이미지·GIF는 원본이 큼
 const FETCH_TIMEOUT_MS = 20_000;
@@ -28,9 +43,14 @@ export interface MirrorReport {
   failures: { sourceUrl: string; reason: string }[];
 }
 
-async function fetchOne(rawUrl: string): Promise<MirroredImage | { error: string }> {
+async function fetchOne(
+  rawUrl: string,
+  opts: MirrorOptions,
+): Promise<MirroredImage | { error: string }> {
   // 미러링 직전에 한 번 더 화이트리스트를 통과시킨다(SSRF 방어의 마지막 관문)
-  const url = normalizeImageUrl(rawUrl);
+  const url = opts.imageHost
+    ? normalizeImageUrlFor(rawUrl, opts.imageHost)
+    : normalizeImageUrl(rawUrl);
   if (!url) return { error: "허용되지 않은 이미지 주소" };
 
   // 같은 원격 이미지를 이미 받아뒀으면 재사용 — 1688 판매자는 배지·배너를
@@ -50,7 +70,7 @@ async function fetchOne(rawUrl: string): Promise<MirroredImage | { error: string
       redirect: "follow",
       headers: {
         // CDN이 리퍼러를 보는 경우가 있어 원문 도메인을 넣어준다
-        Referer: "https://detail.1688.com/",
+        Referer: opts.referer ?? "https://detail.1688.com/",
         "User-Agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
       },
@@ -74,13 +94,16 @@ async function fetchOne(rawUrl: string): Promise<MirroredImage | { error: string
 }
 
 /** 여러 이미지를 소규모 배치로 미러링. 일부 실패해도 나머지는 계속 진행한다. */
-export async function mirrorImages(urls: string[]): Promise<MirrorReport> {
+export async function mirrorImages(
+  urls: string[],
+  opts: MirrorOptions = {},
+): Promise<MirrorReport> {
   const images: MirroredImage[] = [];
   const failures: { sourceUrl: string; reason: string }[] = [];
 
   for (let i = 0; i < urls.length; i += CONCURRENCY) {
     const batch = urls.slice(i, i + CONCURRENCY);
-    const results = await Promise.all(batch.map(fetchOne));
+    const results = await Promise.all(batch.map((u) => fetchOne(u, opts)));
     results.forEach((r, idx) => {
       if ("error" in r) failures.push({ sourceUrl: batch[idx], reason: r.error });
       else images.push(r);

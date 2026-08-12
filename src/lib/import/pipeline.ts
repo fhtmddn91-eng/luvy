@@ -1,10 +1,11 @@
 import "server-only";
 import { db } from "@/lib/db";
 import { parse1688 } from "./parse1688";
+import { parseDomestic } from "./parseDomestic";
 import { mirrorImages } from "./mirror";
 import { translateDraft, asIsDraft } from "./translate";
-import { sourceById } from "./sources";
-import type { ImportPayload } from "./types";
+import { sourceById, sourceForUrl, type SourceSite } from "./sources";
+import type { ImportPayload, ParseResult } from "./types";
 
 /**
  * 수집 파이프라인: payload → 파싱 → 이미지 미러링 → AI 번역 → 상품 초안 생성.
@@ -83,8 +84,39 @@ export interface ImportOutcome {
   };
 }
 
+/**
+ * payload 가 어느 도매처 것인지 판별한다.
+ *
+ * URL 이 정본이고, 북마클릿이 함께 보낸 site 는 보조다 — 쿼리형 주소나
+ * 서브도메인 때문에 URL 판별이 빗나갈 때를 위한 것. **등록된 목록과 대조한
+ * 뒤에만 신뢰한다**: payload 는 외부에서 오므로 site 를 그대로 믿으면
+ * 임의 문자열로 이미지 화이트리스트를 우회당한다.
+ */
+/** 리퍼러용 오리진. 주소가 깨져 있어도 미러링 자체를 멈추지 않는다. */
+function originOf(url: string): string | undefined {
+  try {
+    return new URL(url).origin + "/";
+  } catch {
+    return undefined;
+  }
+}
+
+export function siteForPayload(payload: ImportPayload): SourceSite | null {
+  return sourceForUrl(String(payload.url ?? "")) ?? sourceById(String(payload.site ?? ""));
+}
+
+/**
+ * 도매처별 파서 선택.
+ *
+ * 판별 실패 시 1688 파서로 떨어뜨린다 — URL 없이 HTML 만 붙여넣는 기존
+ * 폴백 경로(1688 전용)를 그대로 살리기 위해서다.
+ */
+function parseFor(payload: ImportPayload, site: SourceSite | null): ParseResult {
+  return site && site.id !== "1688" ? parseDomestic(payload, site) : parse1688(payload);
+}
+
 export async function runImport(payload: ImportPayload): Promise<ImportOutcome> {
-  const parsed = parse1688(payload);
+  const parsed = parseFor(payload, siteForPayload(payload));
 
   if (!parsed.ok) {
     const job = await db.importJob.create({
@@ -134,10 +166,17 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
     // 이미지 미러링과 번역은 서로 독립이라 동시에 진행한다
     // 국내 도매처는 원문이 이미 한국어라 번역기를 태우지 않는다
     const site = sourceById(draft.source);
+    // 이미지 화이트리스트·리퍼러는 도매처마다 다르다.
+    // 1688 과 미판별 건은 옵션을 비워 **기존 동작 그대로** 둔다 — 국내 도매처를
+    // 붙이면서 이미 돌던 경로가 조용히 달라지는 일이 없어야 한다.
+    const mirrorOpts =
+      site && site.id !== "1688"
+        ? { imageHost: site.imageHost, referer: originOf(draft.sourceUrl) }
+        : {};
     const [mainReport, detailReport, optionReport, translation] = await Promise.all([
-      mirrorImages(draft.mainImages),
-      mirrorImages(draft.detailImages),
-      mirrorImages(draft.optionImages),
+      mirrorImages(draft.mainImages, mirrorOpts),
+      mirrorImages(draft.detailImages, mirrorOpts),
+      mirrorImages(draft.optionImages, mirrorOpts),
       site?.translate === false ? Promise.resolve(asIsDraft(draft)) : translateDraft(draft),
     ]);
 
