@@ -12,9 +12,11 @@ export function TrustBadges() {
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/70 text-brand-500 shadow-[var(--shadow-soft)]">
             <Icon name={badge.icon} className="h-5 w-5" strokeWidth={1.7} />
           </span>
+          {/* 모바일은 2열이라 폭이 좁다 — 데스크톱 크기를 그대로 쓰면 "전담 파트너 /
+              지원", "전국 당일/ / 익일 발송" 처럼 서너 줄로 갈라진다(실측 390px). */}
           <div className="leading-tight">
-            <p className="text-[15.5px] font-bold text-ink">{badge.title}</p>
-            <p className="text-[13px] text-muted">{badge.desc}</p>
+            <p className="text-[15px] font-bold text-ink md:text-[22px]">{badge.title}</p>
+            <p className="text-[13px] text-muted md:text-[18px]">{badge.desc}</p>
           </div>
         </div>
       ))}
