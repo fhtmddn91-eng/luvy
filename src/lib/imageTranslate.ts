@@ -1333,6 +1333,30 @@ export function splitTwoLines(ko: string): [string, string] | null {
   return [a, b];
 }
 
+function hexToRgb(hex: string): [number, number, number] | null {
+  if (!HEX.test(hex)) return null;
+  let h = hex.slice(1);
+  if (h.length === 3 || h.length === 4) h = [...h].map((c) => c + c).join("");
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+const luma = (c: [number, number, number]): number => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+
+/**
+ * 글자색이 배경에 묻히면 외곽선 색을, 충분히 읽히면 null 을 돌려준다.
+ *
+ * 오버레이는 OCR 이 읽은 원문 글자색을 그대로 쓰는데, 원문이 흰 글씨였고
+ * 지운 배경도 밝으면 흰 바탕에 흰 글씨가 된다(운영 스크린샷 신고). 색을
+ * 바꾸면 디자인이 달라지므로 색은 지키고 얇은 외곽선으로 떠받친다.
+ */
+export function contrastStroke(fgHex: string, bg: [number, number, number]): string | null {
+  const fg = hexToRgb(fgHex);
+  if (!fg) return null;
+  const lf = luma(fg);
+  if (Math.abs(lf - luma(bg)) >= 70) return null;
+  return lf > 140 ? "#222222" : "#ffffff";
+}
+
 function paintBoxes(
   ctx: SKRSContext2D,
   width: number,
@@ -1434,12 +1458,30 @@ function paintBoxes(
     flat.forEach((p, i) => (p.fitted = unified[i]));
   }
 
+  // 지운 배경과 글자색의 대비 확인용 — 박스 영역 평균색 (지우기가 끝난 현재 캔버스)
+  const avgBg = (b: PxBox): [number, number, number] => {
+    const w = Math.max(1, Math.min(width, b.x1) - b.x0);
+    const h = Math.max(1, Math.min(height, b.y1) - b.y0);
+    const d = ctx.getImageData(b.x0, b.y0, w, h).data;
+    let r = 0;
+    let g = 0;
+    let bl = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      r += d[i];
+      g += d[i + 1];
+      bl += d[i + 2];
+    }
+    const n = Math.max(1, d.length / 4);
+    return [r / n, g / n, bl / n];
+  };
+
   for (const p of plans) {
     const { it, ko, b, bw, bh, family } = p;
     // 위치 보정 — 정규화(0~1000) 단위를 픽셀로 환산해 더한다
     const offX = ((it.dx ?? 0) / 1000) * width;
     const offY = ((it.dy ?? 0) / 1000) * height;
     ctx.fillStyle = it.fg;
+    const stroke = contrastStroke(it.fg, avgBg(b));
 
     // 세로쓰기 문구는 글자를 세로로 쌓는다 — 가로로 쓰면 좁은 박스에
     // 밀려 들어가 아주 작아진다(수동 조정한 세로 문구에서 발생)
@@ -1449,15 +1491,19 @@ function paintBoxes(
       const cell = Math.min(bw, bh / Math.max(1, chars.length));
       const vsize = Math.max(6, Math.round(cell * 0.9 * (it.scale ?? 1)));
       ctx.font = `${vsize}px "${family}"`;
+      if (stroke) {
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = Math.max(1, vsize * 0.05);
+        ctx.lineJoin = "round";
+      }
       const startY = b.y0 + (bh - cell * chars.length) / 2 + offY;
       chars.forEach((ch, ci) => {
         const m = ctx.measureText(ch);
         const h = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
-        ctx.fillText(
-          ch,
-          b.x0 + (bw - m.width) / 2 + offX,
-          startY + cell * ci + (cell - h) / 2 + m.actualBoundingBoxAscent,
-        );
+        const cx = b.x0 + (bw - m.width) / 2 + offX;
+        const cy = startY + cell * ci + (cell - h) / 2 + m.actualBoundingBoxAscent;
+        if (stroke) ctx.strokeText(ch, cx, cy);
+        ctx.fillText(ch, cx, cy);
       });
       continue;
     }
@@ -1472,8 +1518,15 @@ function paintBoxes(
     });
     const blockH = measured.reduce((s, m) => s + m.h, 0) + gap * (measured.length - 1);
     let y = b.y0 + (bh - blockH) / 2 + offY;
+    if (stroke) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = Math.max(1, size * 0.05);
+      ctx.lineJoin = "round";
+    }
     for (const m of measured) {
-      ctx.fillText(m.ln, b.x0 + (bw - m.w) / 2 + offX, y + m.asc);
+      const tx = b.x0 + (bw - m.w) / 2 + offX;
+      if (stroke) ctx.strokeText(m.ln, tx, y + m.asc);
+      ctx.fillText(m.ln, tx, y + m.asc);
       y += m.h + gap;
     }
   }
@@ -1609,6 +1662,62 @@ function buildPatchOverlay(
   }
   return out;
 }
+
+/**
+ * 패치를 얹었을 때 경계가 보일지 — 패치 테두리 띠에서 원본과 재생성본의 색 차이.
+ *
+ * 패치 합성은 글자 밖 픽셀 드리프트를 막지만, 패치 **안의 배경**은 모델이 다시
+ * 그린 배경이다. 단색 배경에선 차이가 없는데 사진·그라데이션 위에서는 어긋나서
+ * 페더 몇 픽셀로는 사각형 자국이 그대로 보인다(운영 스크린샷 신고). 테두리
+ * 띠의 색이 원본과 같으면 이어 붙어도 티가 안 나고, 다르면 반드시 티가 난다 —
+ * 그래서 테두리만 재면 "얹어도 되는 패치"를 공짜로 가릴 수 있다.
+ */
+export function seamGap(
+  orig: Uint8Array,
+  regen: Uint8Array,
+  W: number,
+  H: number,
+  r: { x0: number; y0: number; x1: number; y1: number },
+  band = 3,
+): number {
+  let n = 0;
+  let s = 0;
+  const add = (x: number, y: number): void => {
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    const i = (y * W + x) * 4;
+    s += Math.max(
+      Math.abs(regen[i] - orig[i]),
+      Math.abs(regen[i + 1] - orig[i + 1]),
+      Math.abs(regen[i + 2] - orig[i + 2]),
+    );
+    n++;
+  };
+  for (let d = 0; d < band; d++) {
+    for (let x = r.x0; x < r.x1; x++) {
+      add(x, r.y0 + d);
+      add(x, r.y1 - 1 - d);
+    }
+    for (let y = r.y0 + band; y < r.y1 - band; y++) {
+      add(r.x0 + d, y);
+      add(r.x1 - 1 - d, y);
+    }
+  }
+  return n === 0 ? 0 : s / n;
+}
+
+/**
+ * 이 값을 넘으면 패치를 얹지 않고 로컬 지우기+오버레이로 강등한다.
+ *
+ * 운영 이미지 109쌍(624박스) 실측 분포: p50=4.1 p75=18.3 p90=29.7 p95=36.6 p99=58.3.
+ * 처음엔 "바닥 노이즈와 어긋남의 경계"로 보고 14로 잡았다가 실물 재렌더에서
+ * **멀쩡하던 이미지가 오히려 나빠졌다**(제목 자간이 벌어지고 부제에 지우개 자국).
+ * 30%가 강등돼 오버레이의 고질적 자국을 도로 불러온 것이다.
+ *
+ * 페더(5~10px)가 어지간한 어긋남은 이미 가려준다는 걸 그때 알았다. 그래서 이
+ * 값은 "페더로도 못 가리는" 극단만 잡도록 상위 1~2%(p99 언저리)에 둔다.
+ * 오버레이는 최후 수단이지 기본값이 아니다 — 강등은 드물어야 한다.
+ */
+const SEAM_MAX = 48;
 
 /** 정지 패치를 못 쓸 만큼 프레임이 많은 GIF — 메모리를 아끼고 바로 오버레이로 */
 const GIF_PATCH_MAX_PAGES = 60;
@@ -2089,9 +2198,30 @@ async function regenerateStill(
 
   const png = await callImageEdit(data, mime, regenPrompt(boxes), W, H);
   const targets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
-  const canvas = await compositeTextPatches(data, png, targets, W, H);
-  if (mime === "image/png") return { data: canvas.toBuffer("image/png"), mime };
-  return { data: canvas.toBuffer("image/jpeg", 95), mime: "image/jpeg" };
+
+  // 패치마다 "얹어도 되는지"를 테두리 색으로 가른다 — 배경을 다시 그린 패치를
+  // 그대로 얹으면 사진·그라데이션 위에서 사각형 자국이 보인다(운영 신고).
+  // 어긋난 패치는 버리고 그 문구만 로컬 지우기+오버레이로 강등한다.
+  const origRaw = new Uint8Array(await sharp(data).ensureAlpha().raw().toBuffer());
+  const regenRaw = new Uint8Array(await sharp(png).ensureAlpha().raw().toBuffer());
+  const clean: OcrBox[] = [];
+  const seamy: OcrBox[] = [];
+  for (const b of targets) {
+    const gap = seamGap(origRaw, regenRaw, W, H, gifPatchRect(b, W, H));
+    (gap > SEAM_MAX ? seamy : clean).push(b);
+  }
+
+  const canvas = await compositeTextPatches(data, png, clean, W, H);
+  const out =
+    mime === "image/png"
+      ? { data: canvas.toBuffer("image/png"), mime }
+      : { data: canvas.toBuffer("image/jpeg", 95), mime: "image/jpeg" };
+  if (seamy.length === 0) return out;
+
+  console.warn(`[imageTranslate] 패치 경계 어긋남 ${seamy.length}/${targets.length}건 — 로컬 보정으로 강등`);
+  // 강등된 박스 자리엔 원문이 그대로 남아 있다(패치를 안 얹었으므로) —
+  // renderStill 이 원본 픽셀에서 배경을 읽어 획만 지우고 번역문을 그린다.
+  return renderStill(out.data, out.mime, seamy);
 }
 
 /**
@@ -2278,9 +2408,94 @@ export function truncatedTail(expected: string, observed: string, minMissing = 2
 }
 
 /**
- * 다시 손봐야 하는 문구를 고른다 — 원문이 남았거나, 번역문이 잘렸거나.
+ * 어절이 깨진 채 잘렸는지 — 한 글자 차이라도 잡는다.
  *
- * 두 검사 모두 "완성본에 찍힌 글자"에서 나오므로 모델 호출은 한 번이다.
+ * truncatedTail 은 OCR 이 끝 글자를 흘리는 오차 때문에 두 글자부터 본다. 그런데
+ * 그 여유가 "짧게 눌러 헤드 모드 변경" → "…모드 변" 처럼 **어절 중간에서 한
+ * 글자만 잘린 것**을 통과시켰다(운영 스크린샷 신고). 잘린 지점이 어절 중간이면
+ * OCR 오차가 아니라 진짜 잘림이므로 한 글자부터 잡고, 어절 경계에서 끊겼으면
+ * (통짜 어절 누락) 기존 truncatedTail 의 두 글자 기준에 맡긴다.
+ */
+export function brokenWordTail(expected: string, observed: string): boolean {
+  const e = forCompare(expected);
+  const o = forCompare(observed);
+  if (!(o.length > 0 && e.length > o.length && e.startsWith(o))) return false;
+  // 원문에서 o 의 마지막 글자가 나온 위치를 찾는다 (부호·공백은 비교에서 빠졌으므로 걸러 센다)
+  let idx = -1;
+  let taken = 0;
+  for (let i = 0; i < expected.length && taken < o.length; i++) {
+    if (forCompare(expected[i]).length > 0) {
+      taken++;
+      idx = i;
+    }
+  }
+  if (idx < 0) return false;
+  // 잘린 지점 뒤의 첫 실제 글자가 같은 어절인지 — 공백을 만나면 경계에서 끊긴 것
+  for (let j = idx + 1; j < expected.length; j++) {
+    const c = expected[j];
+    if (/\s/.test(c)) return false;
+    if (forCompare(c).length > 0) return true;
+  }
+  return false; // 남은 게 문장부호뿐 — 잘림 아님
+}
+
+/** 박스 영역의 밝기 표준편차 — 글자 획이 있으면 크고, 민 배경이면 작다 */
+export function regionStdev(
+  raw: Uint8Array,
+  W: number,
+  b: { x0: number; y0: number; x1: number; y1: number },
+): number {
+  let n = 0;
+  let s = 0;
+  let s2 = 0;
+  // toPixelBox 는 소수 좌표를 준다 — 그대로 인덱스로 쓰면 전부 NaN
+  const y0 = Math.max(0, Math.round(b.y0));
+  const x0 = Math.max(0, Math.round(b.x0));
+  const y1 = Math.round(b.y1);
+  const x1 = Math.round(b.x1);
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * W + x) * 4;
+      const l = 0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2];
+      s += l;
+      s2 += l * l;
+      n++;
+    }
+  }
+  if (n === 0) return 0;
+  const m = s / n;
+  return Math.sqrt(Math.max(0, s2 / n - m * m));
+}
+
+/**
+ * 번역문이 들어가야 할 자리가 "지워진 채 방치"됐는지.
+ *
+ * 검수는 찍힌 글자를 읽어 대조하는데, 모델이 원문을 지우고 **아무것도 안 그리면**
+ * 읽을 글자가 없어 "못 읽은 자리는 건드리지 않는다" 구멍으로 통과했다
+ * (운영 스크린샷: 제목이 흰 뭉개짐으로 나감). 글자를 못 읽은 자리는 픽셀로
+ * 한 번 더 본다 — 원본엔 획 대비가 있었는데 결과가 평탄하면 빈 자리다.
+ * 결과에 획 대비가 남아 있으면(그렸는데 OCR 이 못 읽은 것) 건드리지 않는다.
+ */
+export function blankedBox(
+  origRaw: Uint8Array,
+  outRaw: Uint8Array,
+  W: number,
+  H: number,
+  box: [number, number, number, number],
+): boolean {
+  const p = toPixelBox(box, W, H);
+  if (p.x1 - p.x0 < 4 || p.y1 - p.y0 < 4) return false;
+  const before = regionStdev(origRaw, W, p);
+  const after = regionStdev(outRaw, W, p);
+  return before >= MIN_TEXT_STDDEV && after < Math.min(12, before * 0.35);
+}
+
+/**
+ * 다시 손봐야 하는 문구를 고른다 — 원문이 남았거나, 번역문이 잘렸거나,
+ * 지워진 채 비어 있거나.
+ *
+ * 글자 검사는 "완성본에 찍힌 글자"에서 나오므로 모델 호출은 한 번이고,
+ * 빈 자리 검사는 픽셀 비교라 공짜다.
  */
 async function flaggedBoxes(
   out: Buffer,
@@ -2288,21 +2503,57 @@ async function flaggedBoxes(
   targets: OcrBox[],
   /** 번역문이 다 찍혔는지도 볼지. 글자를 아직 안 그린 "지우기 결과"에는 끈다 */
   checkCoverage = true,
+  /** 원본 이미지 — 주면 "지워진 채 빈 자리" 픽셀 검사가 켜진다 */
+  origData?: Buffer,
 ): Promise<OcrBox[]> {
+  let lines: { box: [number, number, number, number]; text: string }[];
   try {
-    const lines = await transcribeText(out, mime);
-    if (lines.length === 0) return [];
-    return targets.filter((b) => {
-      const hits = lines.filter((l) => flaggedHits(l.box, b));
-      if (hits.some((l) => isForeignSource(l.text))) return true; // 원문 잔류
-      if (!checkCoverage || hits.length === 0) return false; // 못 읽은 자리는 건드리지 않는다
-      const seen = hits.map((l) => l.text).join(" ");
-      return textCoverage(b.ko, seen) < COVERAGE_MIN || truncatedTail(b.ko, seen);
-    });
+    lines = await transcribeText(out, mime);
   } catch {
-    // 검수 자체가 실패하면 결과를 살린다 (검수는 보강 장치일 뿐)
-    return [];
+    // 일시 오류일 수 있으니 한 번은 다시 — 그래도 실패하면 결과를 살린다
+    try {
+      lines = await transcribeText(out, mime);
+    } catch (e) {
+      console.warn(`[imageTranslate] 검수 판독 실패 — 무검수 통과: ${e instanceof Error ? e.message : e}`);
+      return [];
+    }
   }
+
+  // 빈 자리 픽셀 검사 준비 — 글자를 못 읽은 박스에서만 쓴다
+  let origRaw: Uint8Array | null = null;
+  let outRaw: Uint8Array | null = null;
+  let W = 0;
+  let H = 0;
+  if (checkCoverage && origData) {
+    try {
+      const om = await sharp(origData).metadata();
+      const rm = await sharp(out).metadata();
+      if (om.width && om.width === rm.width && om.height === rm.height) {
+        W = om.width;
+        H = om.height ?? 0;
+        origRaw = new Uint8Array(await sharp(origData).ensureAlpha().raw().toBuffer());
+        outRaw = new Uint8Array(await sharp(out).ensureAlpha().raw().toBuffer());
+      }
+    } catch {
+      /* 픽셀 검사는 보강 장치 — 준비 실패 시 글자 검사만 한다 */
+    }
+  }
+
+  return targets.filter((b) => {
+    const hits = lines.filter((l) => flaggedHits(l.box, b));
+    if (hits.some((l) => isForeignSource(l.text))) return true; // 원문 잔류
+    if (!checkCoverage) return false;
+    if (hits.length === 0) {
+      // 못 읽은 자리 — OCR 한계일 수도, 지워진 채 빈 것일 수도. 픽셀로 가른다.
+      return origRaw && outRaw ? blankedBox(origRaw, outRaw, W, H, b.box) : false;
+    }
+    const seen = hits.map((l) => l.text).join(" ");
+    return (
+      textCoverage(b.ko, seen) < COVERAGE_MIN ||
+      truncatedTail(b.ko, seen) ||
+      brokenWordTail(b.ko, seen)
+    );
+  });
 }
 
 async function leftoverInBoxes(
@@ -2315,6 +2566,52 @@ async function leftoverInBoxes(
 }
 
 /** 번역 이미지를 만든다. 문구 수정 후 재생성에도 그대로 쓴다. */
+/**
+ * 모델에게 지우기만 시키고 글자는 우리가 그린다.
+ *
+ * 로컬 지우개(renderStill)는 배경을 주변 픽셀에서 추측하는데, 사진·그라데이션
+ * 위에서는 흰 얼룩을 남긴다(운영 스크린샷 신고 — 제목 주변 흰 뭉개짐).
+ * 모델 지우기는 배경을 다시 그리므로 자국이 없다. 지시(위치·크기)를 정확히
+ * 지켜야 하거나 모델 결과를 못 믿을 때 쓰는 공용 경로다.
+ */
+async function eraseThenDraw(
+  data: Buffer,
+  mime: string,
+  /** 원본에서 지워야 하는 것들 */
+  removals: OcrBox[],
+  /** 지운 그림 위에 그릴 것들 */
+  drawBoxes: OcrBox[],
+): Promise<{ data: Buffer; mime: string }> {
+  const om = await sharp(data).metadata();
+  const W = om.width ?? 0;
+  const H = om.height ?? 0;
+  const origRaw = W && H ? new Uint8Array(await sharp(data).ensureAlpha().raw().toBuffer()) : null;
+  let reason = "";
+  for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
+    try {
+      const cleaned = await eraseViaModel(data, mime, removals);
+      if (await leftoverInBoxes(cleaned, "image/png", removals, false)) {
+        reason = "원문이 남음";
+        continue;
+      }
+      if (origRaw) {
+        const cleanRaw = new Uint8Array(await sharp(cleaned).ensureAlpha().raw().toBuffer());
+        if (removals.some((b) => inventedInBox(origRaw, cleanRaw, W, toPixelBox(b.box, W, H)))) {
+          reason = "지운 자리에 장식을 지어냄";
+          continue;
+        }
+      }
+      // 지운 자리 패치만 원본에 얹는다 — 글자 밖 픽셀 드리프트 방지 (재생성과 동일)
+      const patched = await compositeTextPatches(data, cleaned, removals, W, H);
+      return drawTextOnly(patched.toBuffer("image/png"), mime, drawBoxes);
+    } catch (e) {
+      reason = e instanceof Error ? e.message : String(e);
+    }
+  }
+  console.warn(`[imageTranslate] 모델 지우기 실패(${REGEN_ATTEMPTS}회) — 로컬 오버레이 폴백: ${reason}`);
+  return renderStill(data, mime, drawBoxes);
+}
+
 export async function renderTranslatedImage(
   data: Buffer,
   mime: string,
@@ -2339,71 +2636,62 @@ export async function renderTranslatedImage(
   // 어드민이 위치·크기·굵기를 손댔거나 "지움"을 표시했으면 문구 교체를 모델에
   // 맡길 수 없다. 대신 지우기만 시키고, 그 위에 지시대로 우리가 그린다 —
   // 지우기는 모델이 자국 없이 잘하고, 지시는 우리가 그려야 정확히 지켜진다.
-  if (mustOverlay(boxes)) {
-    const om = await sharp(data).metadata();
-    const W = om.width ?? 0;
-    const H = om.height ?? 0;
-    const origRaw = W && H ? new Uint8Array(await sharp(data).ensureAlpha().raw().toBuffer()) : null;
-    let reason = "";
-    for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
-      try {
-        const cleaned = await eraseViaModel(data, mime, removals);
-        if (await leftoverInBoxes(cleaned, "image/png", removals, false)) {
-          reason = "원문이 남음";
-          continue;
-        }
-        if (origRaw) {
-          const cleanRaw = new Uint8Array(await sharp(cleaned).ensureAlpha().raw().toBuffer());
-          if (removals.some((b) => inventedInBox(origRaw, cleanRaw, W, toPixelBox(b.box, W, H)))) {
-            reason = "지운 자리에 장식을 지어냄";
-            continue;
-          }
-        }
-        // 지운 자리 패치만 원본에 얹는다 — 글자 밖 픽셀 드리프트 방지 (재생성과 동일)
-        const patched = await compositeTextPatches(data, cleaned, removals, W, H);
-        return drawTextOnly(patched.toBuffer("image/png"), mime, boxes);
-      } catch (e) {
-        reason = e instanceof Error ? e.message : String(e);
-      }
-    }
-    console.warn(`[imageTranslate] 모델 지우기 실패(${REGEN_ATTEMPTS}회) — 오버레이 폴백: ${reason}`);
-    return renderStill(data, mime, boxes);
-  }
+  if (mustOverlay(boxes)) return eraseThenDraw(data, mime, removals, boxes);
 
-  // 모델은 가끔 원문을 지우지 않고 한국어를 덧붙인다(빽빽한 스펙표에서 관측).
-  // 검수에서 걸리면 한 번 더 뽑고, 그래도 남으면 오버레이로 내려간다 —
-  // 중국어가 남은 이미지를 내보내느니 자국이 조금 있는 편이 낫다.
+  // 모델은 가끔 원문을 지우지 않고 한국어를 덧붙이거나, 문구를 자르거나,
+  // 지운 채 비워 둔다. 검수에서 걸린 문구는 **그 문구만** 로컬 보정한다.
+  //
+  // 예전에는 걸리면 전체 재생성을 한 번 더 돌렸는데(REGEN_ATTEMPTS=2), 같은
+  // 그림을 다시 뽑는 건 확률 재추첨일 뿐이고 이미지 호출이 배로 들며 장당
+  // 시간이 3~4배로 늘었다(운영 신고). 재추첨을 없애고 걸린 문구 수와 무관하게
+  // 부분 보정으로 간다 — 최악의 경우가 "일부 문구가 오버레이"이지, 더 느려지는
+  // 길은 없다.
   const verifyTargets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
   let reason = "";
-  let refused = false;
-  for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
-    try {
-      const out = await regenerateStill(data, mime, boxes);
-      const flagged = await flaggedBoxes(out.data, out.mime, verifyTargets);
-      if (flagged.length === 0) return out;
-      // 소수만 걸렸으면 그 문구만 오버레이로 고친다 — 한 문구 때문에
-      // 재생성 전체를 버리는 게 실측 폴백 7건 중 대부분의 원인이었다
-      if (flagged.length <= Math.max(1, Math.floor(verifyTargets.length / 3))) {
-        console.warn(`[imageTranslate] 재생성에 ${flagged.length}개 문구 잔류 — 그 문구만 오버레이 보정`);
-        return renderStill(out.data, out.mime, flagged);
-      }
-      reason = `원문이 남음 (${flagged.length}/${verifyTargets.length})`;
-    } catch (e) {
-      reason = e instanceof Error ? e.message : String(e);
-      // 안전 필터 거부는 같은 그림을 다시 보내도 똑같이 거부한다 — 즉시 띠 모드로
-      if (reason.includes("반환하지 않음")) {
-        refused = true;
-        break;
+  const t0 = Date.now();
+  try {
+    const out = await regenerateStill(data, mime, boxes);
+    const tRegen = Date.now() - t0;
+    const t1 = Date.now();
+    const flagged = await flaggedBoxes(out.data, out.mime, verifyTargets, true, data);
+    const tVerify = Date.now() - t1;
+    if (flagged.length === 0) {
+      console.log(`[imageTranslate] 재생성 완료 regen=${tRegen}ms verify=${tVerify}ms`);
+      return out;
+    }
+    console.warn(
+      `[imageTranslate] 검수에서 ${flagged.length}/${verifyTargets.length}개 문구 — 그 문구만 보정 (regen=${tRegen}ms verify=${tVerify}ms)`,
+    );
+    // 보정도 "모델 지우기 + 우리가 그리기"로 한다. 로컬 지우개로 고치면 잘림은
+    // 없어지지만 사진 배경에 흰 얼룩이 남는다(실측 04번: 잘림은 다 고쳐졌는데
+    // 제목 주변이 하얗게 떴다). 이미지 호출이 한 번 더 들지만 검수에 걸린
+    // 장에서만이고, 예전 전체 재생성 재시도보다는 싸고 결과가 확실하다.
+    //
+    // **지우기는 반드시 원본(data)에 시킨다.** 재생성본(out)에는 이미 한국어가
+    // 찍혀 있는데 지우기 프롬프트는 원문(zh)을 지우라고 적는다 — 재생성본을
+    // 넘겼더니 지울 대상을 못 찾아 그대로 두고, 그 위에 우리 글자가 겹쳐 찍혔다
+    // (실측 04번: "짧게 눌러 헤드 모드 변" 위에 보정문이 포개짐).
+    // 원본에서 깨끗이 고친 뒤, 그 박스만 재생성본에 얹는다.
+    const corrected = await eraseThenDraw(data, mime, flagged, flagged);
+    const cm = await sharp(out.data).metadata();
+    const cw = cm.width ?? 0;
+    const ch = cm.height ?? 0;
+    if (!cw || !ch) return corrected;
+    const merged = await compositeTextPatches(out.data, corrected.data, flagged, cw, ch);
+    return out.mime === "image/png"
+      ? { data: merged.toBuffer("image/png"), mime: out.mime }
+      : { data: merged.toBuffer("image/jpeg", 95), mime: "image/jpeg" };
+  } catch (e) {
+    reason = e instanceof Error ? e.message : String(e);
+    // 안전 필터 거부는 같은 그림을 다시 보내도 똑같이 거부한다 — 띠 모드로
+    if (reason.includes("반환하지 않음")) {
+      try {
+        return await regenerateByBands(data, mime, boxes);
+      } catch (e2) {
+        reason = `띠 재생성도 실패: ${e2 instanceof Error ? e2.message : e2}`;
       }
     }
   }
-  if (refused) {
-    try {
-      return await regenerateByBands(data, mime, boxes);
-    } catch (e) {
-      reason = `띠 재생성도 실패: ${e instanceof Error ? e.message : e}`;
-    }
-  }
-  console.warn(`[imageTranslate] 재생성 실패(${REGEN_ATTEMPTS}회) — 오버레이 폴백: ${reason}`);
+  console.warn(`[imageTranslate] 재생성 실패 — 오버레이 폴백: ${reason}`);
   return renderStill(data, mime, boxes);
 }

@@ -28,6 +28,11 @@ import {
   mergeOverlappingBoxes,
   splitTwoLines,
   charBudget,
+  brokenWordTail,
+  blankedBox,
+  regionStdev,
+  seamGap,
+  contrastStroke,
   planErase,
   stripForeign,
   inpaint,
@@ -754,5 +759,105 @@ describe("charBudget — 자리에 들어갈 글자 수", () => {
   it("실측 분포의 90%는 예산 안에 든다 (지킬 수 있는 규칙이어야 한다)", () => {
     // 중앙값 1.31배, 95퍼센타일 2.25배 → 1.6배 기준은 대다수를 통과시킨다
     expect(charBudget(wide, 1000, 1000, 10)).toBeGreaterThanOrEqual(16);
+  });
+});
+
+describe("brokenWordTail — 어절 중간에서 한 글자 잘림", () => {
+  it("어절 중간에서 잘리면 한 글자 차이라도 잡는다 (운영 신고 사례)", () => {
+    // truncatedTail 은 OCR 오차 여유로 2글자부터 봐서 이걸 놓쳤다
+    expect(brokenWordTail("짧게 눌러 헤드 모드 변경", "짧게 눌러 헤드 모드 변")).toBe(true);
+  });
+
+  it("통짜 어절 누락은 여기서 안 잡는다 — truncatedTail(2글자) 몫", () => {
+    expect(brokenWordTail("앞뒤 10단계 진동 자극", "앞뒤 10단계 진동")).toBe(false);
+  });
+
+  it("끝의 문장부호만 빠진 건 잘림이 아니다", () => {
+    expect(brokenWordTail("강력한 파워!", "강력한 파워")).toBe(false);
+  });
+
+  it("완전히 같으면 잘림이 아니다", () => {
+    expect(brokenWordTail("원터치 부스터", "원터치 부스터")).toBe(false);
+  });
+
+  it("앞부분이 다르면 잘림 판정을 하지 않는다 (다른 문구가 찍힌 것)", () => {
+    expect(brokenWordTail("원터치 부스터", "완전히 다른말")).toBe(false);
+  });
+});
+
+describe("blankedBox — 지워진 채 방치된 자리", () => {
+  const W = 100;
+  const H = 100;
+  /** 단색 캔버스에 세로 줄무늬(글자 획 흉내)를 넣은 RGBA raw */
+  const canvasRaw = (bg: number, stripes: boolean): Uint8Array => {
+    const raw = new Uint8Array(W * H * 4);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        const v = stripes && x % 8 < 3 && y > 20 && y < 80 ? 10 : bg;
+        raw[i] = raw[i + 1] = raw[i + 2] = v;
+        raw[i + 3] = 255;
+      }
+    }
+    return raw;
+  };
+  const box: [number, number, number, number] = [200, 100, 800, 900];
+
+  it("원본에 획이 있었는데 결과가 민 배경이면 빈 자리다 (흰 뭉개짐 사고)", () => {
+    expect(blankedBox(canvasRaw(230, true), canvasRaw(230, false), W, H, box)).toBe(true);
+  });
+
+  it("결과에 획 대비가 남아 있으면(그렸는데 OCR이 못 읽은 것) 건드리지 않는다", () => {
+    expect(blankedBox(canvasRaw(230, true), canvasRaw(230, true), W, H, box)).toBe(false);
+  });
+
+  it("원본부터 민 배경이었으면 빈 자리 판정을 하지 않는다", () => {
+    expect(blankedBox(canvasRaw(230, false), canvasRaw(230, false), W, H, box)).toBe(false);
+  });
+});
+
+describe("seamGap — 패치 경계가 보일지", () => {
+  const W = 60;
+  const H = 60;
+  const grad = (shift: number): Uint8Array => {
+    const raw = new Uint8Array(W * H * 4);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        const v = Math.min(255, x * 4 + shift); // 가로 그라데이션
+        raw[i] = raw[i + 1] = raw[i + 2] = v;
+        raw[i + 3] = 255;
+      }
+    }
+    return raw;
+  };
+  const rect = { x0: 10, y0: 10, x1: 50, y1: 50 };
+
+  it("배경을 그대로 살린 패치는 테두리 차이가 바닥 노이즈 수준이다", () => {
+    expect(seamGap(grad(0), grad(0), W, H, rect)).toBe(0);
+    expect(seamGap(grad(0), grad(4), W, H, rect)).toBeLessThan(8);
+  });
+
+  it("배경을 다시 그린 패치는 테두리 차이가 크다 — 얹으면 네모가 보인다", () => {
+    expect(seamGap(grad(0), grad(40), W, H, rect)).toBeGreaterThan(14);
+  });
+});
+
+describe("contrastStroke — 글자색이 배경에 묻힐 때 외곽선", () => {
+  it("흰 글씨가 밝은 배경에 오면 어두운 외곽선 (흰 글씨 사고)", () => {
+    expect(contrastStroke("#ffffff", [240, 240, 240])).toBe("#222222");
+  });
+
+  it("어두운 글씨가 어두운 배경에 오면 밝은 외곽선", () => {
+    expect(contrastStroke("#111111", [40, 40, 40])).toBe("#ffffff");
+  });
+
+  it("대비가 충분하면 외곽선을 두르지 않는다 — 디자인 유지", () => {
+    expect(contrastStroke("#ffffff", [30, 30, 30])).toBeNull();
+    expect(contrastStroke("#e60023", [255, 255, 255])).toBeNull(); // 흰 바탕 빨간 글씨
+  });
+
+  it("3자리 축약 hex 도 읽는다", () => {
+    expect(contrastStroke("#fff", [250, 250, 250])).toBe("#222222");
   });
 });
