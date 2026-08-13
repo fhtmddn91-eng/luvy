@@ -13,8 +13,8 @@ export function TrustBadges() {
             <Icon name={badge.icon} className="h-5 w-5" strokeWidth={1.7} />
           </span>
           <div className="leading-tight">
-            <p className="text-[14px] font-bold text-ink">{badge.title}</p>
-            <p className="text-[12px] text-muted">{badge.desc}</p>
+            <p className="text-[15.5px] font-bold text-ink">{badge.title}</p>
+            <p className="text-[13px] text-muted">{badge.desc}</p>
           </div>
         </div>
       ))}
