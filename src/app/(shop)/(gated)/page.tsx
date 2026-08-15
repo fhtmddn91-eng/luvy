@@ -31,7 +31,6 @@ export default async function HomePage() {
         widget={<HeroGreeting companyName={user?.companyName ?? "LUVY"} rows={stats} />}
         sidebar={
           <CategoryColumns
-            variant="rail"
             className="h-full"
             tree={tree.map((t) => ({
               slug: t.slug,

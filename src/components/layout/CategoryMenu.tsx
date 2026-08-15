@@ -15,10 +15,12 @@ export interface CategoryMenuItem {
 /**
  * 헤더 좌측 "전체 카테고리".
  *
- * 예전에는 대분류·세부를 2단 그리드에 한꺼번에 펼쳤는데, 카테고리가 늘어나자
- * 패널이 화면 아래로 넘쳐 세부 항목이 잘렸다(휠로 내려도 안 보임).
- * → 왼쪽에 대분류만 세로로 두고, 고른 대분류의 세부만 오른쪽에 띄운다.
- *   양쪽 다 자체 스크롤이라 카테고리가 더 늘어나도 잘리지 않는다.
+ * 데스크톱은 대분류·소분류를 한 번에 펼치는 메가메뉴다. 예전의 "대분류 세로
+ * 목록 + 호버 플라이아웃"은 홈 화면 왼쪽에 상시 노출되는 카테고리 기둥과
+ * 모양이 똑같아, 클릭하면 기둥 위에 같은 목록이 겹쳐 "카테고리 위에
+ * 카테고리"로 보였다(클라이언트 제보). 대분류마다 컬럼을 나눠 가로로
+ * 펼치므로 그보다 더 예전 방식(세로 2단 그리드)처럼 화면 아래로 넘치지
+ * 않고, 카테고리가 늘어날 때를 대비해 내부 스크롤을 안전망으로 둔다.
  *
  * 모바일은 같은 구조를 아코디언 시트로 편다 — 예전에는 md 미만에서
  * 버튼 자체가 숨겨져 카테고리로 갈 방법이 없었다.
@@ -74,12 +76,12 @@ export function CategoryMenu({ tree }: { tree: CategoryMenuItem[] }) {
 
       {open && (
         <>
-          {/* 데스크톱: 대분류 세로 + 세부 플라이아웃 */}
+          {/* 데스크톱: 전 카테고리 펼침 메가메뉴 */}
           <div
             role="menu"
             className="absolute left-0 top-[calc(100%+6px)] z-50 hidden md:block"
           >
-            <CategoryColumns tree={tree} onNavigate={() => setOpen(false)} />
+            <CategoryMegaMenu tree={tree} onNavigate={() => setOpen(false)} />
           </div>
 
           {/* 모바일: 전체 화면 시트.
@@ -118,38 +120,74 @@ export function CategoryMenu({ tree }: { tree: CategoryMenuItem[] }) {
 }
 
 /**
- * 대분류 세로 목록 + 세부 플라이아웃.
- * 홈 화면의 상시 노출 레일도 이걸 그대로 쓴다.
+ * 데스크톱 메가메뉴 — 대분류가 컬럼 제목, 아래로 소분류를 1열 나열.
+ * 소분류를 2열로 접으면 어드민에서 넣은 순서(1,2,3…)가 지그재그(1 2 / 3 4)로
+ * 보인다는 제보가 있었다 — 여기와 아래 플라이아웃·아코디언 모두 1열이 규칙이다.
+ */
+function CategoryMegaMenu({
+  tree,
+  onNavigate,
+}: {
+  tree: CategoryMenuItem[];
+  onNavigate: () => void;
+}) {
+  return (
+    <div className="max-h-[min(560px,calc(100vh-180px))] w-[min(1080px,calc(100vw-40px))] overflow-y-auto rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-card)]">
+      <div className="flex flex-wrap gap-x-10 gap-y-7">
+        {tree.map((top) => (
+          <section key={top.slug} className="w-[140px]">
+            <Link
+              href={categoryHref(top.slug)}
+              onClick={onNavigate}
+              className="mb-2 block break-keep border-b-2 border-line pb-2 text-[14.5px] font-extrabold leading-snug text-ink transition-colors hover:text-brand-600"
+            >
+              {top.name}
+            </Link>
+            {top.children.length > 0 && (
+              <ul>
+                {top.children.map((kid) => (
+                  <li key={kid.slug}>
+                    <Link
+                      href={categoryHref(kid.slug)}
+                      onClick={onNavigate}
+                      className="block break-keep py-[5px] text-[13.5px] leading-snug text-ink-soft transition-colors hover:text-brand-500"
+                    >
+                      {kid.name}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 홈 화면 왼쪽에 상시 노출되는 카테고리 기둥 — 대분류 세로 목록 + 세부 플라이아웃.
+ * (헤더 드롭다운은 위의 메가메뉴를 쓴다)
  */
 export function CategoryColumns({
   tree,
   onNavigate,
   className = "",
-  variant = "flyout",
 }: {
   tree: CategoryMenuItem[];
   onNavigate?: () => void;
   className?: string;
-  /** flyout: 헤더 드롭다운 / rail: 홈 화면에 상시 노출되는 왼쪽 기둥 */
-  variant?: "flyout" | "rail";
 }) {
   // null = 아무것도 안 고른 상태. 마우스가 떠나면 세부 패널을 닫는다
   const [active, setActive] = useState<string | null>(null);
   const current = tree.find((t) => t.slug === active);
-  const rail = variant === "rail";
 
   return (
     <div
       className={`relative ${className}`}
       onMouseLeave={() => setActive(null)}
     >
-      <ul
-        className={
-          rail
-            ? "h-full w-[190px] overflow-y-auto border-r border-line bg-white/95 py-3 backdrop-blur"
-            : "w-[188px] overflow-y-auto rounded-2xl border border-line bg-white py-2 shadow-[var(--shadow-card)] lg:max-h-[440px]"
-        }
-      >
+      <ul className="h-full w-[190px] overflow-y-auto border-r border-line bg-white/95 py-3 backdrop-blur">
         {tree.map((top) => (
           <li key={top.slug}>
             <Link
@@ -158,9 +196,7 @@ export function CategoryColumns({
               onMouseEnter={() => setActive(top.slug)}
               onFocus={() => setActive(top.slug)}
               aria-current={active === top.slug ? "true" : undefined}
-              className={`flex items-center justify-between gap-2 px-4 transition-colors ${
-                rail ? "py-3 text-[14px]" : "py-2.5 text-[13.5px]"
-              } font-bold ${
+              className={`flex items-center justify-between gap-2 px-4 py-3 text-[14px] font-bold transition-colors ${
                 active === top.slug ? "bg-brand-50 text-brand-600" : "text-ink hover:bg-cream"
               }`}
             >
@@ -174,21 +210,23 @@ export function CategoryColumns({
       </ul>
 
       {current && current.children.length > 0 && (
-        <div className="absolute left-full top-0 z-40 max-h-[440px] min-w-[230px] max-w-[460px] overflow-y-auto rounded-2xl border border-line bg-white p-4 shadow-[var(--shadow-card)]">
+        <div className="absolute left-full top-0 z-40 max-h-[440px] min-w-[210px] max-w-[320px] overflow-y-auto rounded-2xl border border-line bg-white p-4 shadow-[var(--shadow-card)]">
           <Link
             href={categoryHref(current.slug)}
             onClick={onNavigate}
-            className="mb-2.5 block border-b border-line pb-2 text-[13px] font-extrabold text-brand-600"
+            className="mb-2.5 block border-b border-line pb-2 text-[13.5px] font-extrabold text-brand-600"
           >
             {current.name} 전체보기
           </Link>
-          <ul className="grid grid-cols-2 gap-x-5 gap-y-1.5">
+          {/* 소분류는 1열 — 2열로 접으면 어드민 입력 순서가 지그재그로 보이고
+              글자도 작아진다는 제보(카테고리 디자인 수정 요청서) */}
+          <ul>
             {current.children.map((kid) => (
               <li key={kid.slug}>
                 <Link
                   href={categoryHref(kid.slug)}
                   onClick={onNavigate}
-                  className="block truncate py-0.5 text-[13px] text-ink-soft transition-colors hover:text-brand-500"
+                  className="block break-keep py-[5px] text-[14px] leading-snug text-ink-soft transition-colors hover:text-brand-500"
                 >
                   {kid.name}
                 </Link>
@@ -201,7 +239,7 @@ export function CategoryColumns({
   );
 }
 
-/** 모바일 시트용 아코디언 — 좁은 화면에서는 플라이아웃이 놓일 자리가 없다 */
+/** 모바일 시트용 아코디언 — 좁은 화면에서는 메가메뉴가 놓일 자리가 없다 */
 function CategoryAccordion({
   tree,
   onNavigate,
@@ -242,13 +280,13 @@ function CategoryAccordion({
               )}
             </div>
             {expanded && top.children.length > 0 && (
-              <ul className="grid grid-cols-2 gap-x-3 gap-y-0.5 bg-cream px-4 pb-3.5 pt-1">
+              <ul className="bg-cream px-4 pb-3.5 pt-1">
                 {top.children.map((kid) => (
                   <li key={kid.slug}>
                     <Link
                       href={categoryHref(kid.slug)}
                       onClick={onNavigate}
-                      className="block truncate py-1.5 text-[13.5px] text-ink-soft"
+                      className="block break-keep py-2 text-[14px] leading-snug text-ink-soft"
                     >
                       {kid.name}
                     </Link>
