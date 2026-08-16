@@ -56,6 +56,13 @@ export interface OcrBox {
   bold?: boolean;
   /** 단색 배경(카드·버튼·띠)이면 true, 사진·그라데이션 위면 false */
   solid_bg?: boolean;
+  /**
+   * 반투명 워터마크(회사명·상호 도장) — OCR 이 자동으로 지움 표시한 항목.
+   * 예전에는 번역 대상에서 제외해 그대로 남겼는데, 완성본에 한자가 희미하게
+   * 남는 게 결함으로 보인다는 피드백에 따라 지운다. 번역하지 않고 지우기만
+   * 하며(mode=erase), 어드민 수동 지움과 달리 기본 재생성 경로를 그대로 탄다.
+   */
+  wm?: boolean;
 
   /* ── 어드민 수동 조정 (없으면 자동) ── */
   mode?: BoxMode;
@@ -70,8 +77,11 @@ export interface OcrBox {
 
 /** 어드민이 손댄 항목인가 — 재생성 모델이 못 지키므로 오버레이로 그려야 한다 */
 export function hasManualOverride(b: OcrBox): boolean {
+  // 워터마크 자동 지움(wm + erase)은 어드민 지시가 아니다 — 수동 취급하면
+  // 워터마크가 있는 모든 이미지가 오버레이 경로로 빠져 글자 품질이 떨어진다
+  const modeTouched = b.mode !== undefined && b.mode !== "translate" && !(b.wm === true && b.mode === "erase");
   return (
-    (b.mode !== undefined && b.mode !== "translate") ||
+    modeTouched ||
     (b.dx !== undefined && b.dx !== 0) ||
     (b.dy !== undefined && b.dy !== 0) ||
     (b.scale !== undefined && b.scale !== 1) ||
@@ -151,6 +161,7 @@ export function parseOcrBoxes(raw: unknown): OcrBox[] {
       bold: Boolean(r.bold),
       solid_bg: r.solid_bg !== false, // 불명확하면 단색 취급(사각형 덮기가 더 안전)
       ...(mode ? { mode } : {}),
+      ...(r.wm === true ? { wm: true } : {}),
       ...(num(r.dx, -1000, 1000) !== undefined ? { dx: num(r.dx, -1000, 1000) } : {}),
       ...(num(r.dy, -1000, 1000) !== undefined ? { dy: num(r.dy, -1000, 1000) } : {}),
       ...(num(r.scale, 0.5, 2.5) !== undefined ? { scale: num(r.scale, 0.5, 2.5) } : {}),
@@ -281,6 +292,8 @@ const EXTRACT_PROMPT = `이 이미지 안의 외국어 텍스트(중국어·일�
 
 반드시 포함:
 - 작은 글씨·장식 문구·세로쓰기 문구도 빠짐없이 (1688 이미지에는 일본어 장식 문구도 흔합니다)
+- 사진 위에 반투명하게 깔린 중국어 워터마크(회사명·상호 도장)도 빠짐없이 —
+  이런 항목은 wm: true 로 표시하세요 (번역하지 않고 지우는 대상입니다)
 - 여러 줄로 쓰인 문구는 한 덩어리로 묶지 말고 줄 단위로 각각 항목을 만드세요
 - **한 줄 안에 외국어와 숫자·단위가 붙어 있으면 그 줄 전체를 한 항목으로** 잡고,
   box 도 줄 전체를 감싸게 하세요 (예: "不低于53MIN" 을 "不低于" 와 "53MIN" 으로
@@ -288,7 +301,6 @@ const EXTRACT_PROMPT = `이 이미지 안의 외국어 텍스트(중국어·일�
 
 제외 대상:
 - 로고·브랜드명 (라틴 문자 브랜드 포함)
-- 사진 위에 반투명하게 깔린 워터마크 (회사명·상호·사이트 주소 등)
 - 영어·한국어 문장
 - 숫자·단위만 단독으로 있는 것 (216g, 56dB, 3.7V 처럼 외국어가 섞이지 않은 것)
 
@@ -299,6 +311,7 @@ const EXTRACT_PROMPT = `이 이미지 안의 외국어 텍스트(중국어·일�
 - fg: 글자색 hex
 - bold: 굵은 글씨면 true
 - solid_bg: 배경이 단색(흰 카드·버튼·띠 등)이면 true, 사진/그라데이션 위면 false
+- wm: 반투명 워터마크면 true (아니면 생략)
 
 외국어 텍스트가 없으면 빈 배열. JSON 배열만 출력.`;
 
@@ -351,7 +364,9 @@ async function filterByContrast(
       // 민 배경은 어느 채널이든 편차가 작으므로 오탐 필터 기능은 그대로다.
       const stats = await sharp(src).extract({ left, top, width, height }).stats();
       const spread = Math.max(...stats.channels.slice(0, 3).map((c) => c?.stdev ?? 0));
-      if (spread >= MIN_TEXT_STDDEV) kept.push(b);
+      // 워터마크는 반투명이라 대비가 원래 약하다 — 일반 기준을 적용하면
+      // 정작 지워야 할 워터마크가 "글자 없음"으로 빠진다. 완전 민 배경만 거른다.
+      if (spread >= (b.wm ? 6 : MIN_TEXT_STDDEV)) kept.push(b);
     } catch {
       kept.push(b); // 측정 실패 시엔 살려둔다 (어드민이 문구 수정으로 지울 수 있다)
     }
@@ -571,8 +586,17 @@ export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
   if (extracted.length === 0) return [];
 
   // 글자가 없는 영역을 글자로 착각한 오탐을 대비로 걸러낸다
-  const solid = await filterByContrast(data, mime, extracted);
-  if (solid.length === 0) return [];
+  const kept = await filterByContrast(data, mime, extracted);
+  if (kept.length === 0) return [];
+
+  // 워터마크는 번역하지 않는다 — 지우기만 한다. 남기면 "완성본에 한자가
+  // 희미하게 남는다"는 결함이 되고, 한국어로 바꾸는 건 남의 상호를 우리
+  // 이미지에 다시 박는 셈이라 지우는 게 맞다.
+  const wmBoxes: OcrBox[] = kept
+    .filter((b) => b.wm)
+    .map((b) => ({ ...b, mode: "erase" as const, ko: "" }));
+  const solid = kept.filter((b) => !b.wm);
+  if (solid.length === 0) return wmBoxes;
 
   // 문구마다 "자리에 들어갈 수 있는 글자 수"를 계산해 번역 단계에서부터 지키게 한다
   const meta = await sharp(mime === "image/gif" ? await sharp(data, { page: 0, pages: 1 }).png().toBuffer() : data).metadata();
@@ -617,9 +641,10 @@ export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
     }
   }
 
-  return solid
-    .map((b, i) => ({ ...b, ko: koList[i] }))
-    .filter((b) => b.ko && b.ko !== b.zh);
+  return [
+    ...solid.map((b, i) => ({ ...b, ko: koList[i] })).filter((b) => b.ko && b.ko !== b.zh),
+    ...wmBoxes,
+  ];
 }
 
 /**
@@ -632,7 +657,7 @@ export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
 export async function retranslateBoxes(boxes: OcrBox[]): Promise<OcrBox[]> {
   const targets = boxes
     .map((b, i) => ({ b, i }))
-    .filter(({ b }) => b.zh && !hasManualOverride(b));
+    .filter(({ b }) => b.zh && !b.wm && !hasManualOverride(b));
   if (targets.length === 0) return boxes;
 
   const koList = await translateTexts(targets.map(({ b }) => b.zh));
@@ -1977,16 +2002,24 @@ const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-image";
 const REGEN_ATTEMPTS = 2;
 
 function regenPrompt(boxes: OcrBox[]): string {
-  // 유지·지움으로 지정한 항목은 재생성 대상에서 빼야 모델이 건드리지 않는다
+  // 유지로 지정한 항목은 재생성 대상에서 빼야 모델이 건드리지 않는다
   const tlist = boxes
     .filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim())
     .map((b) => `- "${b.zh}" → "${sanitizeSymbols(b.ko)}"`)
+    .join("\n");
+  // 워터마크(wm)는 같은 호출에서 지우기까지 맡긴다 — 따로 지우면 호출이 배가 된다
+  const elist = boxes
+    .filter((b) => b.mode === "erase" && b.zh)
+    .map((b) => `- "${b.zh}"`)
     .join("\n");
   return `이 이미지의 중국어·일본어 글자를 아래 한국어로 바꾼 이미지를 만들어 주세요.
 
 바꿀 문구 (반드시 이 번역 그대로, 하나도 빠짐없이):
 ${tlist}
-
+${elist ? `
+지울 문구 (반투명 워터마크 — 흔적 없이 지우고 그 자리에 아무것도 그리지 말 것):
+${elist}
+` : ""}
 가장 중요한 규칙:
 - 원문 글자는 반드시 지우고 그 자리에 한국어만 남긴다. 원문을 그대로 두고 옆이나 아래에 한국어를 덧붙이면 안 된다.
 - 결과 이미지에 중국어·일본어가 한 글자라도 남으면 실패다. 표·스펙 목록처럼 작은 글씨가 빽빽한 칸도 빠짐없이 바꾼다.
@@ -2334,7 +2367,11 @@ async function regenerateStill(
   if (!W || !H) throw new Error("이미지 크기를 읽을 수 없습니다.");
 
   const png = await callImageEdit(data, mime, regenPrompt(boxes), W, H);
-  const targets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
+  // 지움(워터마크) 박스도 패치 대상이다 — 빼면 모델이 지워 준 자리가 합성에서
+  // 빠져 워터마크가 도로 남는다
+  const targets = boxes.filter(
+    (b) => ((b.mode ?? "translate") === "translate" && b.ko.trim()) || b.mode === "erase",
+  );
 
   // 패치마다 "얹어도 되는지"를 가른다 — 배경을 다시 그린 패치를 그대로 얹으면
   // 사진·그라데이션 위에서 사각형 자국이 보이고(운영 신고), 글자가 패치 밖까지
@@ -2372,8 +2409,26 @@ async function regenerateStill(
  * 바꿀 문구가 아예 없을 때도 마찬가지.
  */
 export function mustOverlay(boxes: OcrBox[]): boolean {
-  if (boxes.some((b) => hasManualOverride(b) || b.mode === "erase")) return true;
+  // 워터마크 자동 지움(wm)은 어드민 지시가 아니다 — 이것 때문에 오버레이로
+  // 빠지면 워터마크 있는 모든 이미지의 글자가 오버레이 품질로 떨어진다
+  if (boxes.some((b) => hasManualOverride(b) || (b.mode === "erase" && !b.wm))) return true;
   return !boxes.some((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
+}
+
+/**
+ * 다른 문구 박스와 겹치는 워터마크는 지우지 않는다.
+ *
+ * 표·스펙을 가로지르는 워터마크의 지움 패치는 그 띠 안의 **이웃 글자까지
+ * 모델이 다시 그린 픽셀**로 갈아끼운다 — 실측(m5 스펙표): 제품명·재질 칸
+ * 글자가 유령처럼 겹치고 획이 변형됐다. 겹치는 워터마크는 희미하게 남는 쪽이
+ * 글자가 깨지는 쪽보다 낫다. 떨어져 있는 워터마크만 지운다.
+ */
+export function dropRiskyWm(boxes: OcrBox[], margin = 25): OcrBox[] {
+  const touches = (a: [number, number, number, number], b: [number, number, number, number]) =>
+    a[0] - margin < b[2] && b[0] - margin < a[2] && a[1] - margin < b[3] && b[1] - margin < a[3];
+  return boxes.filter(
+    (b) => !b.wm || !boxes.some((o) => o !== b && !o.wm && touches(b.box, o.box)),
+  );
 }
 
 /** 원본에서 없어져야 하는 항목 — 번역해 갈아끼울 것 + 지우라고 표시된 것 */
@@ -2851,6 +2906,7 @@ async function flaggedBoxes(
     // 로컬 지우개 뭉개짐이 "지웠더니 변형" 신고의 실체). 읽힌 줄이 이 박스의
     // 원문과 실제로 겹치는 글자일 때만 잔류로 본다.
     if (hits.some((l) => isForeignSource(l.text) && textCoverage(l.text, b.zh) >= 0.5)) return true;
+    if (b.mode === "erase") return false; // 지움 박스는 잔류만 본다 — 비어 있는 게 정답
     if (!checkCoverage) return false;
     if (hits.length === 0) {
       // 못 읽은 자리 — OCR 한계일 수도, 지워진 채 빈 것일 수도. 픽셀로 가른다.
@@ -2942,8 +2998,15 @@ async function eraseThenDraw(
   }
 
   if (attempts.length === 0) {
+    // 워터마크는 로컬 지우개로 내려보내지 않는다 — 사진 위에 뿌연 띠를
+    // 남긴다(실측 m3: 제품을 가로지르는 얼룩). 희미한 워터마크가 얼룩보다 낫다.
+    const fallbackBoxes = drawBoxes.filter((b) => !b.wm);
+    if (fallbackBoxes.length === 0) {
+      console.warn(`[imageTranslate] 모델 지우기 실패(${REGEN_ATTEMPTS}회) — 워터마크 원본 유지: ${reason}`);
+      return { data, mime };
+    }
     console.warn(`[imageTranslate] 모델 지우기 실패(${REGEN_ATTEMPTS}회) — 로컬 오버레이 폴백: ${reason}`);
-    return renderStill(data, mime, drawBoxes);
+    return renderStill(data, mime, fallbackBoxes);
   }
 
   // 박스마다 가장 잔상이 적은 시도를 고른다
@@ -2955,9 +3018,16 @@ async function eraseThenDraw(
     return best;
   });
   const localSet = new Set<OcrBox>(); // 로컬 지우개로 마무리할 박스
+  const keepOriginal = new Set<OcrBox>(); // 지우기를 포기하고 원본을 지킬 박스 (워터마크)
   removals.forEach((b, i) => {
     const s = attempts[pickAttempt[i]].scores[i];
     if (s <= GHOST_MAX) return;
+    // 워터마크는 깨끗이 지워질 때만 지운다 — 실패하면 원본 유지가 바닥이다
+    // (로컬 지우개는 사진 위에 뿌연 띠를 남긴다, 실측 m3)
+    if (b.wm) {
+      keepOriginal.add(b);
+      return;
+    }
     // 불합격 박스의 갈림길 — 로컬 지우개는 민 배경에서는 깨끗하지만, 사진·
     // 그라데이션 위에서는 평면 사각형 폴백까지 내려가 더 흉하다(실측: 사진
     // 한가운데 워터마크 자리에 분홍 네모). 민 배경(solid_bg)만 로컬로 보내고,
@@ -2965,11 +3035,16 @@ async function eraseThenDraw(
     // (Infinity)은 얹는 순간 네모가 보이므로 배경과 무관하게 얹지 않는다.
     if (b.solid_bg || s === Infinity) localSet.add(b);
   });
+  if (keepOriginal.size > 0) {
+    console.warn(`[imageTranslate] 워터마크 ${keepOriginal.size}건 지우기 불합격 — 원본 유지`);
+  }
 
   // 합격 박스를 시도별로 나눠 합성한다 (여러 시도의 좋은 패치를 섞는다)
   let patchedBuf = data;
   for (let k = 0; k < attempts.length; k++) {
-    const boxesK = removals.filter((b, i) => pickAttempt[i] === k && !localSet.has(b));
+    const boxesK = removals.filter(
+      (b, i) => pickAttempt[i] === k && !localSet.has(b) && !keepOriginal.has(b),
+    );
     if (boxesK.length === 0) continue;
     const merged = await compositeTextPatches(patchedBuf, attempts[k].cleaned, boxesK, W, H);
     patchedBuf = await merged.toBuffer("image/png");
@@ -3002,7 +3077,11 @@ export async function renderTranslatedImage(
   opts: { regenerate?: boolean } = {},
 ): Promise<{ data: Buffer; mime: string }> {
   ensureFonts();
-  if (mime === "image/gif") return renderGif(data, boxes);
+  // GIF 는 워터마크 지우기를 하지 않는다 — 프레임마다 로컬 지우개를 돌리면
+  // 사진 배경에 얼룩이 프레임 단위로 어른거린다. 정지 이미지부터 확실히.
+  if (mime === "image/gif") return renderGif(data, boxes.filter((b) => !b.wm));
+  // 다른 문구와 겹치는 워터마크는 지움 대상에서 제외 (이웃 글자 훼손 방지)
+  boxes = dropRiskyWm(boxes);
   if (opts.regenerate === false) return renderStill(data, mime, boxes);
 
   const removals = eraseTargets(boxes);
@@ -3021,7 +3100,10 @@ export async function renderTranslatedImage(
   // 시간이 3~4배로 늘었다(운영 신고). 재추첨을 없애고 걸린 문구 수와 무관하게
   // 부분 보정으로 간다 — 최악의 경우가 "일부 문구가 오버레이"이지, 더 느려지는
   // 길은 없다.
-  const verifyTargets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
+  // 지움(워터마크) 박스도 검수 대상 — 원문 잔류만 본다 (flaggedBoxes 가 가른다)
+  const verifyTargets = boxes.filter(
+    (b) => ((b.mode ?? "translate") === "translate" && b.ko.trim()) || b.mode === "erase",
+  );
   let reason = "";
   const t0 = Date.now();
   try {
@@ -3055,7 +3137,15 @@ export async function renderTranslatedImage(
     const cw = cm.width ?? 0;
     const ch = cm.height ?? 0;
     if (!cw || !ch) return corrected;
-    const merged = await compositeTextPatches(out.data, corrected.data, fix, cw, ch);
+    // 합성 방향이 중요하다 — 보정 패치를 재생성본(out) "위에" 페더로 얹으면
+    // 경계 띠에서 밑에 깔린 원문 획이 비쳐 유령처럼 겹친다(실측 m5: 제품명·
+    // 재질 칸 이중상). 반대로 보정본(corrected: 원본 기반이라 걸린 자리가
+    // 이미 깨끗함)을 바탕으로 깔고, 합격한 재생성 패치만 그 위에 얹으면
+    // 보정 영역엔 경계 혼합 자체가 없다.
+    const fixSet = new Set(fix);
+    const pendingSet = new Set(pending);
+    const pasteBack = verifyTargets.filter((b) => !fixSet.has(b) && !pendingSet.has(b));
+    const merged = await compositeTextPatches(corrected.data, out.data, pasteBack, cw, ch);
     return out.mime === "image/png"
       ? { data: merged.toBuffer("image/png"), mime: out.mime }
       : { data: merged.toBuffer("image/jpeg", 95), mime: "image/jpeg" };
@@ -3071,5 +3161,6 @@ export async function renderTranslatedImage(
     }
   }
   console.warn(`[imageTranslate] 재생성 실패 — 오버레이 폴백: ${reason}`);
-  return renderStill(data, mime, boxes);
+  // 오버레이(로컬 지우개)로는 워터마크를 지우지 않는다 — 사진 위 뿌연 띠(실측 m3)
+  return renderStill(data, mime, boxes.filter((b) => !b.wm));
 }

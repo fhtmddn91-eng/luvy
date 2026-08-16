@@ -45,6 +45,7 @@ import {
   dedupeBandBoxes,
   ghostResidue,
   edgeCrossing,
+  dropRiskyWm,
   type OcrBox,
 } from "./imageTranslate";
 
@@ -1109,5 +1110,94 @@ describe("edgeCrossing — 드리프트와 침범의 구분", () => {
   it("질감이 1px 밀린 드리프트는 차이가 커도 침범이 아니다 (실측: 16/17 오탐)", () => {
     // 같은 질감의 이동 — 픽셀 차이는 크지만 조각의 거칠기는 그대로다
     expect(edgeCrossing(checker(0), checker(1), W, H, rect)).toBeLessThan(45);
+  });
+});
+
+describe("워터마크 자동 지움 (wm)", () => {
+  const wmBox: OcrBox = {
+    box: [100, 100, 140, 900],
+    zh: "东莞市带劲科技有限公司",
+    ko: "",
+    bg: "#ffffff",
+    fg: "#cccccc",
+    bold: false,
+    solid_bg: false,
+    wm: true,
+    mode: "erase",
+  };
+  const tBox: OcrBox = {
+    box: [200, 100, 300, 900],
+    zh: "舌尖撩拨",
+    ko: "짜릿한 자극",
+    bg: "#ffffff",
+    fg: "#000000",
+    bold: true,
+    solid_bg: true,
+  };
+
+  it("parseOcrBoxes 가 wm 플래그를 보존한다", () => {
+    const r = parseOcrBoxes([{ ...wmBox }]);
+    expect(r).toHaveLength(1);
+    expect(r[0].wm).toBe(true);
+    expect(r[0].mode).toBe("erase");
+  });
+
+  it("wm 지움은 수동 조정이 아니다 — 오버레이 강제 사유가 안 된다", () => {
+    expect(hasManualOverride(wmBox)).toBe(false);
+    expect(mustOverlay([wmBox, tBox])).toBe(false); // 기본 재생성 경로 유지
+  });
+
+  it("어드민이 직접 지운 박스는 여전히 오버레이 경로다", () => {
+    const adminErase: OcrBox = { ...tBox, mode: "erase" };
+    expect(hasManualOverride(adminErase)).toBe(true);
+    expect(mustOverlay([adminErase, tBox])).toBe(true);
+  });
+
+  it("워터마크만 있는 이미지는 지우기 경로로 간다", () => {
+    // 번역할 문구가 없으므로 mustOverlay(=eraseThenDraw) — 지우기만 하고 끝
+    expect(mustOverlay([wmBox])).toBe(true);
+  });
+
+  it("wm 박스는 지움 대상 목록에 들어간다", () => {
+    expect(eraseTargets([wmBox, tBox])).toHaveLength(2);
+  });
+});
+
+describe("dropRiskyWm — 다른 글자와 겹치는 워터마크 제외", () => {
+  const wm = (box: [number, number, number, number]): OcrBox => ({
+    box,
+    zh: "东莞市带劲科技有限公司",
+    ko: "",
+    bg: "#ffffff",
+    fg: "#cccccc",
+    bold: false,
+    solid_bg: false,
+    wm: true,
+    mode: "erase",
+  });
+  const tx = (box: [number, number, number, number]): OcrBox => ({
+    box,
+    zh: "产品名称",
+    ko: "제품명",
+    bg: "#ffffff",
+    fg: "#000000",
+    bold: false,
+    solid_bg: true,
+  });
+
+  it("표·문구를 가로지르는 워터마크는 지움 대상에서 뺀다 (실측 m5: 표 글자 훼손)", () => {
+    const r = dropRiskyWm([wm([150, 50, 200, 950]), tx([140, 100, 220, 400])]);
+    expect(r).toHaveLength(1);
+    expect(r[0].wm).toBeUndefined();
+  });
+
+  it("떨어져 있는 워터마크는 지움 대상으로 남긴다", () => {
+    const r = dropRiskyWm([wm([700, 50, 750, 950]), tx([100, 100, 180, 400])]);
+    expect(r).toHaveLength(2);
+  });
+
+  it("워터마크끼리 겹치는 건 상관없다 (같이 지운다)", () => {
+    const r = dropRiskyWm([wm([100, 50, 150, 950]), wm([140, 50, 190, 950])]);
+    expect(r).toHaveLength(2);
   });
 });
