@@ -174,12 +174,15 @@ async function callGemini(
   model: string,
   parts: GeminiPart[],
   generationConfig: Record<string, unknown>,
+  /** attempts: 이미지 호출은 시간 초과가 잦아 3회면 장당 4분 넘게 붙잡는다 — 줄여 쓸 수 있게 */
+  opts: { attempts?: number } = {},
 ): Promise<GeminiPart[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY 미설정");
 
+  const maxAttempts = opts.attempts ?? MAX_ATTEMPTS;
   let lastNote = "응답 없음";
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (attempt > 1) await sleep(RETRY_DELAY_MS[attempt - 2] ?? 4_000);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
@@ -199,17 +202,27 @@ async function callGemini(
         throw new Error(lastNote);
       }
       const json = (await res.json()) as {
-        candidates?: { content?: { parts?: GeminiPart[] } }[];
+        candidates?: { content?: { parts?: GeminiPart[] }; finishReason?: string }[];
+        promptFeedback?: { blockReason?: string };
       };
-      return json.candidates?.[0]?.content?.parts ?? [];
+      const out = json.candidates?.[0]?.content?.parts ?? [];
+      if (out.length === 0) {
+        // 안전 필터 차단은 "글자 없음"이 아니다 — 빈 배열로 돌려주면 OCR 이
+        // "번역할 텍스트가 없다"로 오판한다 (운영 신고: 중국어가 선명한 이미지
+        // 4장이 "찾지 못했습니다"로 반려). 이유를 실어 던져 호출자가 가르게 한다.
+        const reason = json.promptFeedback?.blockReason ?? json.candidates?.[0]?.finishReason;
+        if (reason && reason !== "STOP") throw new Error(`모델 거부(${reason})`);
+      }
+      return out;
     } catch (e) {
-      if (e instanceof Error && e.message.startsWith("API 오류")) throw e;
+      // 같은 입력엔 같은 거부가 돌아온다 — 재시도 낭비 없이 바로 알린다
+      if (e instanceof Error && (e.message.startsWith("API 오류") || e.message.startsWith("모델 거부"))) throw e;
       lastNote = ctrl.signal.aborted ? "시간 초과" : e instanceof Error ? e.message : String(e);
     } finally {
       clearTimeout(timer);
     }
   }
-  throw new Error(`${lastNote} (${MAX_ATTEMPTS}회 시도)`);
+  throw new Error(`${lastNote} (${maxAttempts}회 시도)`);
 }
 
 function textOf(parts: GeminiPart[]): string {
@@ -219,6 +232,40 @@ function textOf(parts: GeminiPart[]): string {
 function jsonArrayOf(parts: GeminiPart[]): unknown {
   const m = textOf(parts).match(/\[[\s\S]*\]/);
   return m ? JSON.parse(m[0]) : [];
+}
+
+/**
+ * 객체 배열 JSON 응답을 관대하게 파싱한다 — 온전한 원소만 건진다.
+ *
+ * 문구가 많은 이미지(실측 37개)는 응답이 토큰 한도에서 잘려 마지막 원소가
+ * 깨진 채 온다. 통째 JSON.parse 는 전부 버리고, 그 결과 검수가 "판독 실패 —
+ * 무검수 통과"로 짤림·잔류를 그대로 내보냈다(운영 신고). null 은 "JSON 이
+ * 아예 없음"(거부·빈 응답) — 빈 배열(글자 없음)과 구분해야 한다.
+ *
+ * 번역처럼 입력과 1:1 순서 대응이 필요한 곳에는 쓰면 안 된다 — 중간 원소가
+ * 빠지면 어긋난 번역이 조용히 붙는다. 좌표를 각자 들고 다니는 OCR·검수 전용.
+ */
+export function parseJsonArrayLoose(text: string): unknown[] | null {
+  const open = text.match(/\[[\s\S]*/);
+  if (!open) return null;
+  const closed = text.match(/\[[\s\S]*\]/);
+  if (closed) {
+    try {
+      const full = JSON.parse(closed[0]);
+      if (Array.isArray(full)) return full;
+    } catch {
+      /* 아래에서 원소 단위로 건진다 */
+    }
+  }
+  const rows: unknown[] = [];
+  for (const om of open[0].matchAll(/\{[^{}]*\}/g)) {
+    try {
+      rows.push(JSON.parse(om[0]));
+    } catch {
+      /* 깨진 원소는 버린다 — 좌표·문구가 온전한 것만 쓴다 */
+    }
+  }
+  return rows;
 }
 
 /* ── 1단계: 글자 추출 (번역 없이) ───────────────────────── */
@@ -241,6 +288,7 @@ const EXTRACT_PROMPT = `이 이미지 안의 외국어 텍스트(중국어·일�
 
 제외 대상:
 - 로고·브랜드명 (라틴 문자 브랜드 포함)
+- 사진 위에 반투명하게 깔린 워터마크 (회사명·상호·사이트 주소 등)
 - 영어·한국어 문장
 - 숫자·단위만 단독으로 있는 것 (216g, 56dB, 3.7V 처럼 외국어가 섞이지 않은 것)
 
@@ -297,11 +345,13 @@ async function filterByContrast(
     const height = Math.min(H - top, Math.max(1, Math.ceil(((ymax - ymin) / 1000) * H)));
     if (width < 3 || height < 3) continue;
     try {
-      const stats = await sharp(src)
-        .extract({ left, top, width, height })
-        .greyscale()
-        .stats();
-      if ((stats.channels[0]?.stdev ?? 0) >= MIN_TEXT_STDDEV) kept.push(b);
+      // 흑백 명도 편차만 보면 "분홍 배경 위 분홍 글씨"처럼 색상으로만 구분되는
+      // 문구가 0에 가깝게 나와 진짜 글자를 오탐으로 버렸다(운영 신고: 장식
+      // 문구 이미지가 "글자 없음" 반려). 채널별 편차의 최댓값으로 본다 —
+      // 민 배경은 어느 채널이든 편차가 작으므로 오탐 필터 기능은 그대로다.
+      const stats = await sharp(src).extract({ left, top, width, height }).stats();
+      const spread = Math.max(...stats.channels.slice(0, 3).map((c) => c?.stdev ?? 0));
+      if (spread >= MIN_TEXT_STDDEV) kept.push(b);
     } catch {
       kept.push(b); // 측정 실패 시엔 살려둔다 (어드민이 문구 수정으로 지울 수 있다)
     }
@@ -402,7 +452,79 @@ function overBudget(koList: string[], budgets: number[]): number[] {
  * GIF 는 Gemini 가 받지 않으므로 첫 프레임을 PNG 로 뽑아 보낸다
  * (이 상세 GIF 들은 글자가 고정이고 제품만 움직이는 구조 — 실물로 확인).
  */
-/** 이미지에서 중국어·일본어 문구와 좌표를 뽑는다 (번역 전 / 번역 후 검수 공용) */
+/** OCR 띠 분할 [시작, 높이] 비율 — 겹치게 잘라 경계에 걸린 문구도 어느 한 띠에는 온전히 들어가게 */
+export const OCR_BANDS: [number, number][] = [
+  [0, 0.45],
+  [0.3, 0.45],
+  [0.55, 0.45],
+];
+
+/** 띠 안(0~1000) 좌표를 전체 이미지 기준으로 되돌린다 */
+export function remapBandBox(
+  box: [number, number, number, number],
+  topFrac: number,
+  heightFrac: number,
+): [number, number, number, number] {
+  const [ymin, xmin, ymax, xmax] = box;
+  const map = (y: number) => Math.min(1000, Math.round((topFrac + (y / 1000) * heightFrac) * 1000));
+  return [map(ymin), xmin, map(ymax), xmax];
+}
+
+/** 겹친 띠에서 같은 문구가 두 번 잡힌 것 제거 — 같은 원문이 세로로 겹치면 중복 */
+export function dedupeBandBoxes(boxes: OcrBox[]): OcrBox[] {
+  const overlapY = (a: [number, number, number, number], b: [number, number, number, number]) => {
+    const inter = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+    const minH = Math.max(1, Math.min(a[2] - a[0], b[2] - b[0]));
+    return inter / minH;
+  };
+  const area = (b: [number, number, number, number]) => Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]);
+  const out: OcrBox[] = [];
+  for (const b of boxes) {
+    const i = out.findIndex((o) => o.zh === b.zh && overlapY(o.box, b.box) > 0.5);
+    if (i < 0) {
+      out.push(b);
+    } else if (area(b.box) > area(out[i].box)) {
+      out[i] = b; // 더 큰 박스 = 문구가 온전히 들어온 띠 쪽을 남긴다
+    }
+  }
+  return out;
+}
+
+/** OCR 한 번 — 빈 응답·비JSON 응답은 "글자 없음"이 아니라 실패로 던진다 */
+async function extractOnce(sendData: Buffer, sendMime: string): Promise<OcrBox[]> {
+  const parts = await callGemini(
+    MODEL,
+    [
+      { inline_data: { mime_type: sendMime, data: sendData.toString("base64") } },
+      { text: EXTRACT_PROMPT },
+    ],
+    {
+      // 8000 에서는 문구가 많은 이미지(실측 37개)의 응답이 중간에서 잘렸다
+      maxOutputTokens: 16000,
+      responseMimeType: "application/json",
+      thinkingConfig: { thinkingLevel: "minimal" },
+    },
+  );
+  const text = textOf(parts);
+  if (!text.trim()) throw new Error("모델 거부(빈 응답)");
+  const rawItems = parseJsonArrayLoose(text);
+  if (rawItems === null) throw new Error(`판독 불가 응답: ${text.slice(0, 80)}`);
+  // ko 는 아직 없다 — zh 를 임시로 채워 좌표·색 검증만 통과시킨다
+  return parseOcrBoxes(
+    rawItems.map((r) => ({ ...(r as Record<string, unknown>), ko: (r as Record<string, unknown>).zh })),
+  ).filter((b) => isForeignSource(b.zh));
+}
+
+/**
+ * 이미지에서 중국어·일본어 문구와 좌표를 뽑는다 (번역 전 / 번역 후 검수 공용).
+ *
+ * 안전 필터는 글자가 아니라 사진(제품·인물)을 보고 거부한다 — 예전에는 거부가
+ * 빈 배열로 둔갑해 "번역할 중국어 텍스트를 찾지 못했습니다"로 나갔다(운영 신고:
+ * 중국어가 선명한 4장 반려). 전체가 거부되면 가로 띠로 잘라 다시 읽는다 —
+ * 띠에는 사진이 덜 담겨 대부분 통과한다(띠 재생성과 같은 원리, 텍스트 호출이라
+ * 비용은 무시 수준). 띠까지 전부 실패하면 그대로 실패를 알린다 — 조용히
+ * "글자 없음"으로 넘어가는 길은 없다.
+ */
 async function extractForeign(data: Buffer, mime: string): Promise<OcrBox[]> {
   let sendData = data;
   let sendMime = mime;
@@ -411,25 +533,37 @@ async function extractForeign(data: Buffer, mime: string): Promise<OcrBox[]> {
     sendMime = "image/png";
   }
 
-  const parts = await callGemini(
-    MODEL,
-    [
-      { inline_data: { mime_type: sendMime, data: sendData.toString("base64") } },
-      { text: EXTRACT_PROMPT },
-    ],
-    {
-      maxOutputTokens: 8000,
-      responseMimeType: "application/json",
-      thinkingConfig: { thinkingLevel: "minimal" },
-    },
-  );
-  // ko 는 아직 없다 — zh 를 임시로 채워 좌표·색 검증만 통과시킨다
-  const rawItems = jsonArrayOf(parts);
-  return parseOcrBoxes(
-    Array.isArray(rawItems)
-      ? rawItems.map((r) => ({ ...(r as Record<string, unknown>), ko: (r as Record<string, unknown>).zh }))
-      : [],
-  ).filter((b) => isForeignSource(b.zh));
+  try {
+    return await extractOnce(sendData, sendMime);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const meta = await sharp(sendData).metadata();
+    const W = meta.width ?? 0;
+    const H = meta.height ?? 0;
+    if (!W || !H) throw e;
+
+    const found: OcrBox[] = [];
+    let ok = 0;
+    for (const [top, h] of OCR_BANDS) {
+      const cropTop = Math.round(top * H);
+      const cropH = Math.min(H - cropTop, Math.round(h * H));
+      if (cropH < 8) continue;
+      try {
+        const crop = await sharp(sendData)
+          .extract({ left: 0, top: cropTop, width: W, height: cropH })
+          .png()
+          .toBuffer();
+        const got = await extractOnce(crop, "image/png");
+        ok++;
+        found.push(...got.map((b) => ({ ...b, box: remapBandBox(b.box, cropTop / H, cropH / H) })));
+      } catch {
+        /* 이 띠도 거부 — 다음 띠에 기회를 준다 */
+      }
+    }
+    if (ok === 0) throw e; // 전부 실패 — 원인을 그대로 알린다 (어드민이 재시도 판단)
+    console.warn(`[imageTranslate] 전체 OCR 실패(${msg}) — 띠 ${ok}/${OCR_BANDS.length}개로 판독`);
+    return dedupeBandBoxes(found);
+  }
 }
 
 export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
@@ -1999,6 +2133,9 @@ async function callImageEdit(
       { text: prompt },
     ],
     { responseModalities: ["TEXT", "IMAGE"] },
+    // 이미지 호출은 시간 초과가 잦고 3회면 장당 4분 넘게 붙잡는다(운영 신고:
+    // 번역 시간 10분+). 2회로 줄인다 — 실패해도 아래 사다리(띠→오버레이)가 받는다.
+    { attempts: 2 },
   );
   const imgPart = parts.find((p) => p.inlineData?.data || p.inline_data?.data);
   const b64 = imgPart?.inlineData?.data ?? imgPart?.inline_data?.data;
@@ -2345,10 +2482,15 @@ async function transcribeText(
   const parts = await callGemini(
     MODEL,
     [{ inline_data: { mime_type: mime, data: data.toString("base64") } }, { text: TRANSCRIBE_PROMPT }],
-    { maxOutputTokens: 8000, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "minimal" } },
+    // 8000 에서는 문구 37개짜리 이미지의 응답이 잘려 검수 전체가 무너졌다(실측)
+    { maxOutputTokens: 16000, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "minimal" } },
   );
-  const raw = jsonArrayOf(parts);
-  if (!Array.isArray(raw)) return [];
+  const text = textOf(parts);
+  if (!text.trim()) throw new Error("모델 거부(빈 응답)");
+  // 잘린 응답에서도 온전한 줄은 건진다 — 통째 파싱 실패로 검수를 포기하면
+  // 그 이미지는 무검수로 나간다 (짤림·잔류가 그대로 노출된 원인)
+  const raw = parseJsonArrayLoose(text);
+  if (raw === null) throw new Error(`판독 불가 응답: ${text.slice(0, 80)}`);
   const out: { box: [number, number, number, number]; text: string }[] = [];
   for (const r of raw) {
     const row = r as Record<string, unknown>;
@@ -2362,8 +2504,10 @@ async function transcribeText(
   return out;
 }
 
-/** 비교용 정규화 — 공백·문장부호는 모델이 흘리기 쉬워 뺀다 */
-const forCompare = (s: string): string => s.replace(/[\s.,·:;!?()[\]{}'"“”‘’\-–—/+]/g, "");
+/** 비교용 정규화 — 공백·문장부호·장식부호(~ ⋯ ※ 등)는 모델이 흘리기 쉬워 뺀다.
+ *  ~ 를 안 빼면 "깊은 진~"(잘린 채 물결로 마감) 이 "깊은 진동"의 앞부분으로
+ *  인정되지 않아 잘림 검사(truncatedTail·brokenWordTail)를 전부 비껴갔다. */
+const forCompare = (s: string): string => s.replace(/[\s.,·:;!?()[\]{}'"“”‘’\-–—/+~～⁓∼…⋯*※]/g, "");
 
 /**
  * 기대한 문구가 실제로 다 찍혔는지 0~1 로 — 순서를 지킨 최장 공통 부분수열 비율.
@@ -2439,6 +2583,23 @@ export function brokenWordTail(expected: string, observed: string): boolean {
   return false; // 남은 게 문장부호뿐 — 잘림 아님
 }
 
+/**
+ * 잘린 글자가 낱자(자모)로 찍혔는지.
+ *
+ * "부드러운"이 획 중간에서 잘리면 OCR 이 "부드러ㄷ"처럼 마지막을 낱자로 읽는다
+ * (운영 스크린샷: "전신 부드러ㄷ"). 이때는 찍힌 글자가 기대 문구의 앞부분
+ * 그대로가 아니라서 prefix 기반 잘림 검사가 전부 빗나간다. 완성된 번역문이
+ * 낱자로 끝나는 일은 없으므로, 기대 문구가 그 낱자로 끝나는 특수한 경우가
+ * 아닌 한 잘림(또는 딴 글자)이다.
+ */
+export function choppedGlyphTail(expected: string, observed: string): boolean {
+  const e = forCompare(expected);
+  const o = forCompare(observed);
+  if (!o) return false;
+  const last = o[o.length - 1];
+  return /[ㄱ-ㅎㅏ-ㅣ]/.test(last) && !e.endsWith(last);
+}
+
 /** 박스 영역의 밝기 표준편차 — 글자 획이 있으면 크고, 민 배경이면 작다 */
 export function regionStdev(
   raw: Uint8Array,
@@ -2466,6 +2627,62 @@ export function regionStdev(
   const m = s / n;
   return Math.sqrt(Math.max(0, s2 / n - m * m));
 }
+
+/**
+ * 지운 자리에 잔상(유령 획·뭉개짐)이 남았는지 — 내부 거칠기 ÷ 주변 거칠기.
+ *
+ * 모델 지우기가 글자를 반쯤만 지우면 반투명 획·얼룩이 남는다(운영 신고:
+ * 빨간 제품 이미지에서 "지웠더니 이미지가 뭉개짐"). 경계 검사(seamGap)는
+ * 패치 테두리만 보므로 내부 잔상은 통과했다. 절대 편차로 보면 실크·그라데이션
+ * 같은 질감 배경을 오탐하므로, 바로 바깥 링(같은 배경)과의 비율로 본다 —
+ * 깨끗이 지웠으면 내부 질감 ≈ 주변 질감이다.
+ */
+export function ghostResidue(
+  raw: Uint8Array,
+  W: number,
+  H: number,
+  box: { x0: number; y0: number; x1: number; y1: number },
+  /** 링 표본에서 제외할 영역 — 이웃 글자 박스가 링에 물리면 비율이 오염된다 */
+  exclude: { x0: number; y0: number; x1: number; y1: number }[] = [],
+): number {
+  const bx0 = Math.max(0, Math.round(box.x0));
+  const by0 = Math.max(0, Math.round(box.y0));
+  const bx1 = Math.min(W, Math.round(box.x1));
+  const by1 = Math.min(H, Math.round(box.y1));
+  const w = bx1 - bx0;
+  const h = by1 - by0;
+  if (w < 12 || h < 12) return 0; // 너무 작으면 판정 무의미
+
+  // 내부: 페더 경계를 피해 12% 안쪽만 본다
+  const sx = Math.max(2, Math.round(w * 0.12));
+  const sy = Math.max(2, Math.round(h * 0.12));
+  const interior = regionStdev(raw, W, { x0: bx0 + sx, y0: by0 + sy, x1: bx1 - sx, y1: by1 - sy });
+
+  // 링: 박스 밖 4~16px 띠 (다른 지움 박스와 겹치는 픽셀은 제외)
+  const inBox = (x: number, y: number, b: { x0: number; y0: number; x1: number; y1: number }) =>
+    x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1;
+  let n = 0;
+  let s = 0;
+  let s2 = 0;
+  for (let y = Math.max(0, by0 - 16); y < Math.min(H, by1 + 16); y++) {
+    for (let x = Math.max(0, bx0 - 16); x < Math.min(W, bx1 + 16); x++) {
+      if (inBox(x, y, { x0: bx0 - 4, y0: by0 - 4, x1: bx1 + 4, y1: by1 + 4 })) continue;
+      if (exclude.some((b) => inBox(x, y, b))) continue;
+      const i = (y * W + x) * 4;
+      const l = 0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2];
+      s += l;
+      s2 += l * l;
+      n++;
+    }
+  }
+  if (n < 64) return 0; // 링 표본이 부족하면 판정하지 않는다
+  const m = s / n;
+  const ring = Math.sqrt(Math.max(0, s2 / n - m * m));
+  return interior / Math.max(ring, 6);
+}
+
+/** 이 비율을 넘으면 지운 자리에 잔상이 남은 것 — 주변 질감의 배수 */
+const GHOST_MAX = 2;
 
 /**
  * 번역문이 들어가야 할 자리가 "지워진 채 방치"됐는지.
@@ -2510,12 +2727,17 @@ async function flaggedBoxes(
   try {
     lines = await transcribeText(out, mime);
   } catch {
-    // 일시 오류일 수 있으니 한 번은 다시 — 그래도 실패하면 결과를 살린다
+    // 일시 오류일 수 있으니 한 번은 다시
     try {
       lines = await transcribeText(out, mime);
     } catch (e) {
-      console.warn(`[imageTranslate] 검수 판독 실패 — 무검수 통과: ${e instanceof Error ? e.message : e}`);
-      return [];
+      // 검수를 못 하면 "통과"가 아니라 "전부 보정"이다 — 예전에는 무검수
+      // 통과였고, 짤림·원문 잔류가 그대로 노출됐다(운영 신고). 전 문구를
+      // 걸린 것으로 돌려주면 보정 경로(모델 지우기 + 직접 그리기)가 받고,
+      // 그마저 실패하면 오버레이가 바닥을 지킨다 — 미검수 이미지가 나가는
+      // 길이 없어진다.
+      console.warn(`[imageTranslate] 검수 판독 실패 — 전 문구 보정 강등: ${e instanceof Error ? e.message : e}`);
+      return targets.slice();
     }
   }
 
@@ -2541,7 +2763,12 @@ async function flaggedBoxes(
 
   return targets.filter((b) => {
     const hits = lines.filter((l) => flaggedHits(l.box, b));
-    if (hits.some((l) => isForeignSource(l.text))) return true; // 원문 잔류
+    // 원문 잔류 — 단, 박스 근처에 "원래부터 있던 다른 외국어"(반투명 워터마크가
+    // 대표)가 물리면 오판한다: 모델은 지시대로 워터마크를 남겼는데 검수가
+    // "안 지웠다"고 매번 퇴짜를 놔 전부 로컬 폴백으로 강등됐다(실측 — 그
+    // 로컬 지우개 뭉개짐이 "지웠더니 변형" 신고의 실체). 읽힌 줄이 이 박스의
+    // 원문과 실제로 겹치는 글자일 때만 잔류로 본다.
+    if (hits.some((l) => isForeignSource(l.text) && textCoverage(l.text, b.zh) >= 0.5)) return true;
     if (!checkCoverage) return false;
     if (hits.length === 0) {
       // 못 읽은 자리 — OCR 한계일 수도, 지워진 채 빈 것일 수도. 픽셀로 가른다.
@@ -2551,7 +2778,8 @@ async function flaggedBoxes(
     return (
       textCoverage(b.ko, seen) < COVERAGE_MIN ||
       truncatedTail(b.ko, seen) ||
-      brokenWordTail(b.ko, seen)
+      brokenWordTail(b.ko, seen) ||
+      choppedGlyphTail(b.ko, seen)
     );
   });
 }
@@ -2586,30 +2814,93 @@ async function eraseThenDraw(
   const W = om.width ?? 0;
   const H = om.height ?? 0;
   const origRaw = W && H ? new Uint8Array(await sharp(data).ensureAlpha().raw().toBuffer()) : null;
+
+  // 패치 품질은 박스마다 따로 본다 — 같은 호출 안에서도 어떤 박스는 깨끗하고
+  // 어떤 박스는 잔상이 남는다(실측). 시도별 결과를 모아 박스마다 가장 좋은
+  // 패치를 골라 합성하고, 끝내 잔상이 남는 박스만 로컬로 마무리한다.
+  const rects = removals.map((b) => gifPatchRect(b, W, H));
+  type Attempt = { cleaned: Buffer; scores: number[] };
+  const attempts: Attempt[] = [];
   let reason = "";
   for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
     try {
       const cleaned = await eraseViaModel(data, mime, removals);
-      if (await leftoverInBoxes(cleaned, "image/png", removals, false)) {
-        reason = "원문이 남음";
-        continue;
-      }
-      if (origRaw) {
-        const cleanRaw = new Uint8Array(await sharp(cleaned).ensureAlpha().raw().toBuffer());
-        if (removals.some((b) => inventedInBox(origRaw, cleanRaw, W, toPixelBox(b.box, W, H)))) {
-          reason = "지운 자리에 장식을 지어냄";
+      if (!origRaw) {
+        if (await leftoverInBoxes(cleaned, "image/png", removals, false)) {
+          reason = "원문이 남음";
           continue;
         }
+        const patched = await compositeTextPatches(data, cleaned, removals, W, H);
+        return drawTextOnly(patched.toBuffer("image/png"), mime, drawBoxes);
       }
-      // 지운 자리 패치만 원본에 얹는다 — 글자 밖 픽셀 드리프트 방지 (재생성과 동일)
-      const patched = await compositeTextPatches(data, cleaned, removals, W, H);
-      return drawTextOnly(patched.toBuffer("image/png"), mime, drawBoxes);
+      const cleanRaw = new Uint8Array(await sharp(cleaned).ensureAlpha().raw().toBuffer());
+      // 박스별 점수 — 하나라도 걸리면 시도 전체를 버리던 방식은 멀쩡한 박스
+      // 패치까지 같이 버려 전부 로컬 폴백(뭉개짐)으로 내려갔다(실측).
+      //   Infinity = 이 박스 패치는 못 쓴다 (안 지워짐 / 장식 지어냄 / 경계 어긋남)
+      //   유한값   = 내부 잔상 비율 (GHOST_MAX 이하면 합격)
+      const leftoverSet = new Set(await flaggedBoxes(cleaned, "image/png", removals, false));
+      const scores = removals.map((b, i) => {
+        if (leftoverSet.has(b)) return Infinity; // 안 지워짐 — 얹어도 원문 그대로
+        if (inventedInBox(origRaw, cleanRaw, W, toPixelBox(b.box, W, H))) return Infinity;
+        const gap = seamGap(origRaw, cleanRaw, W, H, rects[i]);
+        if (gap > SEAM_MAX) return Infinity; // 경계 불합격 — 얹으면 네모가 보인다
+        return ghostResidue(cleanRaw, W, H, rects[i], rects.filter((_, j) => j !== i));
+      });
+      attempts.push({ cleaned, scores });
+      console.warn(
+        `[imageTranslate] 지우기 패치 점수(시도 ${attempt}): [${scores.map((s) => (s === Infinity ? "경계탈락" : s.toFixed(1))).join(", ")}]`,
+      );
+      if (scores.every((s) => s <= GHOST_MAX)) break; // 전 박스 합격 — 더 돌릴 이유 없다
+      reason = `지운 자리 잔상 ${scores.filter((s) => s > GHOST_MAX).length}/${removals.length}건`;
     } catch (e) {
       reason = e instanceof Error ? e.message : String(e);
     }
   }
-  console.warn(`[imageTranslate] 모델 지우기 실패(${REGEN_ATTEMPTS}회) — 로컬 오버레이 폴백: ${reason}`);
-  return renderStill(data, mime, drawBoxes);
+
+  if (attempts.length === 0) {
+    console.warn(`[imageTranslate] 모델 지우기 실패(${REGEN_ATTEMPTS}회) — 로컬 오버레이 폴백: ${reason}`);
+    return renderStill(data, mime, drawBoxes);
+  }
+
+  // 박스마다 가장 잔상이 적은 시도를 고른다
+  const pickAttempt = removals.map((_, i) => {
+    let best = 0;
+    for (let k = 1; k < attempts.length; k++) {
+      if (attempts[k].scores[i] < attempts[best].scores[i]) best = k;
+    }
+    return best;
+  });
+  const localSet = new Set<OcrBox>(); // 로컬 지우개로 마무리할 박스
+  removals.forEach((b, i) => {
+    const s = attempts[pickAttempt[i]].scores[i];
+    if (s <= GHOST_MAX) return;
+    // 불합격 박스의 갈림길 — 로컬 지우개는 민 배경에서는 깨끗하지만, 사진·
+    // 그라데이션 위에서는 평면 사각형 폴백까지 내려가 더 흉하다(실측: 사진
+    // 한가운데 워터마크 자리에 분홍 네모). 민 배경(solid_bg)만 로컬로 보내고,
+    // 사진 배경은 잔상이 남더라도 모델 패치 중 최선을 쓴다 — 단 경계 탈락
+    // (Infinity)은 얹는 순간 네모가 보이므로 배경과 무관하게 얹지 않는다.
+    if (b.solid_bg || s === Infinity) localSet.add(b);
+  });
+
+  // 합격 박스를 시도별로 나눠 합성한다 (여러 시도의 좋은 패치를 섞는다)
+  let patchedBuf = data;
+  for (let k = 0; k < attempts.length; k++) {
+    const boxesK = removals.filter((b, i) => pickAttempt[i] === k && !localSet.has(b));
+    if (boxesK.length === 0) continue;
+    const merged = await compositeTextPatches(patchedBuf, attempts[k].cleaned, boxesK, W, H);
+    patchedBuf = await merged.toBuffer("image/png");
+  }
+
+  const first = await drawTextOnly(patchedBuf, mime, drawBoxes.filter((b) => !localSet.has(b)));
+  if (localSet.size === 0) return first;
+
+  console.warn(
+    `[imageTranslate] 지우기 패치 불합격 ${localSet.size}/${removals.length}건 — 로컬 보정으로 강등 (${reason})`,
+  );
+  // 불합격 박스 자리엔 원문 획이 그대로 있다(패치를 안 얹었으므로) —
+  // renderStill 이 원본 픽셀에서 배경을 읽어 획만 지우고 그린다
+  const localDraw = drawBoxes.filter((b) => localSet.has(b));
+  return renderStill(first.data, first.mime, localDraw.length > 0 ? localDraw : [...localSet]);
 }
 
 export async function renderTranslatedImage(
@@ -2684,7 +2975,7 @@ export async function renderTranslatedImage(
   } catch (e) {
     reason = e instanceof Error ? e.message : String(e);
     // 안전 필터 거부는 같은 그림을 다시 보내도 똑같이 거부한다 — 띠 모드로
-    if (reason.includes("반환하지 않음")) {
+    if (reason.includes("반환하지 않음") || reason.includes("모델 거부")) {
       try {
         return await regenerateByBands(data, mime, boxes);
       } catch (e2) {

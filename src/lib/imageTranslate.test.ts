@@ -39,6 +39,11 @@ import {
   percentilePass,
   eraseGlyphs,
   backgroundRef,
+  parseJsonArrayLoose,
+  choppedGlyphTail,
+  remapBandBox,
+  dedupeBandBoxes,
+  ghostResidue,
   type OcrBox,
 } from "./imageTranslate";
 
@@ -859,5 +864,183 @@ describe("contrastStroke — 글자색이 배경에 묻힐 때 외곽선", () =>
 
   it("3자리 축약 hex 도 읽는다", () => {
     expect(contrastStroke("#fff", [250, 250, 250])).toBe("#222222");
+  });
+});
+
+describe("parseJsonArrayLoose — 잘린 검수 응답 구제", () => {
+  it("온전한 배열은 그대로 파싱한다", () => {
+    expect(parseJsonArrayLoose('[{"a":1},{"b":2}]')).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it("토큰 한도로 뒤가 잘린 배열에서 온전한 원소만 건진다 (실측: 문구 37개 이미지)", () => {
+    const cut = '[{"box":[1,2,3,4],"text":"가"},{"box":[5,6,7,8],"text":"나"},{"box":[9,10';
+    expect(parseJsonArrayLoose(cut)).toEqual([
+      { box: [1, 2, 3, 4], text: "가" },
+      { box: [5, 6, 7, 8], text: "나" },
+    ]);
+  });
+
+  it("닫혔지만 중간 원소가 깨진 배열도 원소 단위로 건진다", () => {
+    const broken = '[{"text":"가"},{"text":"나"제},{"text":"다"}]';
+    expect(parseJsonArrayLoose(broken)).toEqual([{ text: "가" }, { text: "다" }]);
+  });
+
+  it("빈 배열은 빈 배열 — 글자 없음 판정의 근거", () => {
+    expect(parseJsonArrayLoose("[]")).toEqual([]);
+  });
+
+  it("JSON 이 아예 없으면 null — 거부·빈 응답을 글자 없음과 구분한다", () => {
+    expect(parseJsonArrayLoose("이미지를 처리할 수 없습니다")).toBeNull();
+    expect(parseJsonArrayLoose("")).toBeNull();
+  });
+});
+
+describe("choppedGlyphTail — 낱자로 끝난 잘림", () => {
+  it("어절이 획 중간에서 잘려 낱자로 읽히면 잡는다 (운영 스크린샷: 전신 부드러ㄷ)", () => {
+    expect(choppedGlyphTail("전신 부드러운 감촉", "전신 부드러ㄷ")).toBe(true);
+  });
+
+  it("정상 문구는 잡지 않는다", () => {
+    expect(choppedGlyphTail("전신 부드러운 감촉", "전신 부드러운 감촉")).toBe(false);
+  });
+
+  it("기대 문구 자체가 낱자로 끝나면 잘림이 아니다", () => {
+    expect(choppedGlyphTail("이중 자극 굿ㅋㅋ", "이중 자극 굿ㅋㅋ")).toBe(false);
+  });
+
+  it("기대 문구 중간에서 낱자로 끊겨 읽힌 것도 잡는다 (truncatedTail 과 겹쳐도 무해)", () => {
+    expect(choppedGlyphTail("진동 세기 5단 조절", "진동 세기 5ㄷ")).toBe(true);
+  });
+
+  it("아무것도 못 읽었으면 판정하지 않는다", () => {
+    expect(choppedGlyphTail("전신 부드러운", "")).toBe(false);
+  });
+});
+
+describe("잘림 검사 — 물결·말줄임 마감 (실측: 깊은 진~)", () => {
+  it("잘린 끝의 ~ 는 비교에서 빠져 prefix 잘림으로 잡힌다", () => {
+    // ~ 를 안 빼면 "깊은 진~"이 "깊은 진동"의 앞부분으로 인정되지 않았다
+    expect(brokenWordTail("강렬한 깊은 진동", "강렬한 깊은 진~")).toBe(true);
+  });
+
+  it("기대 문구에 있는 … 도 똑같이 빠져 오탐하지 않는다", () => {
+    expect(truncatedTail("강렬한 자극…", "강렬한 자극")).toBe(false);
+  });
+});
+
+describe("remapBandBox — OCR 띠 좌표 복원", () => {
+  it("띠 안 좌표를 전체 이미지 기준으로 되돌린다", () => {
+    // 30% 지점부터 높이 45% 띠에서 [0,100,1000,900] → 전체의 [300,100,750,900]
+    expect(remapBandBox([0, 100, 1000, 900], 0.3, 0.45)).toEqual([300, 100, 750, 900]);
+  });
+
+  it("첫 띠(시작 0)는 ymin 이 그대로다", () => {
+    expect(remapBandBox([200, 0, 400, 1000], 0, 0.45)).toEqual([90, 0, 180, 1000]);
+  });
+
+  it("복원 좌표는 1000 을 넘지 않는다", () => {
+    expect(remapBandBox([1000, 0, 1000, 1000], 0.55, 0.45)[2]).toBe(1000);
+  });
+});
+
+describe("dedupeBandBoxes — 겹친 띠의 중복 문구 제거", () => {
+  const mk = (zh: string, box: [number, number, number, number]): OcrBox => ({
+    box,
+    zh,
+    ko: zh,
+    bg: "#ffffff",
+    fg: "#000000",
+    bold: false,
+    solid_bg: true,
+  });
+
+  it("같은 원문이 세로로 겹치면 하나만 남긴다 — 큰 박스(온전히 들어온 띠) 우선", () => {
+    const half = mk("产品信息", [300, 100, 340, 500]);
+    const full = mk("产品信息", [295, 100, 345, 900]);
+    const out = dedupeBandBoxes([half, full]);
+    expect(out).toHaveLength(1);
+    expect(out[0].box).toEqual(full.box);
+  });
+
+  it("같은 원문이라도 위치가 다르면(반복 문구) 둘 다 남긴다", () => {
+    const a = mk("包装升级", [100, 0, 140, 500]);
+    const b = mk("包装升级", [800, 0, 840, 500]);
+    expect(dedupeBandBoxes([a, b])).toHaveLength(2);
+  });
+
+  it("다른 원문은 겹쳐도 남긴다 (제목과 부제)", () => {
+    const a = mk("产品信息", [100, 0, 160, 500]);
+    const b = mk("随机发货", [140, 0, 200, 500]);
+    expect(dedupeBandBoxes([a, b])).toHaveLength(2);
+  });
+});
+
+describe("ghostResidue — 지운 자리 내부 잔상", () => {
+  const W = 200;
+  const H = 120;
+  const box = { x0: 40, y0: 30, x1: 160, y1: 90 };
+  /** 전체를 val 로 채운 RGBA */
+  const flat = (val: number) => {
+    const d = new Uint8Array(W * H * 4);
+    for (let i = 0; i < W * H; i++) {
+      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = val;
+      d[i * 4 + 3] = 255;
+    }
+    return d;
+  };
+  /** 박스 내부에만 줄무늬 잔상을 남긴 그림 (반쯤 지워진 획) */
+  const ghosted = () => {
+    const d = flat(200);
+    for (let y = box.y0 + 12; y < box.y1 - 12; y += 8) {
+      for (let yy = y; yy < y + 3; yy++) {
+        for (let x = box.x0 + 15; x < box.x1 - 15; x++) {
+          const i = (yy * W + x) * 4;
+          d[i] = d[i + 1] = d[i + 2] = 150;
+        }
+      }
+    }
+    return d;
+  };
+  /** 안팎이 똑같이 거친 질감 (실크·그라데이션) */
+  const textured = () => {
+    const d = flat(200);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        const v = 200 + ((x + y) % 2 === 0 ? 20 : -20);
+        d[i] = d[i + 1] = d[i + 2] = v;
+      }
+    }
+    return d;
+  };
+
+  it("깨끗이 지운 민 배경은 잔상이 없다", () => {
+    expect(ghostResidue(flat(200), W, H, box)).toBeLessThan(1);
+  });
+
+  it("내부에만 남은 반투명 획은 주변 대비 몇 배로 튄다 (운영 신고: 빨간 제품 뭉개짐)", () => {
+    expect(ghostResidue(ghosted(), W, H, box)).toBeGreaterThan(2);
+  });
+
+  it("실크처럼 안팎이 똑같이 거친 질감은 오탐하지 않는다", () => {
+    expect(ghostResidue(textured(), W, H, box)).toBeLessThan(2);
+  });
+
+  it("링에 물린 이웃 박스는 제외하고 잰다 — 이웃 글자가 잔상으로 오염되지 않게", () => {
+    const d = flat(200);
+    // 이웃 박스(오른쪽)에 진한 글자 — 제외 안 하면 링 편차가 부풀어 잔상이 가려진다
+    const nb = { x0: 165, y0: 30, x1: 195, y1: 90 };
+    for (let y = nb.y0; y < nb.y1; y++)
+      for (let x = nb.x0; x < nb.x1; x++) {
+        const i = (y * W + x) * 4;
+        d[i] = d[i + 1] = d[i + 2] = 20;
+      }
+    const withEx = ghostResidue(d, W, H, box, [nb]);
+    const without = ghostResidue(d, W, H, box);
+    expect(withEx).toBeLessThanOrEqual(without);
+  });
+
+  it("판정 불가(너무 작은 박스)는 0 — 잔상 아님으로 통과", () => {
+    expect(ghostResidue(flat(200), W, H, { x0: 0, y0: 0, x1: 8, y1: 8 })).toBe(0);
   });
 });

@@ -90,20 +90,26 @@ export async function translateProductImages(productId: string): Promise<AssetTr
     select: { id: true, url: true, originalUrl: true },
   });
 
-  for (let i = 0; i < assets.length; i += CONCURRENCY) {
-    const batch = assets.slice(i, i + CONCURRENCY);
-    const results = await Promise.all(
-      batch.map(async (a) => {
+  // 배치(N장씩 Promise.all)는 매 배치가 가장 느린 장을 기다린다 — 재시도로
+  // 4분 넘게 걸리는 장이 껴 있으면 나머지 슬롯이 통째로 놀았다(운영 신고:
+  // 상품당 10분+). 풀 방식은 슬롯이 빌 때마다 다음 장을 바로 당긴다.
+  let next = 0;
+  const results: ("done" | "failed" | "skipped")[] = [];
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, assets.length) }, async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= assets.length) return;
         try {
-          return await translateOne(a);
+          results[i] = await translateOne(assets[i]);
         } catch (e) {
-          console.warn(`[import] 이미지 번역 실패 ${a.url}: ${e instanceof Error ? e.message : e}`);
-          return "failed" as const;
+          console.warn(`[import] 이미지 번역 실패 ${assets[i].url}: ${e instanceof Error ? e.message : e}`);
+          results[i] = "failed";
         }
-      }),
-    );
-    for (const r of results) report[r] += 1;
-  }
+      }
+    }),
+  );
+  for (const r of results) report[r] += 1;
 
   if (report.done > 0) {
     const product = await db.product.findUnique({
