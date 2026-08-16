@@ -2327,7 +2327,7 @@ async function regenerateStill(
   data: Buffer,
   mime: string,
   boxes: OcrBox[],
-): Promise<{ data: Buffer; mime: string }> {
+): Promise<{ data: Buffer; mime: string; pending: OcrBox[] }> {
   const meta = await sharp(data).metadata();
   const W = meta.width ?? 0;
   const H = meta.height ?? 0;
@@ -2336,29 +2336,31 @@ async function regenerateStill(
   const png = await callImageEdit(data, mime, regenPrompt(boxes), W, H);
   const targets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
 
-  // 패치마다 "얹어도 되는지"를 테두리 색으로 가른다 — 배경을 다시 그린 패치를
-  // 그대로 얹으면 사진·그라데이션 위에서 사각형 자국이 보인다(운영 신고).
-  // 어긋난 패치는 버리고 그 문구만 로컬 지우기+오버레이로 강등한다.
+  // 패치마다 "얹어도 되는지"를 가른다 — 배경을 다시 그린 패치를 그대로 얹으면
+  // 사진·그라데이션 위에서 사각형 자국이 보이고(운영 신고), 글자가 패치 밖까지
+  // 그려진 박스는 얹으면 꼬리가 페더에 걸려 흐릿하게 잘린다("깊은 진~" 무늬).
+  // 불합격 박스는 pending 으로 올려 보정 경로(모델 지우기+직접 그리기)에 합류
+  // 시킨다 — 예전처럼 로컬 지우개로 여기서 처리하면 그라데이션 배경에 흰
+  // 얼룩이 남는다(실측 q1: 보라 배경 제목 뒤 흰 뭉개짐).
   const origRaw = new Uint8Array(await sharp(data).ensureAlpha().raw().toBuffer());
   const regenRaw = new Uint8Array(await sharp(png).ensureAlpha().raw().toBuffer());
   const clean: OcrBox[] = [];
-  const seamy: OcrBox[] = [];
+  const pending: OcrBox[] = [];
   for (const b of targets) {
-    const gap = seamGap(origRaw, regenRaw, W, H, gifPatchRect(b, W, H));
-    (gap > SEAM_MAX ? seamy : clean).push(b);
+    const r = gifPatchRect(b, W, H);
+    const bad =
+      seamGap(origRaw, regenRaw, W, H, r) > SEAM_MAX ||
+      edgeCrossing(origRaw, regenRaw, W, H, r) > EDGE_CROSS_MAX;
+    (bad ? pending : clean).push(b);
+  }
+  if (pending.length > 0) {
+    console.warn(`[imageTranslate] 패치 경계 어긋남 ${pending.length}/${targets.length}건 — 보정 경로에 합류`);
   }
 
   const canvas = await compositeTextPatches(data, png, clean, W, H);
-  const out =
-    mime === "image/png"
-      ? { data: canvas.toBuffer("image/png"), mime }
-      : { data: canvas.toBuffer("image/jpeg", 95), mime: "image/jpeg" };
-  if (seamy.length === 0) return out;
-
-  console.warn(`[imageTranslate] 패치 경계 어긋남 ${seamy.length}/${targets.length}건 — 로컬 보정으로 강등`);
-  // 강등된 박스 자리엔 원문이 그대로 남아 있다(패치를 안 얹었으므로) —
-  // renderStill 이 원본 픽셀에서 배경을 읽어 획만 지우고 번역문을 그린다.
-  return renderStill(out.data, out.mime, seamy);
+  return mime === "image/png"
+    ? { data: canvas.toBuffer("image/png"), mime, pending }
+    : { data: canvas.toBuffer("image/jpeg", 95), mime: "image/jpeg", pending };
 }
 
 /**
@@ -2685,6 +2687,86 @@ export function ghostResidue(
 const GHOST_MAX = 2;
 
 /**
+ * 재생성 글자가 패치 경계를 삐져나갔는지 — 변을 4등분한 조각별 평균 채널차의 최댓값.
+ *
+ * 모델은 한국어가 원문보다 길면 박스 밖까지 글자를 그린다. 패치는 박스 크기로
+ * 오려 붙이므로 삐져나간 꼬리가 페더에 걸려 **흐릿하게 사라지는 잘림**이 된다
+ * (실측 q1: "강렬한 깊은 자극"의 "자극"이 반투명하게 바램 — 운영 신고
+ * "깊은 진~"과 같은 무늬). 전체 둘레 평균(seamGap)은 한쪽 끝의 국소적 침범이
+ * 희석돼 통과하므로, 변을 조각내 최댓값으로 본다.
+ */
+export function edgeCrossing(
+  orig: Uint8Array,
+  regen: Uint8Array,
+  W: number,
+  H: number,
+  r: { x0: number; y0: number; x1: number; y1: number },
+  band = 4,
+): number {
+  const x0 = Math.max(0, Math.round(r.x0));
+  const y0 = Math.max(0, Math.round(r.y0));
+  const x1 = Math.min(W, Math.round(r.x1));
+  const y1 = Math.min(H, Math.round(r.y1));
+  if (x1 - x0 < 8 || y1 - y0 < 8) return 0;
+
+  const segMean = (sx0: number, sy0: number, sx1: number, sy1: number): number => {
+    let n = 0;
+    let s = 0;
+    let os = 0;
+    let os2 = 0;
+    let rs = 0;
+    let rs2 = 0;
+    for (let y = Math.max(0, sy0); y < Math.min(H, sy1); y++) {
+      for (let x = Math.max(0, sx0); x < Math.min(W, sx1); x++) {
+        const i = (y * W + x) * 4;
+        s += Math.max(
+          Math.abs(regen[i] - orig[i]),
+          Math.abs(regen[i + 1] - orig[i + 1]),
+          Math.abs(regen[i + 2] - orig[i + 2]),
+        );
+        const lo = 0.299 * orig[i] + 0.587 * orig[i + 1] + 0.114 * orig[i + 2];
+        const lr = 0.299 * regen[i] + 0.587 * regen[i + 1] + 0.114 * regen[i + 2];
+        os += lo;
+        os2 += lo * lo;
+        rs += lr;
+        rs2 += lr * lr;
+        n++;
+      }
+    }
+    if (n === 0) return 0;
+    // "차이가 크다"만 보면 안 된다 — 모델 출력의 미세 드리프트는 윤곽·반짝이
+    // 질감 위에서 큰 차이를 내지만, 그건 같은 질감이 밀린 것이라 조각의 편차
+    // (거칠기)는 그대로다. 글자 꼬리가 새로 그려진 조각만 편차가 확 는다.
+    // 편차가 늘지 않은 조각은 침범이 아니다 (실측: 드리프트 오탐으로 16/17
+    // 강등 → 이 조건 추가 후 정상).
+    const om = os / n;
+    const rm = rs / n;
+    const oStdev = Math.sqrt(Math.max(0, os2 / n - om * om));
+    const rStdev = Math.sqrt(Math.max(0, rs2 / n - rm * rm));
+    if (rStdev - oStdev < 15) return 0;
+    return s / n;
+  };
+
+  let worst = 0;
+  const quarters = (a: number, b: number) => {
+    const q = (b - a) / 4;
+    return [0, 1, 2, 3].map((k) => [Math.round(a + q * k), Math.round(a + q * (k + 1))] as const);
+  };
+  for (const [a, b] of quarters(x0, x1)) {
+    worst = Math.max(worst, segMean(a, y0 - band, b, y0)); // 위
+    worst = Math.max(worst, segMean(a, y1, b, y1 + band)); // 아래
+  }
+  for (const [a, b] of quarters(y0, y1)) {
+    worst = Math.max(worst, segMean(x0 - band, a, x0, b)); // 왼쪽
+    worst = Math.max(worst, segMean(x1, a, x1 + band, b)); // 오른쪽
+  }
+  return worst;
+}
+
+/** 이 값을 넘는 조각이 있으면 글자가 경계를 넘은 것 — 그 패치는 얹으면 잘려 보인다 */
+const EDGE_CROSS_MAX = 45;
+
+/**
  * 번역문이 들어가야 할 자리가 "지워진 채 방치"됐는지.
  *
  * 검수는 찍힌 글자를 읽어 대조하는데, 모델이 원문을 지우고 **아무것도 안 그리면**
@@ -2844,6 +2926,8 @@ async function eraseThenDraw(
         if (inventedInBox(origRaw, cleanRaw, W, toPixelBox(b.box, W, H))) return Infinity;
         const gap = seamGap(origRaw, cleanRaw, W, H, rects[i]);
         if (gap > SEAM_MAX) return Infinity; // 경계 불합격 — 얹으면 네모가 보인다
+        // 경계 조각 침범 — 원문 획이 패치 밖에 걸쳐 있으면 반만 지워진 채 잘린다
+        if (edgeCrossing(origRaw, cleanRaw, W, H, rects[i]) > EDGE_CROSS_MAX) return Infinity;
         return ghostResidue(cleanRaw, W, H, rects[i], rects.filter((_, j) => j !== i));
       });
       attempts.push({ cleaned, scores });
@@ -2941,17 +3025,20 @@ export async function renderTranslatedImage(
   let reason = "";
   const t0 = Date.now();
   try {
-    const out = await regenerateStill(data, mime, boxes);
+    const { pending, ...out } = await regenerateStill(data, mime, boxes);
     const tRegen = Date.now() - t0;
     const t1 = Date.now();
+    // pending(경계 불합격으로 패치를 안 얹은 박스)은 out 에 원문이 그대로라
+    // 검수에서도 걸리지만, 검수가 못 읽는 판이어도 놓치지 않게 합쳐 둔다
     const flagged = await flaggedBoxes(out.data, out.mime, verifyTargets, true, data);
+    const fix = [...new Set([...pending, ...flagged])];
     const tVerify = Date.now() - t1;
-    if (flagged.length === 0) {
+    if (fix.length === 0) {
       console.log(`[imageTranslate] 재생성 완료 regen=${tRegen}ms verify=${tVerify}ms`);
       return out;
     }
     console.warn(
-      `[imageTranslate] 검수에서 ${flagged.length}/${verifyTargets.length}개 문구 — 그 문구만 보정 (regen=${tRegen}ms verify=${tVerify}ms)`,
+      `[imageTranslate] 검수·경계에서 ${fix.length}/${verifyTargets.length}개 문구 — 그 문구만 보정 (regen=${tRegen}ms verify=${tVerify}ms)`,
     );
     // 보정도 "모델 지우기 + 우리가 그리기"로 한다. 로컬 지우개로 고치면 잘림은
     // 없어지지만 사진 배경에 흰 얼룩이 남는다(실측 04번: 잘림은 다 고쳐졌는데
@@ -2963,12 +3050,12 @@ export async function renderTranslatedImage(
     // 넘겼더니 지울 대상을 못 찾아 그대로 두고, 그 위에 우리 글자가 겹쳐 찍혔다
     // (실측 04번: "짧게 눌러 헤드 모드 변" 위에 보정문이 포개짐).
     // 원본에서 깨끗이 고친 뒤, 그 박스만 재생성본에 얹는다.
-    const corrected = await eraseThenDraw(data, mime, flagged, flagged);
+    const corrected = await eraseThenDraw(data, mime, fix, fix);
     const cm = await sharp(out.data).metadata();
     const cw = cm.width ?? 0;
     const ch = cm.height ?? 0;
     if (!cw || !ch) return corrected;
-    const merged = await compositeTextPatches(out.data, corrected.data, flagged, cw, ch);
+    const merged = await compositeTextPatches(out.data, corrected.data, fix, cw, ch);
     return out.mime === "image/png"
       ? { data: merged.toBuffer("image/png"), mime: out.mime }
       : { data: merged.toBuffer("image/jpeg", 95), mime: "image/jpeg" };

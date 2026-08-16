@@ -44,6 +44,7 @@ import {
   remapBandBox,
   dedupeBandBoxes,
   ghostResidue,
+  edgeCrossing,
   type OcrBox,
 } from "./imageTranslate";
 
@@ -1042,5 +1043,71 @@ describe("ghostResidue — 지운 자리 내부 잔상", () => {
 
   it("판정 불가(너무 작은 박스)는 0 — 잔상 아님으로 통과", () => {
     expect(ghostResidue(flat(200), W, H, { x0: 0, y0: 0, x1: 8, y1: 8 })).toBe(0);
+  });
+});
+
+describe("edgeCrossing — 글자가 패치 경계를 삐져나감", () => {
+  const W = 200;
+  const H = 200;
+  const rect = { x0: 40, y0: 40, x1: 160, y1: 160 };
+  const flat = (val: number) => {
+    const d = new Uint8Array(W * H * 4);
+    for (let i = 0; i < W * H; i++) {
+      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = val;
+      d[i * 4 + 3] = 255;
+    }
+    return d;
+  };
+
+  it("경계가 조용하면 0 근처다", () => {
+    expect(edgeCrossing(flat(200), flat(200), W, H, rect)).toBeLessThan(10);
+  });
+
+  it("오른쪽 경계 일부만 넘은 글자 꼬리를 잡는다 (실측: '자극' 이 반투명하게 잘림)", () => {
+    const regen = flat(200);
+    // 글자 획이 오른쪽 경계(160) 바로 밖 4px 밴드에 걸침 — 세로 30px 구간만
+    for (let y = 90; y < 120; y++) {
+      for (let x = 160; x < 164; x++) {
+        const i = (y * W + x) * 4;
+        regen[i] = regen[i + 1] = regen[i + 2] = 20;
+      }
+    }
+    // 전체 둘레 평균(seamGap 방식)이라면 4변에 희석돼 낮게 나온다 —
+    // 조각별 최댓값은 그 구간에서 확 뛴다
+    expect(edgeCrossing(flat(200), regen, W, H, rect)).toBeGreaterThan(45);
+  });
+
+  it("경계 안쪽의 변화(정상 재생성 글자)는 잡지 않는다", () => {
+    const regen = flat(200);
+    for (let y = 90; y < 120; y++) {
+      for (let x = 60, e = 140; x < e; x++) {
+        const i = (y * W + x) * 4;
+        regen[i] = regen[i + 1] = regen[i + 2] = 20;
+      }
+    }
+    expect(edgeCrossing(flat(200), regen, W, H, rect)).toBeLessThan(10);
+  });
+});
+
+describe("edgeCrossing — 드리프트와 침범의 구분", () => {
+  const W = 200;
+  const H = 200;
+  const rect = { x0: 40, y0: 40, x1: 160, y1: 160 };
+  const checker = (shift: number) => {
+    const d = new Uint8Array(W * H * 4);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        const v = (x + shift + y) % 4 < 2 ? 230 : 170; // 반짝이 질감
+        d[i] = d[i + 1] = d[i + 2] = v;
+        d[i + 3] = 255;
+      }
+    }
+    return d;
+  };
+
+  it("질감이 1px 밀린 드리프트는 차이가 커도 침범이 아니다 (실측: 16/17 오탐)", () => {
+    // 같은 질감의 이동 — 픽셀 차이는 크지만 조각의 거칠기는 그대로다
+    expect(edgeCrossing(checker(0), checker(1), W, H, rect)).toBeLessThan(45);
   });
 });
