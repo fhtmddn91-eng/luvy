@@ -46,6 +46,7 @@ import {
   ghostResidue,
   edgeCrossing,
   dropRiskyWm,
+  clipRectAgainst,
   type OcrBox,
 } from "./imageTranslate";
 
@@ -1199,5 +1200,63 @@ describe("dropRiskyWm — 다른 글자와 겹치는 워터마크 제외", () =>
   it("워터마크끼리 겹치는 건 상관없다 (같이 지운다)", () => {
     const r = dropRiskyWm([wm([100, 50, 150, 950]), wm([140, 50, 190, 950])]);
     expect(r).toHaveLength(2);
+  });
+});
+
+describe("clipRectAgainst — 이웃 박스 침범 잘라내기", () => {
+  // 실측 e2e #7 기하 (H=1254): 제목 패치 하단(197)이 부제 코어 상단(189)을 8px 침범
+  // → 보정 합성에서 첫 재생성의 탈락 글자 조각이 부제 위에 띠로 남았다(잔획)
+  const feather = 10;
+
+  it("아래 이웃을 침범한 패치 하단을 이웃 코어 앞에서 자른다 (실측 #7)", () => {
+    const r = { x0: 0, y0: 1, x1: 900, y1: 197, feather };
+    const core = { x0: 52, y0: 50, x1: 571, y1: 148 };
+    const clipped = clipRectAgainst(r, core, [{ x0: 51, y0: 189, x1: 634, y1: 255 }]);
+    expect(clipped.y1).toBe(189);
+    expect(clipped).toMatchObject({ x0: 0, y0: 1, x1: 900 });
+  });
+
+  it("위 이웃 침범은 패치 상단을 자른다", () => {
+    const r = { x0: 0, y0: 140, x1: 900, y1: 288, feather };
+    const core = { x0: 51, y0: 189, x1: 634, y1: 255 };
+    const clipped = clipRectAgainst(r, core, [{ x0: 52, y0: 50, x1: 571, y1: 148 }]);
+    expect(clipped.y0).toBe(148);
+  });
+
+  it("옆 이웃 침범은 좌우만 자른다 (실측 #0: '직' 중복 — 가로 인접 박스)", () => {
+    const r = { x0: 10, y0: 100, x1: 500, y1: 200, feather };
+    const core = { x0: 100, y0: 120, x1: 400, y1: 180 };
+    const clipped = clipRectAgainst(r, core, [
+      { x0: 420, y0: 110, x1: 600, y1: 190 }, // 오른쪽 이웃
+      { x0: 0, y0: 110, x1: 60, y1: 190 }, // 왼쪽 이웃
+    ]);
+    expect(clipped.x1).toBe(420);
+    expect(clipped.x0).toBe(60);
+    expect(clipped).toMatchObject({ y0: 100, y1: 200 });
+  });
+
+  it("안 겹치는 이웃은 건드리지 않는다", () => {
+    const r = { x0: 0, y0: 1, x1: 900, y1: 197, feather };
+    const core = { x0: 52, y0: 50, x1: 571, y1: 148 };
+    const clipped = clipRectAgainst(r, core, [{ x0: 0, y0: 300, x1: 900, y1: 400 }]);
+    expect(clipped).toMatchObject({ x0: 0, y0: 1, x1: 900, y1: 197 });
+  });
+
+  it("코어끼리 겹치면 가를 수 없다 — 그대로 둔다 (밀집 그리드 #14)", () => {
+    const r = { x0: 0, y0: 90, x1: 500, y1: 210, feather };
+    const core = { x0: 10, y0: 100, x1: 490, y1: 200 };
+    const clipped = clipRectAgainst(r, core, [{ x0: 200, y0: 150, x1: 600, y1: 250 }]);
+    expect(clipped).toMatchObject({ x0: 0, y0: 90, x1: 500, y1: 210 });
+  });
+
+  it("자기 코어는 절대 줄이지 않는다 — 잘라도 코어를 다 덮는다", () => {
+    const r = { x0: 0, y0: 1, x1: 900, y1: 197, feather };
+    const core = { x0: 52, y0: 50, x1: 571, y1: 148 };
+    // 이웃 코어 상단이 자기 코어 하단과 같은 극단 케이스
+    const clipped = clipRectAgainst(r, core, [{ x0: 51, y0: 148, x1: 634, y1: 255 }]);
+    expect(clipped.y1).toBe(148); // 코어 하단까지는 유지
+    expect(clipped.y0).toBeLessThanOrEqual(core.y0);
+    expect(clipped.x0).toBeLessThanOrEqual(core.x0);
+    expect(clipped.x1).toBeGreaterThanOrEqual(core.x1);
   });
 });

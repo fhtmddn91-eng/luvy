@@ -1796,6 +1796,31 @@ export function regionIsStatic(
   return true;
 }
 
+/**
+ * 패치 사각형이 이웃 박스 코어를 침범하지 않게 여백만 잘라낸다.
+ *
+ * 자기 코어(core)는 절대 줄이지 않는다 — 잘라낼 수 있는 건 여백뿐이다.
+ * 이웃 코어가 자기 코어와 겹쳐 있으면(밀집 그리드) 가를 수 없으므로 그대로
+ * 둔다 — 그 경우는 기존 동작과 같다.
+ */
+export function clipRectAgainst(
+  r: PxBox & { feather: number },
+  core: PxBox,
+  avoid: PxBox[],
+): PxBox & { feather: number } {
+  let { x0, y0, x1, y1 } = r;
+  for (const a of avoid) {
+    if (a.x1 <= x0 || a.x0 >= x1 || a.y1 <= y0 || a.y0 >= y1) continue; // 안 겹침
+    // 코어를 침범하지 않는 방향으로만 줄인다 (이웃이 어느 쪽에 있는가)
+    if (a.y0 >= core.y1 && a.y0 < y1) y1 = a.y0;
+    else if (a.y1 <= core.y0 && a.y1 > y0) y0 = a.y1;
+    else if (a.x0 >= core.x1 && a.x0 < x1) x1 = a.x0;
+    else if (a.x1 <= core.x0 && a.x1 > x0) x0 = a.x1;
+    // 어느 조건도 안 맞으면 코어끼리 겹친 것 — 가를 수 없다
+  }
+  return { x0, y0, x1, y1, feather: r.feather };
+}
+
 /** 재생성본에서 글자 영역만 페더링된 알파로 오려낸 오버레이(RGBA raw) */
 function buildPatchOverlay(
   regen: Uint8Array,
@@ -2342,8 +2367,20 @@ async function compositeTextPatches(
   targets: OcrBox[],
   W: number,
   H: number,
+  /**
+   * 패치가 침범하면 안 되는 이웃 박스들 — **바탕과 패치가 서로 다른 렌더일 때만**
+   * 넘긴다(보정 합성·다중 시도 합성). 패치 여백(높이의 50%)이 이웃 글자 박스를
+   * 덮으면 그 띠에 다른 렌더의 글자 조각이 실려 와 잔획·겹침이 남는다
+   * (실측 e2e #7·#9·#11: 부제 윗줄에 흐릿한 획 띠 — 제목 패치 하단 경계에서
+   * 정확히 잘림). 같은 렌더끼리는 겹쳐도 무해해서 기본은 안 자른다.
+   */
+  avoid?: OcrBox[],
 ): Promise<Canvas> {
-  const rects = targets.map((b) => gifPatchRect(b, W, H));
+  let rects = targets.map((b) => gifPatchRect(b, W, H));
+  if (avoid && avoid.length > 0) {
+    const avoidPx = avoid.map((b) => toPixelBox(b.box, W, H));
+    rects = rects.map((r, i) => clipRectAgainst(r, toPixelBox(targets[i].box, W, H), avoidPx));
+  }
   const regenRaw = new Uint8Array(await sharp(regenPng).ensureAlpha().raw().toBuffer());
   const overlay = buildPatchOverlay(regenRaw, W, H, rects);
   const overlayPng = await sharp(overlay, { raw: { width: W, height: H, channels: 4 } })
@@ -3046,7 +3083,10 @@ async function eraseThenDraw(
       (b, i) => pickAttempt[i] === k && !localSet.has(b) && !keepOriginal.has(b),
     );
     if (boxesK.length === 0) continue;
-    const merged = await compositeTextPatches(patchedBuf, attempts[k].cleaned, boxesK, W, H);
+    // avoid=다른 박스 전부: 이 시도의 패치 여백이 다른 시도의 패치·원본 유지
+    // 박스(워터마크)·로컬 마무리 박스를 덮으면 서로 다른 렌더가 띠로 섞인다
+    const others = removals.filter((b) => !boxesK.includes(b));
+    const merged = await compositeTextPatches(patchedBuf, attempts[k].cleaned, boxesK, W, H, others);
     patchedBuf = await merged.toBuffer("image/png");
   }
 
@@ -3145,7 +3185,9 @@ export async function renderTranslatedImage(
     const fixSet = new Set(fix);
     const pendingSet = new Set(pending);
     const pasteBack = verifyTargets.filter((b) => !fixSet.has(b) && !pendingSet.has(b));
-    const merged = await compositeTextPatches(corrected.data, out.data, pasteBack, cw, ch);
+    // avoid=fix: 재생성 패치의 여백이 보정된 박스를 덮으면, 첫 재생성의 (검수에서
+    // 탈락한) 글자 조각이 보정 글자 위에 띠로 남는다 — e2e #7·#9·#11 잔획의 뿌리
+    const merged = await compositeTextPatches(corrected.data, out.data, pasteBack, cw, ch, fix);
     return out.mime === "image/png"
       ? { data: merged.toBuffer("image/png"), mime: out.mime }
       : { data: merged.toBuffer("image/jpeg", 95), mime: "image/jpeg" };
