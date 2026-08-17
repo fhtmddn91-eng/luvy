@@ -1811,11 +1811,14 @@ export function clipRectAgainst(
   let { x0, y0, x1, y1 } = r;
   for (const a of avoid) {
     if (a.x1 <= x0 || a.x0 >= x1 || a.y1 <= y0 || a.y0 >= y1) continue; // 안 겹침
-    // 코어를 침범하지 않는 방향으로만 줄인다 (이웃이 어느 쪽에 있는가)
-    if (a.y0 >= core.y1 && a.y0 < y1) y1 = a.y0;
-    else if (a.y1 <= core.y0 && a.y1 > y0) y0 = a.y1;
-    else if (a.x0 >= core.x1 && a.x0 < x1) x1 = a.x0;
-    else if (a.x1 <= core.x0 && a.x1 > x0) x0 = a.x1;
+    // 코어를 침범하지 않는 방향으로만 줄인다 (이웃이 어느 쪽에 있는가).
+    // 반드시 정수로 자른다 — toPixelBox 의 실수 좌표가 시작점(x0/y0)에 들어가면
+    // buildPatchOverlay 의 버퍼 인덱스가 전부 소수가 되어 **패치가 통째로
+    // 조용히 사라진다** (실측 #9: pasteBack 줄이 중국어 원문 그대로 나감).
+    if (a.y0 >= core.y1 && a.y0 < y1) y1 = Math.floor(a.y0);
+    else if (a.y1 <= core.y0 && a.y1 > y0) y0 = Math.ceil(a.y1);
+    else if (a.x0 >= core.x1 && a.x0 < x1) x1 = Math.floor(a.x0);
+    else if (a.x1 <= core.x0 && a.x1 > x0) x0 = Math.ceil(a.x1);
     // 어느 조건도 안 맞으면 코어끼리 겹친 것 — 가를 수 없다
   }
   return { x0, y0, x1, y1, feather: r.feather };
@@ -1830,8 +1833,10 @@ function buildPatchOverlay(
 ): Buffer {
   const out = Buffer.alloc(W * H * 4); // 알파 0 = 투명
   for (const r of rects) {
-    for (let y = r.y0; y < r.y1; y++) {
-      for (let x = r.x0; x < r.x1; x++) {
+    // 시작 좌표가 실수면 버퍼 인덱스가 전부 소수가 되어 아무것도 안 그려진다 —
+    // 좌표는 여기서 한 번 더 정수로 못 박는다 (실측 #9: 패치 통째 유실)
+    for (let y = Math.max(0, Math.ceil(r.y0)); y < r.y1; y++) {
+      for (let x = Math.max(0, Math.ceil(r.x0)); x < r.x1; x++) {
         const edge = Math.min(x - r.x0 + 1, r.x1 - x, y - r.y0 + 1, r.y1 - y);
         const a = Math.round(Math.min(1, edge / r.feather) * 255);
         const i = (y * W + x) * 4;

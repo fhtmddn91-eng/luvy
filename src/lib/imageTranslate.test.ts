@@ -1314,3 +1314,24 @@ describe("unchangedBox — 판독이 못 읽은 자리의 원문 잔류 픽셀 �
     expect(unchangedBox(orig, orig, W, H, [0, 0, 2, 2])).toBe(false);
   });
 });
+
+describe("clipRectAgainst — 실수 좌표 회귀 (실측 #9 패치 통째 유실)", () => {
+  it("잘린 경계는 반드시 정수다 — 실수 시작점은 버퍼 인덱스를 전부 소수로 만든다", () => {
+    // 실측 #9: line4 rect y0=326 이 이웃(line3, toPixelBox 실수 좌표) 하단
+    // 330.552 로 잘리며 실수가 됐고, buildPatchOverlay 가 아무것도 못 그려
+    // pasteBack 줄이 중국어 원문 그대로 나갔다.
+    const r = { x0: 0, y0: 326, x1: 732, y1: 396, feather: 8.7 };
+    const core = { x0: 42.96, y0: 343.728, x1: 594.28, y1: 378.672 };
+    const clipped = clipRectAgainst(r, core, [
+      { x0: 66.13, y0: 275.45, x1: 424.85, y1: 330.552 }, // 위 이웃 (실수 좌표)
+    ]);
+    expect(clipped.y0).toBe(331); // ceil(330.552)
+    expect(Number.isInteger(clipped.x0)).toBe(true);
+    expect(Number.isInteger(clipped.y0)).toBe(true);
+    expect(Number.isInteger(clipped.x1)).toBe(true);
+    expect(Number.isInteger(clipped.y1)).toBe(true);
+    // 코어는 여전히 다 덮는다
+    expect(clipped.y0).toBeLessThanOrEqual(Math.ceil(core.y0));
+    expect(clipped.y1).toBeGreaterThanOrEqual(Math.floor(core.y1));
+  });
+});
