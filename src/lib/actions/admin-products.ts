@@ -300,9 +300,13 @@ async function translateOnPublish(productId: string): Promise<void> {
   if (untranslated === 0) return;
   // 장당 십수 초 × 수십 장 — 응답을 붙잡지 않고 뒤에서 돌린다.
   // 운영자는 어드민을 새로고침하면 번역된 이미지를 본다.
+  //
+  // 여기서 revalidatePath 를 부르면 안 된다 — 이 콜백은 응답이 끝난 뒤의 분리된
+  // 컨텍스트라 Next 가 "revalidatePath during render is unsupported" 예외를 던지고,
+  // 번역은 다 됐는데 성공 로그 대신 "번역 실패"가 찍힌다(운영 실측 2026-08-17).
+  // 상세페이지는 로그인 확인(cookies) 때문에 항상 동적 렌더라 캐시 무효화가 필요 없다.
   void translateProductImages(productId)
     .then((r) => {
-      if (r.done > 0) revalidatePath(`/products/${productId}`);
       console.log(`[publish] 이미지 번역 ${r.done}장 (실패 ${r.failed} · 건너뜀 ${r.skipped})`);
     })
     .catch((e) => console.warn(`[publish] 이미지 번역 실패: ${e}`));
