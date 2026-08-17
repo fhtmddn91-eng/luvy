@@ -47,6 +47,7 @@ import {
   edgeCrossing,
   dropRiskyWm,
   clipRectAgainst,
+  unchangedBox,
   type OcrBox,
 } from "./imageTranslate";
 
@@ -1258,5 +1259,58 @@ describe("clipRectAgainst — 이웃 박스 침범 잘라내기", () => {
     expect(clipped.y0).toBeLessThanOrEqual(core.y0);
     expect(clipped.x0).toBeLessThanOrEqual(core.x0);
     expect(clipped.x1).toBeGreaterThanOrEqual(core.x1);
+  });
+});
+
+describe("unchangedBox — 판독이 못 읽은 자리의 원문 잔류 픽셀 검출", () => {
+  // 실측(2026-08-18): 잔류 박스 변화율 0.036~0.089, 정상 번역 0.48+, 깨끗한 바닥 ~0.16
+  const W = 100;
+  const H = 100;
+  const box: [number, number, number, number] = [200, 100, 800, 900]; // y 20~80, x 10~90
+  const flat = (v: number): Uint8Array => {
+    const d = new Uint8Array(W * H * 4);
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = d[i + 1] = d[i + 2] = v;
+      d[i + 3] = 255;
+    }
+    return d;
+  };
+  /** 박스 안 픽셀 일부를 어두운 획으로 (비율만큼) */
+  const withStrokes = (base: Uint8Array, frac: number): Uint8Array => {
+    const d = base.slice();
+    const x0 = 10, x1 = 90, y0 = 20, y1 = 80;
+    const total = (x1 - x0) * (y1 - y0);
+    let put = 0;
+    for (let y = y0; y < y1 && put < total * frac; y++) {
+      for (let x = x0; x < x1 && put < total * frac; x++) {
+        const i = (y * W + x) * 4;
+        d[i] = d[i + 1] = d[i + 2] = 20;
+        put++;
+      }
+    }
+    return d;
+  };
+
+  it("원본과 같은 픽셀(재생성 드리프트뿐)이면 잔류로 본다", () => {
+    const orig = withStrokes(flat(240), 0.3);
+    const drift = orig.map((v, i) => (i % 4 === 3 ? v : Math.min(255, v + 12))); // 약한 드리프트
+    expect(unchangedBox(orig, new Uint8Array(drift), W, H, box)).toBe(true);
+  });
+
+  it("한국어를 새로 그렸으면(강한 변화 30%) 잔류가 아니다", () => {
+    const orig = flat(240);
+    const drawn = withStrokes(orig, 0.3);
+    expect(unchangedBox(orig, drawn, W, H, box)).toBe(false);
+  });
+
+  it("변화가 임계(12%) 근처보다 적으면 잔류다 — 실측 잔류 최고치 0.089 대응", () => {
+    const orig = flat(240);
+    const barely = withStrokes(orig, 0.09);
+    expect(unchangedBox(orig, barely, W, H, box)).toBe(true);
+  });
+
+  it("너무 작은 박스는 판정하지 않는다", () => {
+    const orig = flat(240);
+    expect(unchangedBox(orig, orig, W, H, [0, 0, 2, 2])).toBe(false);
   });
 });

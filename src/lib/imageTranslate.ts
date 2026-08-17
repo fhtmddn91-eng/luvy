@@ -2882,6 +2882,50 @@ export function blankedBox(
 }
 
 /**
+ * 판독이 못 읽은 번역 박스가 "원본과 사실상 같은 픽셀"인지 — 원문 잔류 검출.
+ *
+ * 번역 박스는 반드시 픽셀이 크게 변해야 한다(중국어 획 → 한국어 획). 판독이
+ * 그 줄을 통째로 빠뜨리면(API 혼잡 때 실측) 글자 대조가 불가능한데, 원문이
+ * 그대로면 재생성 드리프트뿐이라 강한 변화가 거의 없다. 실측(2026-08-18):
+ *   원문 잔류 3건: 0.036 / 0.062 / 0.089
+ *   같은 이미지의 정상 번역: 0.48 / 0.50
+ *   운영 310박스 분포의 깨끗한 바닥: ~0.16 (그 아래 꼬리는 전부 알려진 결함 장)
+ * 0.12 는 양쪽에서 여유가 있고, 오탐해도 보정 한 번 더 도는 비용뿐이다.
+ */
+const UNCHANGED_DELTA = 48;
+const UNCHANGED_MAX_FRAC = 0.12;
+export function unchangedBox(
+  origRaw: Uint8Array,
+  outRaw: Uint8Array,
+  W: number,
+  H: number,
+  box: [number, number, number, number],
+): boolean {
+  const p = toPixelBox(box, W, H);
+  // toPixelBox 는 실수 좌표를 준다 — 그대로 인덱스로 쓰면 전부 NaN 비교가 된다
+  const x0 = Math.max(0, Math.round(p.x0));
+  const y0 = Math.max(0, Math.round(p.y0));
+  const x1 = Math.min(W, Math.round(p.x1));
+  const y1 = Math.min(H, Math.round(p.y1));
+  if (x1 - x0 < 4 || y1 - y0 < 4) return false;
+  let changed = 0;
+  let n = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * W + x) * 4;
+      const d = Math.max(
+        Math.abs(outRaw[i] - origRaw[i]),
+        Math.abs(outRaw[i + 1] - origRaw[i + 1]),
+        Math.abs(outRaw[i + 2] - origRaw[i + 2]),
+      );
+      if (d > UNCHANGED_DELTA) changed++;
+      n++;
+    }
+  }
+  return changed / n < UNCHANGED_MAX_FRAC;
+}
+
+/**
  * 다시 손봐야 하는 문구를 고른다 — 원문이 남았거나, 번역문이 잘렸거나,
  * 지워진 채 비어 있거나.
  *
@@ -2946,8 +2990,11 @@ async function flaggedBoxes(
     if (b.mode === "erase") return false; // 지움 박스는 잔류만 본다 — 비어 있는 게 정답
     if (!checkCoverage) return false;
     if (hits.length === 0) {
-      // 못 읽은 자리 — OCR 한계일 수도, 지워진 채 빈 것일 수도. 픽셀로 가른다.
-      return origRaw && outRaw ? blankedBox(origRaw, outRaw, W, H, b.box) : false;
+      // 못 읽은 자리 — OCR 한계일 수도, 지워진 채 빈 것일 수도, 원문이 그대로
+      // 남은 것일 수도(판독 부분 누락 — 실측: 售后无忧 가 중국어인 채 무검수
+      // 통과). 픽셀로 가른다: 평탄해졌으면 빈 자리, 원본과 같으면 잔류다.
+      if (!origRaw || !outRaw) return false;
+      return blankedBox(origRaw, outRaw, W, H, b.box) || unchangedBox(origRaw, outRaw, W, H, b.box);
     }
     const seen = hits.map((l) => l.text).join(" ");
     return (
