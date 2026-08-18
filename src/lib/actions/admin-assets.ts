@@ -11,7 +11,12 @@ import {
   deleteUploadIfUnused,
   readPublicUpload,
 } from "@/lib/storage";
-import { ocrImage, renderTranslatedImage, parseOcrBoxes, type OcrBox } from "@/lib/imageTranslate";
+import {
+  renderTranslatedImage,
+  translateImageVerified,
+  parseOcrBoxes,
+  type OcrBox,
+} from "@/lib/imageTranslate";
 import { assetKindFor, nextThumbnail, type AssetTarget } from "@/lib/productAssets";
 import { audit } from "@/lib/audit";
 
@@ -230,11 +235,17 @@ export async function translateProductAsset(assetId: string): Promise<TranslateS
   if (!file) return { error: "원본 파일을 읽을 수 없습니다." };
 
   try {
-    const boxes = await ocrImage(file.data, file.contentType);
-    if (boxes.length === 0) return { error: "번역할 중국어 텍스트를 찾지 못했습니다." };
+    // 최종 관문 포함 — 완성본에 외국어가 남으면 알아서 다시 돌린다 (최대 3회)
+    const verified = await translateImageVerified(file.data, file.contentType);
+    if (!verified) return { error: "번역할 중국어 텍스트를 찾지 못했습니다." };
+    const { boxes } = verified;
 
-    const rendered = await renderTranslatedImage(file.data, file.contentType, boxes);
-    const result = await swapTranslatedFile(asset, sourceUrl, rendered, boxes);
+    const result = await swapTranslatedFile(
+      asset,
+      sourceUrl,
+      { data: verified.data, mime: verified.mime },
+      boxes,
+    );
     if (result.error) return result;
 
     await audit({

@@ -48,6 +48,7 @@ import {
   dropRiskyWm,
   clipRectAgainst,
   unchangedBox,
+  gateLeftover,
   type OcrBox,
 } from "./imageTranslate";
 
@@ -1333,5 +1334,49 @@ describe("clipRectAgainst — 실수 좌표 회귀 (실측 #9 패치 통째 유�
     // 코어는 여전히 다 덮는다
     expect(clipped.y0).toBeLessThanOrEqual(Math.ceil(core.y0));
     expect(clipped.y1).toBeGreaterThanOrEqual(Math.floor(core.y1));
+  });
+});
+
+describe("gateLeftover — 최종 관문 판정", () => {
+  const line = (
+    box: [number, number, number, number],
+    zh: string,
+    wm?: boolean,
+  ): OcrBox => ({
+    box,
+    zh,
+    ko: "",
+    bg: "#ffffff",
+    fg: "#000000",
+    bold: false,
+    solid_bg: true,
+    ...(wm ? { wm: true } : {}),
+  });
+
+  it("번역했어야 할 자리에 남은 중국어를 센다 (실측 #9: 舒适体验升级 잔존)", () => {
+    expect(gateLeftover([line([146, 80, 203, 569], "舒适体验升级")], [])).toBe(1);
+  });
+
+  it("추출기가 워터마크로 본 줄은 면책 — 워터마크는 남는 게 정상일 수 있다", () => {
+    expect(gateLeftover([line([100, 50, 150, 900], "东莞市带劲科技有限公司", true)], [])).toBe(0);
+  });
+
+  it("지움을 포기한 워터마크 박스 자리와 겹치는 줄도 면책 (실측 #5·#6: 사진 겹침 유지)", () => {
+    const keptWm = { ...line([100, 50, 150, 900], "东莞市带劲科技有限公司"), wm: true, mode: "erase" as const };
+    expect(gateLeftover([line([105, 60, 145, 880], "东莞市带劲科技有限公司")], [keptWm])).toBe(0);
+  });
+
+  it("외국어가 아닌 줄(한글·영문)은 세지 않는다", () => {
+    expect(
+      gateLeftover(
+        [line([100, 50, 150, 400], "USB 충전"), line([200, 50, 250, 400], "IPX7 WATERPROOF")],
+        [],
+      ),
+    ).toBe(0);
+  });
+
+  it("워터마크 자리 밖의 중국어는 워터마크가 있어도 잡는다", () => {
+    const keptWm = { ...line([100, 50, 150, 900], "水印"), wm: true, mode: "erase" as const };
+    expect(gateLeftover([line([700, 50, 750, 400], "售后无忧")], [keptWm])).toBe(1);
   });
 });

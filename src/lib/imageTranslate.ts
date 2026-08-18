@@ -3258,3 +3258,91 @@ export async function renderTranslatedImage(
   // 오버레이(로컬 지우개)로는 워터마크를 지우지 않는다 — 사진 위 뿌연 띠(실측 m3)
   return renderStill(data, mime, boxes.filter((b) => !b.wm));
 }
+
+/**
+ * 최종 관문 판정 — 완성본을 다시 읽은 결과(found)에서 "남아 있으면 안 되는
+ * 외국어"만 센다.
+ *
+ * 면책 대상:
+ *   - 추출기가 워터마크로 본 줄: 워터마크는 깨끗이 지워질 때만 지우는 정책이라
+ *     남아 있는 게 정상일 수 있다
+ *   - 우리가 지움을 포기한 워터마크 박스(keptWm) 자리와 겹치는 줄
+ *   - 외국어가 아닌 줄 (한글·영문·숫자)
+ */
+export function gateLeftover(found: OcrBox[], boxes: OcrBox[]): number {
+  const keptWm = boxes.filter((b) => b.wm);
+  return found.filter((f) => {
+    if (f.wm) return false;
+    if (!isForeignSource(f.zh)) return false;
+    if (keptWm.some((w) => flaggedHits(f.box, w))) return false;
+    return true;
+  }).length;
+}
+
+/** 문구가 이 수를 넘으면 밀집 그리드(판매자 홍보 모음) — 재시도해도 안 되는 판 */
+export const DENSE_GRID_MIN = 30;
+/** 총 시도 횟수 (첫 시도 + 자동 재시도 2회). 장당 실패율 7% 기준 잔존 0.03% */
+const GATE_TRIES = 3;
+/**
+ * 한 시도가 이보다 오래 걸리면 재시도하지 않는다 — API 혼잡한 날은 재시도가
+ * 시간만 3배로 늘리고 결과도 나쁘다 (실측: 혼잡 시간대에 한 장 89분).
+ * 평상시 한 시도는 30~90초라 이 가드에 걸리지 않는다.
+ */
+const GATE_ATTEMPT_BUDGET_MS = 3 * 60 * 1000;
+
+/**
+ * OCR → 렌더 → 최종 관문 → (남으면) 처음부터 재시도.
+ *
+ * 검수 사다리는 "아는 박스"만 본다 — OCR 이 문구 자체를 못 잡으면(실측 #8:
+ * USB充电) 그 문구는 검수 대상조차 아니어서 원문이 그대로 나갔고, 모델이 나쁜
+ * 판이면 검수 구멍을 뚫고 나가는 장이 간혹 있었다(실측 14장 중 1장꼴). 둘 다
+ * "그 장만 다시 누르면" 대부분 잡히는 판운이라, 완성본을 통째로 다시 읽는
+ * 관문을 세우고 걸린 장은 기계가 다시 누른다. 관문 스캔은 텍스트 호출이라
+ * 사실상 공짜고, 재렌더 비용은 걸린 장에서만 든다.
+ *
+ * 반환 null = 글자 없는 사진 (두 번 읽어 확인).
+ * unresolved > 0 = 재시도로도 못 잡음 — 시도 중 가장 나은 판을 반환한다.
+ */
+export async function translateImageVerified(
+  data: Buffer,
+  mime: string,
+): Promise<{ data: Buffer; mime: string; boxes: OcrBox[]; unresolved: number } | null> {
+  let best: { data: Buffer; mime: string; boxes: OcrBox[]; unresolved: number } | null = null;
+  for (let attempt = 1; attempt <= GATE_TRIES; attempt++) {
+    const t0 = Date.now();
+    let boxes = await ocrImage(data, mime);
+    if (boxes.length === 0) {
+      // 정말 글자가 없는지, OCR 이 통째로 놓쳤는지 — 한 번 더 읽어 가른다
+      if (attempt === 1) boxes = await ocrImage(data, mime);
+      if (boxes.length === 0) return best; // 이전 시도가 있으면 그 결과, 없으면 null
+    }
+
+    const rendered = await renderTranslatedImage(data, mime, boxes);
+
+    // 밀집 그리드는 관문을 세워도 재시도가 수렴하지 않는다(실측 #14: 53문구
+    // 그리드는 재렌더마다 다른 곳이 깨짐) — 관문 없이 내보내고 확인만 권한다
+    if (boxes.length >= DENSE_GRID_MIN) {
+      console.warn(`[imageTranslate] 밀집 그리드(문구 ${boxes.length}개) — 최종 관문 생략, 운영자 확인 권장`);
+      return { ...rendered, boxes, unresolved: 0 };
+    }
+
+    let leftover = 0;
+    try {
+      leftover = gateLeftover(await extractForeign(rendered.data, rendered.mime), boxes);
+    } catch {
+      // 관문 스캔 실패는 통과로 — 관문은 보강 장치다. 렌더 자체 검수는 이미 끝났다.
+    }
+    if (leftover === 0) return { ...rendered, boxes, unresolved: 0 };
+    if (!best || leftover < best.unresolved) best = { ...rendered, boxes, unresolved: leftover };
+    if (Date.now() - t0 > GATE_ATTEMPT_BUDGET_MS) {
+      console.warn(`[imageTranslate] 최종 관문: ${leftover}건 잔존이지만 시도가 ${Math.round((Date.now() - t0) / 1000)}초 — 혼잡으로 보고 재시도 생략`);
+      return best;
+    }
+    if (attempt < GATE_TRIES) {
+      console.warn(`[imageTranslate] 최종 관문: 외국어 ${leftover}건 잔존 — 처음부터 재시도 (${attempt}/${GATE_TRIES})`);
+    } else {
+      console.warn(`[imageTranslate] 최종 관문: ${GATE_TRIES}회 시도에도 ${best.unresolved}건 잔존 — 최선본 유지, 운영자 확인 필요`);
+    }
+  }
+  return best;
+}

@@ -2,7 +2,7 @@ import "server-only";
 import path from "node:path";
 import { db } from "@/lib/db";
 import { readPublicUpload, saveImageBuffer } from "@/lib/storage";
-import { ocrImage, renderTranslatedImage } from "@/lib/imageTranslate";
+import { translateImageVerified } from "@/lib/imageTranslate";
 
 /**
  * 수집 직후 상품 이미지 속 중국어를 한국어로 바꾼다.
@@ -56,11 +56,11 @@ async function translateOne(asset: {
   const file = await readPublicUpload(path.basename(asset.url));
   if (!file) return "failed";
 
-  const boxes = await ocrImage(file.data, file.contentType);
-  if (boxes.length === 0) return "skipped"; // 글자가 없는 사진
+  // 최종 관문 포함 — 완성본에 외국어가 남으면 알아서 다시 돌린다 (최대 3회)
+  const result = await translateImageVerified(file.data, file.contentType);
+  if (!result) return "skipped"; // 글자가 없는 사진
 
-  const rendered = await renderTranslatedImage(file.data, file.contentType, boxes);
-  const saved = await saveImageBuffer(rendered.data, rendered.mime, 15 * 1024 * 1024);
+  const saved = await saveImageBuffer(result.data, result.mime, 15 * 1024 * 1024);
   if (!saved.ok) return "failed";
 
   await db.productAsset.update({
@@ -68,8 +68,8 @@ async function translateOne(asset: {
     data: {
       url: saved.url,
       originalUrl: asset.url,
-      ocrData: JSON.stringify(boxes),
-      bytes: rendered.data.byteLength,
+      ocrData: JSON.stringify(result.boxes),
+      bytes: result.data.byteLength,
     },
   });
   return "done";
