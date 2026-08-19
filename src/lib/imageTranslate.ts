@@ -1944,15 +1944,54 @@ async function tryBuildGifPatch(
     const moving = targets.filter((b) => !still.includes(b));
 
     const frame0 = await sharp(data, { page: 0, pages: 1 }).png().toBuffer();
+    const frame0Raw = raws[0];
     for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
       const regenPng = await callImageEdit(frame0, "image/png", regenPrompt(still), W, H);
       if (await leftoverInBoxes(regenPng, "image/png", still)) continue;
       const regenRaw = new Uint8Array(await sharp(regenPng).ensureAlpha().raw().toBuffer());
-      const overlay = buildPatchOverlay(regenRaw, W, H, still.map((b) => gifPatchRect(b, W, H)));
+
+      // 경계 획 침범 — 재생성 한국어가 원문 박스보다 길어지면 패치 사각형이
+      // 꼬리를 잘라 모든 프레임에 박제된다(실측 g15·g19: "자극"→"자ᄀ",
+      // "안심"→"안ᄉ"). 재생성 전체 그림에는 글자가 온전해서 위의 판독 검수는
+      // 통과한다 — 잘림은 "오려 붙인 뒤"에만 생기므로 여기서 픽셀로 가른다.
+      const crossed = still.filter(
+        (b) => edgeCrossing(frame0Raw, regenRaw, W, H, gifPatchRect(b, W, H)) > EDGE_CROSS_MAX,
+      );
+      const usable = still.filter((b) => !crossed.includes(b));
+      if (usable.length === 0) continue; // 전 박스 침범 — 다음 시도
+
+      const overlay = buildPatchOverlay(regenRaw, W, H, usable.map((b) => gifPatchRect(b, W, H)));
       const png = await sharp(overlay, { raw: { width: W, height: H, channels: 4 } })
         .png()
         .toBuffer();
-      return { patch: await loadImage(png), overlayBoxes: moving };
+
+      // 합성본 검수 — 정지 이미지와 같은 기준. 패치를 얹은 "결과물"에서 잘림·
+      // 원문 잔류·위치 밀림을 판독으로 확인한다 (텍스트 호출 한 번, 사실상 공짜).
+      // 걸린 문구만 오버레이로 강등한다 — 전부 버리면 멀쩡한 패치까지 잃는다.
+      const canvas = createCanvas(W, H);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(await loadImage(frame0), 0, 0, W, H);
+      ctx.drawImage(await loadImage(png), 0, 0);
+      const composite = canvas.toBuffer("image/png");
+      const flagged = await flaggedBoxes(composite, "image/png", usable, true, frame0);
+
+      const good = usable.filter((b) => !flagged.includes(b));
+      if (good.length === 0) continue; // 이 판은 못 쓴다 — 다음 시도
+      const demoted = [...crossed, ...flagged];
+      if (demoted.length > 0) {
+        console.warn(
+          `[imageTranslate] GIF 정지 패치 ${demoted.length}/${still.length}건 불합격 — 그 문구만 오버레이 (경계 ${crossed.length}·검수 ${flagged.length})`,
+        );
+      }
+      const finalOverlay =
+        good.length === usable.length
+          ? png
+          : await sharp(buildPatchOverlay(regenRaw, W, H, good.map((b) => gifPatchRect(b, W, H))), {
+              raw: { width: W, height: H, channels: 4 },
+            })
+              .png()
+              .toBuffer();
+      return { patch: await loadImage(finalOverlay), overlayBoxes: [...moving, ...demoted] };
     }
     return null;
   } catch (e) {
