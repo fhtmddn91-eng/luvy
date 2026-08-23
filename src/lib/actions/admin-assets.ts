@@ -13,7 +13,7 @@ import {
 } from "@/lib/storage";
 import {
   renderTranslatedImage,
-  translateImageVerified,
+  translateImage,
   parseOcrBoxes,
   type OcrBox,
 } from "@/lib/imageTranslate";
@@ -235,8 +235,8 @@ export async function translateProductAsset(assetId: string): Promise<TranslateS
   if (!file) return { error: "원본 파일을 읽을 수 없습니다." };
 
   try {
-    // 최종 관문 포함 — 완성본에 외국어가 남으면 알아서 다시 돌린다 (최대 3회)
-    const verified = await translateImageVerified(file.data, file.contentType);
+    // 기본 빠른 모드(호출 1회). TRANSLATE_MODE=precise 면 검수·재시도 파이프라인
+    const verified = await translateImage(file.data, file.contentType);
     if (!verified) return { error: "번역할 중국어 텍스트를 찾지 못했습니다." };
     const { boxes } = verified;
 

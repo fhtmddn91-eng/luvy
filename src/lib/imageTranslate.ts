@@ -3382,6 +3382,57 @@ const GATE_ATTEMPT_BUDGET_MS = 3 * 60 * 1000;
  * 반환 null = 글자 없는 사진 (두 번 읽어 확인).
  * unresolved > 0 = 재시도로도 못 잡음 — 시도 중 가장 나은 판을 반환한다.
  */
+/**
+ * 빠른 모드 — 저장된 프롬프트 + 이미지 **한 번 호출**로 끝낸다.
+ *
+ * OCR·문구 번역·검수·재시도·보정을 전부 생략한다. 장당 ₩55 / 10~20초.
+ * 정밀 파이프라인은 장당 3~10회 호출(₩150~550)·30~120초가 들어 운영자가
+ * "하나 번역하는데 뭐 이리 많고 오래 걸리냐"(2026-08-22)고 했다. 속도·비용이
+ * 우선이면 이 모드가 기본이고, 문구를 손봐야 하는 장만 정밀 모드로 돌린다.
+ *
+ * 프롬프트는 환경변수 GEMINI_TRANSLATE_PROMPT 로 덮어쓸 수 있다.
+ */
+const FAST_PROMPT_DEFAULT = `이 이미지에 있는 중국어(또는 일본어) 글자를 전부 자연스러운 한국어로 바꾼 이미지를 만들어 주세요.
+
+규칙:
+- 글자만 바꾼다. 제품 사진·배경·장식·아이콘·로고·레이아웃·가로세로 비율·해상도는 원본 그대로.
+- 각 문구는 원문이 있던 자리에 같은 서체 느낌·크기·굵기·색·정렬로. 세로쓰기는 세로쓰기 그대로.
+- 원문 글자는 반드시 지우고 그 자리에 한국어만 남긴다. 중국어가 한 글자라도 남으면 안 된다.
+- 표·스펙처럼 작은 글씨가 빽빽한 칸도 빠짐없이 바꾼다.
+- 번역은 상품 상세페이지 문구답게 짧고 자연스럽게. 원문보다 길어져 잘리지 않게 맞춘다.
+- 라틴 문자 브랜드명·모델명·숫자·단위(mm, MIN, mAh, dB 등)는 그대로 둔다.
+- 반투명 워터마크(회사명 등)는 흔적 없이 지운다.
+- 없는 문구를 새로 만들어 넣지 않는다.`;
+
+export async function translateImageFast(
+  data: Buffer,
+  mime: string,
+): Promise<{ data: Buffer; mime: string; boxes: OcrBox[]; unresolved: number }> {
+  const meta = await sharp(data).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (!W || !H) throw new Error("이미지 크기를 읽을 수 없습니다.");
+  const prompt = process.env.GEMINI_TRANSLATE_PROMPT?.trim() || FAST_PROMPT_DEFAULT;
+  const t0 = Date.now();
+  const png = await callImageEdit(data, mime, prompt, W, H);
+  console.log(`[빠른 번역] 호출 1회 ≈ $${IMAGE_CALL_COST_USD.toFixed(2)} · ${Date.now() - t0}ms`);
+  return mime === "image/png"
+    ? { data: png, mime: "image/png", boxes: [], unresolved: 0 }
+    : { data: await sharp(png).jpeg({ quality: 92 }).toBuffer(), mime: "image/jpeg", boxes: [], unresolved: 0 };
+}
+
+/**
+ * 모드 분기 — 기본은 빠른 모드. TRANSLATE_MODE=precise 면 정밀 파이프라인.
+ * GIF 는 프레임 합성이 필요해 빠른 모드로 못 하므로 정밀 경로로 간다.
+ */
+export async function translateImage(
+  data: Buffer,
+  mime: string,
+): Promise<{ data: Buffer; mime: string; boxes: OcrBox[]; unresolved: number } | null> {
+  const precise = process.env.TRANSLATE_MODE === "precise" || mime === "image/gif";
+  return precise ? translateImageVerified(data, mime) : translateImageFast(data, mime);
+}
+
 export async function translateImageVerified(
   data: Buffer,
   mime: string,
