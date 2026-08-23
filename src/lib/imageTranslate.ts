@@ -3404,6 +3404,96 @@ const FAST_PROMPT_DEFAULT = `이 이미지에 있는 중국어(또는 일본어)
 - 반투명 워터마크(회사명 등)는 흔적 없이 지운다.
 - 없는 문구를 새로 만들어 넣지 않는다.`;
 
+/**
+ * 원본과 재생성본의 "크게 달라진 블록" 지도 — OCR 없이 글자 자리를 찾는다.
+ *
+ * 모델은 그림 전체를 다시 그려 글자 밖 픽셀도 5~15% 미세하게 흔들린다(실측:
+ * 배지 크기·제품 위치 변형). 글자가 바뀐 곳은 획이 통째로 달라져 블록 단위로
+ * 강하게 차이 나고, 드리프트는 약하게 흩어진다. 블록(기본 8px) 안에서 밝기차
+ * 40 초과 픽셀이 20%를 넘는 블록만 "바뀐 곳"으로 보고 한 칸 넓힌다(획 끝 보호).
+ * 반환: 블록 격자(bw×bh), 1=재생성본 사용, 0=원본 유지.
+ */
+export function changedMask(
+  orig: Uint8Array,
+  regen: Uint8Array,
+  W: number,
+  H: number,
+  opts: { block?: number; delta?: number; frac?: number } = {},
+): { grid: Uint8Array; bw: number; bh: number; changedFrac: number } {
+  const block = opts.block ?? 8;
+  const delta = opts.delta ?? 40;
+  const frac = opts.frac ?? 0.2;
+  const bw = Math.ceil(W / block);
+  const bh = Math.ceil(H / block);
+  const raw = new Uint8Array(bw * bh);
+  for (let by = 0; by < bh; by++) {
+    for (let bx = 0; bx < bw; bx++) {
+      let n = 0;
+      let hit = 0;
+      for (let y = by * block; y < Math.min(H, (by + 1) * block); y++) {
+        for (let x = bx * block; x < Math.min(W, (bx + 1) * block); x++) {
+          const i = (y * W + x) * 4;
+          const d = Math.max(
+            Math.abs(regen[i] - orig[i]),
+            Math.abs(regen[i + 1] - orig[i + 1]),
+            Math.abs(regen[i + 2] - orig[i + 2]),
+          );
+          if (d > delta) hit++;
+          n++;
+        }
+      }
+      raw[by * bw + bx] = n > 0 && hit / n > frac ? 1 : 0;
+    }
+  }
+  // 한 칸 팽창 — 획 끝·안티앨리어싱 가장자리가 경계 블록에 걸쳐 잘리지 않게
+  const grid = new Uint8Array(bw * bh);
+  let changed = 0;
+  for (let by = 0; by < bh; by++) {
+    for (let bx = 0; bx < bw; bx++) {
+      let on = 0;
+      for (let dy = -1; dy <= 1 && !on; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const yy = by + dy;
+          const xx = bx + dx;
+          if (yy >= 0 && yy < bh && xx >= 0 && xx < bw && raw[yy * bw + xx]) { on = 1; break; }
+        }
+      }
+      grid[by * bw + bx] = on;
+      changed += on;
+    }
+  }
+  return { grid, bw, bh, changedFrac: changed / (bw * bh) };
+}
+
+/** 재생성본을 바뀐 블록에만 얹고 나머지는 원본 픽셀을 그대로 둔다 (가장자리 페더) */
+export async function compositeByMask(
+  origPng: Buffer,
+  regenPng: Buffer,
+  W: number,
+  H: number,
+): Promise<{ png: Buffer; changedFrac: number }> {
+  const o = new Uint8Array(await sharp(origPng).ensureAlpha().raw().toBuffer());
+  const r = new Uint8Array(await sharp(regenPng).ensureAlpha().raw().toBuffer());
+  const m = changedMask(o, r, W, H);
+  // 전면 재배치(레이아웃이 통째로 바뀜)면 마스크가 의미 없다 — 재생성본 그대로
+  if (m.changedFrac > 0.6) return { png: regenPng, changedFrac: m.changedFrac };
+  // 블록 격자 → 픽셀 알파(최근접 확대) → 블러로 페더 → 재생성본의 알파로 사용
+  const alphaGrid = Buffer.from(m.grid.map((v) => (v ? 255 : 0)));
+  const alpha = await sharp(alphaGrid, { raw: { width: m.bw, height: m.bh, channels: 1 } })
+    .resize(W, H, { kernel: "nearest", fit: "fill" })
+    .blur(3)
+    .raw()
+    .toBuffer();
+  const overlay = await sharp(regenPng)
+    .ensureAlpha()
+    .removeAlpha()
+    .joinChannel(alpha, { raw: { width: W, height: H, channels: 1 } })
+    .png()
+    .toBuffer();
+  const png = await sharp(origPng).composite([{ input: overlay, blend: "over" }]).png().toBuffer();
+  return { png, changedFrac: m.changedFrac };
+}
+
 export async function translateImageFast(
   data: Buffer,
   mime: string,
@@ -3414,8 +3504,13 @@ export async function translateImageFast(
   if (!W || !H) throw new Error("이미지 크기를 읽을 수 없습니다.");
   const prompt = process.env.GEMINI_TRANSLATE_PROMPT?.trim() || FAST_PROMPT_DEFAULT;
   const t0 = Date.now();
-  const png = await callImageEdit(data, mime, prompt, W, H);
-  console.log(`[빠른 번역] 호출 1회 ≈ $${IMAGE_CALL_COST_USD.toFixed(2)} · ${Date.now() - t0}ms`);
+  const regen = await callImageEdit(data, mime, prompt, W, H);
+  // 글자가 바뀐 자리만 얹는다 — 글자 밖은 원본과 바이트 단위로 같게 (호출 추가 없음)
+  const origPng = await sharp(data).png().toBuffer();
+  const { png, changedFrac } = await compositeByMask(origPng, regen, W, H);
+  console.log(
+    `[빠른 번역] 호출 1회 ≈ $${IMAGE_CALL_COST_USD.toFixed(2)} · ${Date.now() - t0}ms · 바뀐 영역 ${(changedFrac * 100).toFixed(0)}%`,
+  );
   return mime === "image/png"
     ? { data: png, mime: "image/png", boxes: [], unresolved: 0 }
     : { data: await sharp(png).jpeg({ quality: 92 }).toBuffer(), mime: "image/jpeg", boxes: [], unresolved: 0 };
