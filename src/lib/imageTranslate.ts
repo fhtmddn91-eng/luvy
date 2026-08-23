@@ -3524,7 +3524,10 @@ export async function translateImage(
   data: Buffer,
   mime: string,
 ): Promise<{ data: Buffer; mime: string; boxes: OcrBox[]; unresolved: number } | null> {
-  const precise = process.env.TRANSLATE_MODE === "precise" || mime === "image/gif";
+  // 기본은 정밀 모드 — 정확도가 우선이다(2026-08-22 운영 판단). 검수·관문을
+  // 통과한 장만 나가고, 못 통과하면 원본 유지 + 운영자 확인으로 남긴다.
+  // 빠른 모드는 TRANSLATE_MODE=fast 로만 켠다 (검수 없음 — 속도·비용 우선일 때).
+  const precise = process.env.TRANSLATE_MODE !== "fast" || mime === "image/gif";
   return precise ? translateImageVerified(data, mime) : translateImageFast(data, mime);
 }
 
