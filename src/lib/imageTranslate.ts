@@ -1,6 +1,18 @@
 import "server-only";
 import path from "node:path";
 import crypto from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+/**
+ * 장당 이미지 호출 예산 — 돈이 나가는 곳의 하드 캡.
+ *
+ * 재생성·보정·재시도·띠가 겹치면 한 장에 10회+(≈₩550)까지 갔고, 한 주에
+ * ₩10만이 나갔다(2026-08-22 실측). 한 장에 6회를 넘기면 그 장은 원본 유지로
+ * 끝낸다 — 더 돌려도 좋아질 확률보다 비용이 확실히 크다.
+ */
+const MAX_IMAGE_CALLS_PER_ASSET = 6;
+const IMAGE_CALL_COST_USD = 0.04;
+const imageBudget = new AsyncLocalStorage<{ left: number; used: number }>();
 import sharp from "sharp";
 import { createCanvas, loadImage, GlobalFonts, type SKRSContext2D, type Canvas, type Image } from "@napi-rs/canvas";
 
@@ -190,6 +202,16 @@ async function callGemini(
 ): Promise<GeminiPart[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY 미설정");
+
+  // 이미지 모델 호출만 장당 예산에서 차감 — 예산이 없으면 호출 자체를 막는다
+  if (model === IMAGE_MODEL) {
+    const b = imageBudget.getStore();
+    if (b) {
+      if (b.left <= 0) throw new Error(`이미지 호출 예산 소진(장당 ${MAX_IMAGE_CALLS_PER_ASSET}회) — 원본 유지`);
+      b.left--;
+      b.used++;
+    }
+  }
 
   const maxAttempts = opts.attempts ?? MAX_ATTEMPTS;
   let lastNote = "응답 없음";
@@ -3338,7 +3360,8 @@ export function gateLeftover(found: OcrBox[], boxes: OcrBox[]): number {
 /** 문구가 이 수를 넘으면 밀집 그리드(판매자 홍보 모음) — 재시도해도 안 되는 판 */
 export const DENSE_GRID_MIN = 30;
 /** 총 시도 횟수 (첫 시도 + 자동 재시도 2회). 장당 실패율 7% 기준 잔존 0.03% */
-const GATE_TRIES = 3;
+// 3회였던 것을 2회로 — 3번째 시도가 성공하는 경우는 드물고(재추첨), 비용은 확실히 든다
+const GATE_TRIES = 2;
 /**
  * 한 시도가 이보다 오래 걸리면 재시도하지 않는다 — API 혼잡한 날은 재시도가
  * 시간만 3배로 늘리고 결과도 나쁘다 (실측: 혼잡 시간대에 한 장 89분).
@@ -3360,6 +3383,19 @@ const GATE_ATTEMPT_BUDGET_MS = 3 * 60 * 1000;
  * unresolved > 0 = 재시도로도 못 잡음 — 시도 중 가장 나은 판을 반환한다.
  */
 export async function translateImageVerified(
+  data: Buffer,
+  mime: string,
+): Promise<{ data: Buffer; mime: string; boxes: OcrBox[]; unresolved: number } | null> {
+  const budget = { left: MAX_IMAGE_CALLS_PER_ASSET, used: 0 };
+  try {
+    return await imageBudget.run(budget, () => translateImageVerifiedInner(data, mime));
+  } finally {
+    // 장당 호출 수·추정 비용을 남긴다 — "얼마 나갔나"를 로그로 답할 수 있게
+    console.log(`[비용] 이미지 호출 ${budget.used}회 ≈ $${(budget.used * IMAGE_CALL_COST_USD).toFixed(2)}`);
+  }
+}
+
+async function translateImageVerifiedInner(
   data: Buffer,
   mime: string,
 ): Promise<{ data: Buffer; mime: string; boxes: OcrBox[]; unresolved: number } | null> {
