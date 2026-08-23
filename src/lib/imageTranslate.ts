@@ -2014,8 +2014,15 @@ async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer;
   const patched = mustOverlay(boxes)
     ? null
     : await tryBuildGifPatch(data, boxes, width, height, pages);
-  // 패치가 안 됐으면 전 문구를, 됐으면 움직여서 못 얹은 문구만 오버레이로
-  const overlayBoxes = patched ? patched.overlayBoxes : boxes;
+  // 정지 패치가 통째로 안 됐으면(안전 필터 거부 등) 프레임마다 로컬로 덧그리던
+  // 폴백을 없앴다 — 잘림·겹침·네모가 전 프레임에 박제되던 경로였다(2026-08-22 신고).
+  // 원본 유지가 바닥이고, 호출한 쪽이 실패로 받아 운영자 확인으로 넘긴다.
+  if (!patched) throw new Error("GIF 정지 패치 실패 — 원본 유지 (덧그리기 금지)");
+  // 움직이는 문구·불합격 문구는 덧그리지 않고 원문 그대로 둔다 (관문이 잡아 재시도)
+  if (patched.overlayBoxes.length > 0) {
+    console.warn(`[imageTranslate] GIF 문구 ${patched.overlayBoxes.length}개 원문 유지(움직임·불합격) — 덧그리기 금지`);
+  }
+  const overlayBoxes: OcrBox[] = [];
 
   const frames: Buffer[] = [];
   const hashes: string[] = [];
@@ -2388,7 +2395,13 @@ export async function regenerateByBands(
     }
     if (!ok) overlayLater.push(...band.boxes);
   }
-  if (overlayLater.length > 0) paintBoxes(ctx, W, H, overlayLater, origPixels);
+  // 실패한 띠는 로컬로 덧그리지 않는다 — 사진·그라데이션 위 네모 자국이 신고의
+  // 주원인이었다(2026-08-22). 원문이 남은 채로 내보내면 최종 관문이 잡아 재시도하고,
+  // 끝내 안 되면 원본 유지 + 운영자 확인이 바닥이다.
+  if (overlayLater.length > 0) {
+    console.warn(`[imageTranslate] 띠 재생성 실패 ${overlayLater.length}문구 — 원문 유지(덧그리기 금지)`);
+  }
+  void origPixels;
 
   if (mime === "image/png") return { data: canvas.toBuffer("image/png"), mime };
   return { data: canvas.toBuffer("image/jpeg", 90), mime: "image/jpeg" };
@@ -3075,7 +3088,7 @@ async function eraseThenDraw(
   removals: OcrBox[],
   /** 지운 그림 위에 그릴 것들 */
   drawBoxes: OcrBox[],
-): Promise<{ data: Buffer; mime: string }> {
+): Promise<{ data: Buffer; mime: string; unresolved: OcrBox[] }> {
   const om = await sharp(data).metadata();
   const W = om.width ?? 0;
   const H = om.height ?? 0;
@@ -3097,7 +3110,7 @@ async function eraseThenDraw(
           continue;
         }
         const patched = await compositeTextPatches(data, cleaned, removals, W, H);
-        return drawTextOnly(patched.toBuffer("image/png"), mime, drawBoxes);
+        return { ...(await drawTextOnly(patched.toBuffer("image/png"), mime, drawBoxes)), unresolved: [] };
       }
       const cleanRaw = new Uint8Array(await sharp(cleaned).ensureAlpha().raw().toBuffer());
       // 박스별 점수 — 하나라도 걸리면 시도 전체를 버리던 방식은 멀쩡한 박스
@@ -3126,15 +3139,11 @@ async function eraseThenDraw(
   }
 
   if (attempts.length === 0) {
-    // 워터마크는 로컬 지우개로 내려보내지 않는다 — 사진 위에 뿌연 띠를
-    // 남긴다(실측 m3: 제품을 가로지르는 얼룩). 희미한 워터마크가 얼룩보다 낫다.
-    const fallbackBoxes = drawBoxes.filter((b) => !b.wm);
-    if (fallbackBoxes.length === 0) {
-      console.warn(`[imageTranslate] 모델 지우기 실패(${REGEN_ATTEMPTS}회) — 워터마크 원본 유지: ${reason}`);
-      return { data, mime };
-    }
-    console.warn(`[imageTranslate] 모델 지우기 실패(${REGEN_ATTEMPTS}회) — 로컬 오버레이 폴백: ${reason}`);
-    return renderStill(data, mime, fallbackBoxes);
+    // 로컬 지우개로 내려보내지 않는다 — 사진·그라데이션 위에 뿌연 띠·네모를
+    // 남긴다(실측 m3, 2026-08-22 신고 #6). 원문 유지가 바닥이고, 호출한 쪽이
+    // unresolved 로 받아 관문 재시도·운영자 확인으로 넘긴다.
+    console.warn(`[imageTranslate] 모델 지우기 실패(${REGEN_ATTEMPTS}회) — 원본 유지(덧그리기 금지): ${reason}`);
+    return { data, mime, unresolved: drawBoxes.filter((b) => !b.wm) };
   }
 
   // 박스마다 가장 잔상이 적은 시도를 고른다
@@ -3182,15 +3191,15 @@ async function eraseThenDraw(
   }
 
   const first = await drawTextOnly(patchedBuf, mime, drawBoxes.filter((b) => !localSet.has(b)));
-  if (localSet.size === 0) return first;
+  if (localSet.size === 0) return { ...first, unresolved: [] };
 
+  // 불합격 박스는 로컬 지우개로 덧그리지 않는다 — 그 자리엔 원문이 그대로
+  // 남고(패치를 안 얹었으므로), 호출한 쪽이 unresolved 로 받아 관문 재시도·
+  // 운영자 확인으로 넘긴다. 네모 자국보다 원문이 낫다(2026-08-22 정책).
   console.warn(
-    `[imageTranslate] 지우기 패치 불합격 ${localSet.size}/${removals.length}건 — 로컬 보정으로 강등 (${reason})`,
+    `[imageTranslate] 지우기 패치 불합격 ${localSet.size}/${removals.length}건 — 원문 유지(덧그리기 금지) (${reason})`,
   );
-  // 불합격 박스 자리엔 원문 획이 그대로 있다(패치를 안 얹었으므로) —
-  // renderStill 이 원본 픽셀에서 배경을 읽어 획만 지우고 그린다
-  const localDraw = drawBoxes.filter((b) => localSet.has(b));
-  return renderStill(first.data, first.mime, localDraw.length > 0 ? localDraw : [...localSet]);
+  return { ...first, unresolved: drawBoxes.filter((b) => localSet.has(b)) };
 }
 
 export async function renderTranslatedImage(
@@ -3221,7 +3230,14 @@ export async function renderTranslatedImage(
   // 어드민이 위치·크기·굵기를 손댔거나 "지움"을 표시했으면 문구 교체를 모델에
   // 맡길 수 없다. 대신 지우기만 시키고, 그 위에 지시대로 우리가 그린다 —
   // 지우기는 모델이 자국 없이 잘하고, 지시는 우리가 그려야 정확히 지켜진다.
-  if (mustOverlay(boxes)) return eraseThenDraw(data, mime, removals, boxes);
+  if (mustOverlay(boxes)) {
+    const r = await eraseThenDraw(data, mime, removals, boxes);
+    const wanted = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
+    if (wanted.length > 0 && r.unresolved.length >= wanted.length) {
+      throw new Error("모델 지우기 실패 — 원본 유지 (덧그리기 금지)");
+    }
+    return { data: r.data, mime: r.mime };
+  }
 
   // 모델은 가끔 원문을 지우지 않고 한국어를 덧붙이거나, 문구를 자르거나,
   // 지운 채 비워 둔다. 검수에서 걸린 문구는 **그 문구만** 로컬 보정한다.
@@ -3293,9 +3309,10 @@ export async function renderTranslatedImage(
       }
     }
   }
-  console.warn(`[imageTranslate] 재생성 실패 — 오버레이 폴백: ${reason}`);
-  // 오버레이(로컬 지우개)로는 워터마크를 지우지 않는다 — 사진 위 뿌연 띠(실측 m3)
-  return renderStill(data, mime, boxes.filter((b) => !b.wm));
+  // 로컬 오버레이 폴백은 없앴다 — 사진·그라데이션 위 네모 자국(실측 신고 #6)의
+  // 뿌리였다. 모델 경로가 전부 실패하면 원본을 그대로 두는 게 바닥이다.
+  // 호출한 쪽(translateImageVerified)이 재시도하고, 끝내 안 되면 실패로 보고한다.
+  throw new Error(`모델 경로 실패 — 원본 유지 (덧그리기 금지): ${reason}`);
 }
 
 /**
@@ -3356,7 +3373,20 @@ export async function translateImageVerified(
       if (boxes.length === 0) return best; // 이전 시도가 있으면 그 결과, 없으면 null
     }
 
-    const rendered = await renderTranslatedImage(data, mime, boxes);
+    let rendered: { data: Buffer; mime: string };
+    try {
+      rendered = await renderTranslatedImage(data, mime, boxes);
+    } catch (e) {
+      // 모델 경로 전부 실패 — 덧그리기 폴백이 없으므로 원본 유지가 바닥이다.
+      // 재시도 여지가 있으면 한 번 더, 아니면 실패로 올려 원본을 지킨다.
+      const reason = e instanceof Error ? e.message : String(e);
+      if (attempt < GATE_TRIES && Date.now() - t0 <= GATE_ATTEMPT_BUDGET_MS) {
+        console.warn(`[imageTranslate] 렌더 실패 — 처음부터 재시도 (${attempt}/${GATE_TRIES}): ${reason}`);
+        continue;
+      }
+      if (best) return best;
+      throw new Error(`번역 실패 — 원본 유지: ${reason}`);
+    }
 
     // 밀집 그리드는 관문을 세워도 재시도가 수렴하지 않는다(실측 #14: 53문구
     // 그리드는 재렌더마다 다른 곳이 깨짐) — 관문 없이 내보내고 확인만 권한다
