@@ -3,6 +3,8 @@
  * 상품 썸네일. 업로드된 이미지가 있으면 표시하고,
  * 없으면 브랜드 기반의 결정적 파스텔 타일을 렌더한다.
  */
+import { isPlaceholderBrand } from "@/lib/productPublishGate";
+
 const palettes = [
   "from-brand-100 to-brand-200",
   "from-brand-50 to-brand-100",
@@ -64,6 +66,7 @@ export function ProductThumb({
     );
   }
 
+  const tileLabel = isPlaceholderBrand(brand) ? (alt ?? "") : brand;
   const set = tone === "neutral" ? neutralPalettes : palettes;
   const palette = set[hash(id) % set.length];
   const textCls = tone === "neutral" ? "text-ink-deep/45" : "text-white/85";
@@ -78,7 +81,9 @@ export function ProductThumb({
             : `max-w-full truncate px-1 text-[1.75em] font-extrabold tracking-tight ${tone === "neutral" ? "text-ink-deep/40" : "text-white/80"}`
         }
       >
-        {compact ? monogram(brand) : brand}
+        {/* 브랜드가 자리표시자("미정")면 타일에 상품명을 쓴다 — 이미지 없는 상품에서
+            "미정"이 큰 글씨로 손님에게 노출됐다 (2026-08-24 브라우저 검증에서 발견) */}
+        {compact ? monogram(tileLabel) : tileLabel}
       </span>
     </div>
   );

@@ -10,6 +10,9 @@ import {
   translateProductAsset,
   updateAssetTranslation,
   revertAssetTranslation,
+  approveAssetCandidate,
+  rejectAssetCandidate,
+  approveAssetRerender,
   setAssetTarget,
   type AssetFormState,
   type TranslateState,
@@ -26,6 +29,34 @@ export interface AssetRow {
   originalUrl?: string | null;
   /** OCR 문구 JSON — 문구 수정 편집기의 데이터 */
   ocrData?: string | null;
+  /** 번역 검증 상태 — null 은 기록 없음(legacy) */
+  translateStatus?: string | null;
+  /** 검수 사유 JSON [{code, detail}] */
+  reviewReasons?: string | null;
+  /** 검수 대기 번역 후보 — 승인해야 손님용 url 로 승격된다 */
+  candidateUrl?: string | null;
+}
+
+/** 상태 배지 문구·색 — 노출 허용(VERIFIED·NO_FOREIGN_TEXT·legacy)만 초록 계열 */
+const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
+  VERIFIED: { label: "검증됨", cls: "bg-ink-deep text-white" },
+  NO_FOREIGN_TEXT: { label: "외국어 없음", cls: "border border-hairline text-muted" },
+  TRANSLATING: { label: "번역 중", cls: "bg-amber-100 text-amber-900" },
+  NEEDS_REVIEW: { label: "검수 필요", cls: "bg-amber-500 text-white" },
+  RETRYABLE: { label: "재시도 대기", cls: "bg-amber-500 text-white" },
+  VERIFICATION_FAILED: { label: "검사 실패", cls: "bg-red-600 text-white" },
+  FAILED: { label: "번역 실패", cls: "bg-red-600 text-white" },
+};
+
+/** 사유 JSON → 사람이 읽는 한 줄 */
+function reasonSummary(json: string | null | undefined): string {
+  if (!json) return "";
+  try {
+    const arr = JSON.parse(json) as { code: string; detail?: string }[];
+    return arr.map((r) => `${r.code}${r.detail ? `: ${r.detail}` : ""}`).join(" · ").slice(0, 300);
+  } catch {
+    return json.slice(0, 200);
+  }
 }
 
 const kb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
@@ -50,6 +81,66 @@ interface BoxItem {
 
 /** 위치 보정 한 칸 = 이미지 폭·높이의 0.5% */
 const NUDGE = 5;
+
+/** 검수 대기 카드 — 원본·후보·사유를 보여주고 운영자가 결정한다 (설계 v2.1 정책 6·10) */
+function CandidateReview({ a }: { a: AssetRow }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const run = (fn: () => Promise<TranslateState>) =>
+    startTransition(async () => {
+      setBusy(true);
+      try {
+        const r = await fn();
+        setMsg(r.error ?? null);
+      } finally {
+        setBusy(false);
+      }
+    });
+  const reasons = reasonSummary(a.reviewReasons);
+  return (
+    <div className="mt-1 border border-amber-300 bg-amber-50 p-1.5 text-[11px]">
+      {reasons && <p className="mb-1 leading-snug text-amber-900">{reasons}</p>}
+      {a.candidateUrl && (
+        <div className="mb-1">
+          <p className="mb-0.5 font-bold text-amber-900">번역 후보 (승인 전까지 노출 안 됨)</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={a.candidateUrl} alt="번역 후보" loading="lazy" className="max-h-40 w-full bg-white object-contain" />
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-1">
+        {a.candidateUrl && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => run(() => approveAssetCandidate(a.id))}
+            className="bg-ink-deep px-2 py-0.5 font-bold text-white disabled:opacity-40"
+          >
+            후보 승인
+          </button>
+        )}
+        {a.candidateUrl && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => run(() => rejectAssetCandidate(a.id))}
+            className="border border-hairline px-2 py-0.5 font-semibold text-ink-deep disabled:opacity-40"
+          >
+            원본 유지
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => run(() => approveAssetRerender(a.id))}
+          className="border border-amber-500 px-2 py-0.5 font-semibold text-amber-900 disabled:opacity-40"
+        >
+          {a.translateStatus === "RETRYABLE" ? "재시도 승인" : "재렌더 승인"} (이미지 1회 ≈₩100 추정)
+        </button>
+      </div>
+      {msg && <p className="mt-1 text-red-700">{msg}</p>}
+    </div>
+  );
+}
 
 const WEIGHTS = [
   { v: "", label: "자동" },
@@ -444,9 +535,15 @@ export function ProductAssetsManager({
                     aria-label={`${i + 1}번 이미지 번역 대상으로 선택`}
                     className="absolute left-1 top-1 size-4 accent-ink-deep"
                   />
-                  {a.originalUrl && (
-                    <span className="absolute right-1 top-1 bg-ink-deep px-1.5 py-0.5 text-[9px] font-extrabold tracking-wide text-white">
-                      한글
+                  {(a.translateStatus || a.originalUrl) && (
+                    <span
+                      className={`absolute right-1 top-1 px-1.5 py-0.5 text-[9px] font-extrabold tracking-wide ${
+                        a.translateStatus
+                          ? STATUS_BADGE[a.translateStatus]?.cls ?? "border border-hairline text-muted"
+                          : "bg-ink-deep text-white"
+                      }`}
+                    >
+                      {a.translateStatus ? STATUS_BADGE[a.translateStatus]?.label ?? a.translateStatus : "한글"}
                     </span>
                   )}
                 </label>
@@ -487,6 +584,9 @@ export function ProductAssetsManager({
                     <button type="submit" className="px-1 font-semibold text-muted hover:text-ink-deep">삭제</button>
                   </form>
                 </div>
+                {["NEEDS_REVIEW", "RETRYABLE", "VERIFICATION_FAILED", "FAILED"].includes(a.translateStatus ?? "") && (
+                  <CandidateReview a={a} />
+                )}
                 {a.originalUrl && (
                   <div className="mt-1 flex items-center justify-between border-t border-hairline-soft pt-1 text-[11px]">
                     <button

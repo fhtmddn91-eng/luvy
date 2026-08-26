@@ -49,7 +49,6 @@ import {
   clipRectAgainst,
   unchangedBox,
   gateLeftover,
-  changedMask,
   type OcrBox,
 } from "./imageTranslate";
 
@@ -1383,52 +1382,3 @@ describe("gateLeftover — 최종 관문 판정", () => {
 });
 
 
-describe("changedMask — 빠른 모드의 OCR 없는 패치 영역 찾기", () => {
-  const W = 64;
-  const H = 64;
-  const flat = (v: number): Uint8Array => {
-    const d = new Uint8Array(W * H * 4);
-    for (let i = 0; i < d.length; i += 4) { d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255; }
-    return d;
-  };
-  /** 사각형 영역을 어두운 획으로 */
-  const stroke = (base: Uint8Array, x0: number, y0: number, x1: number, y1: number): Uint8Array => {
-    const d = base.slice();
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const i = (y * W + x) * 4; d[i] = d[i + 1] = d[i + 2] = 20; }
-    return d;
-  };
-
-  it("글자가 바뀐 블록만 잡고, 나머지 블록은 원본 유지로 둔다", () => {
-    const orig = stroke(flat(240), 8, 8, 40, 16); // 원문 획
-    const regen = stroke(flat(240), 8, 8, 24, 16); // 한국어(짧아짐)
-    const m = changedMask(orig, regen, W, H);
-    // 바뀐 곳(24~40 x, 8~16 y)을 포함한 블록은 1
-    expect(m.grid[(1) * m.bw + 4]).toBe(1);
-    // 멀리 떨어진 블록은 0 — 글자 밖은 원본 그대로
-    expect(m.grid[(7) * m.bw + 7]).toBe(0);
-    expect(m.changedFrac).toBeLessThan(0.3);
-  });
-
-  it("약한 드리프트(밝기차 12)는 바뀐 곳으로 보지 않는다 — 실측 5~15% 드리프트 무시", () => {
-    const orig = flat(200);
-    const regen = flat(212);
-    const m = changedMask(orig, regen, W, H);
-    expect(m.changedFrac).toBe(0);
-  });
-
-  it("전면이 달라지면 changedFrac 이 커져 호출한 쪽이 통짜 사용으로 판단한다", () => {
-    const orig = flat(240);
-    const regen = flat(20);
-    const m = changedMask(orig, regen, W, H);
-    expect(m.changedFrac).toBe(1);
-  });
-
-  it("팽창 덕에 획 경계 블록도 포함된다 (경계 잘림 방지)", () => {
-    const orig = flat(240);
-    const regen = stroke(flat(240), 16, 16, 24, 24); // 정확히 블록 (2,2) 하나
-    const m = changedMask(orig, regen, W, H);
-    expect(m.grid[2 * m.bw + 2]).toBe(1);
-    expect(m.grid[1 * m.bw + 1]).toBe(1); // 이웃 블록도 1 (팽창)
-    expect(m.grid[0 * m.bw + 0]).toBe(0); // 두 칸 밖은 0
-  });
-});

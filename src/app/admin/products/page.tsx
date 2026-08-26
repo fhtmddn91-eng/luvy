@@ -3,7 +3,8 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
 import { getAllCategories } from "@/lib/categories";
-import { setProductStatus, deleteProduct } from "@/lib/actions/admin-products";
+import { setProductStatus, deleteProduct, setProductBrand } from "@/lib/actions/admin-products";
+import { isPlaceholderBrand } from "@/lib/productPublishGate";
 import { ProductThumb } from "@/components/product/ProductThumb";
 import { stockLabel, stockState } from "@/lib/stock";
 import {
@@ -52,6 +53,16 @@ export default async function AdminProductsPage({
  });
 
  const liveCount = products.filter((p) => p.status === "ACTIVE").length;
+
+ // 번역 검증에 막힌 이미지 수 — 판매 보류 배지에 사유로 보여준다 (설계 v2.1)
+ const blockedRows = await db.productAsset.groupBy({
+ by: ["productId"],
+ where: {
+ translateStatus: { in: ["TRANSLATING", "NEEDS_REVIEW", "RETRYABLE", "VERIFICATION_FAILED", "FAILED"] },
+ },
+ _count: { _all: true },
+ });
+ const blockedByProduct = new Map(blockedRows.map((r) => [r.productId, r._count._all]));
 
  return (
  <div>
@@ -135,7 +146,21 @@ export default async function AdminProductsPage({
  </span>
  </Link>
  </td>
- <td className="px-5 py-3 text-[13px] text-ink-soft sm:px-6">{p.brand}</td>
+ {/* 브랜드는 목록에서 바로 친다 — 수집 상품은 브랜드를 모른 채 들어와서,
+ 수백 건을 상품마다 수정 폼 열어 채울 수 없다. 아직 안 채운 칸은 테두리로 표시 */}
+ <td className="px-5 py-3 text-[13px] text-ink-soft sm:px-6">
+ <form action={setProductBrand.bind(null, p.id)}>
+ <input
+ name="brand"
+ defaultValue={isPlaceholderBrand(p.brand) ? "" : p.brand}
+ placeholder="브랜드 입력"
+ aria-label={`${p.name} 브랜드`}
+ className={`w-full min-w-[7rem] max-w-[11rem] rounded-md border bg-white px-2 py-1 text-[13px] text-ink-deep outline-none transition-colors focus:border-ink-deep ${
+ isPlaceholderBrand(p.brand) ? "border-amber-400 placeholder:text-amber-700" : "border-hairline"
+ }`}
+ />
+ </form>
+ </td>
  <td className="px-5 py-3 text-[13px] text-ink-soft sm:px-6">
  {categoryName(p.categorySlug)}
  </td>
@@ -157,8 +182,20 @@ export default async function AdminProductsPage({
  </td>
  <td className="px-5 py-3 text-center sm:px-6">
  <StatusPill tone={live ? "bg-ink-deep text-white" : "bg-hairline-soft text-muted"}>
- {live ? "판매중" : "숨김"}
+ {live ? "판매중" : p.publishRequestedAt ? "판매 보류" : "숨김"}
  </StatusPill>
+ {/* 보류 사유는 실제 원인을 적는다 — 브랜드가 비어 막힌 상품에 "번역 검증
+ 대기"를 띄우면 운영자가 영원히 안 오는 번역을 기다린다 */}
+ {(p.publishRequestedAt || blockedByProduct.has(p.id)) && (
+ <span className="mt-1 block text-[11px] font-semibold text-amber-700">
+ {[
+ blockedByProduct.has(p.id) ? `번역 확인 필요 ${blockedByProduct.get(p.id)}장` : null,
+ isPlaceholderBrand(p.brand) ? "브랜드 미정" : null,
+ ]
+ .filter(Boolean)
+ .join(" · ") || "번역 검증 대기"}
+ </span>
+ )}
  </td>
  <td className="px-5 py-3 sm:px-6">
  <div className="flex items-center justify-end gap-3 whitespace-nowrap text-[13px]">

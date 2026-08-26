@@ -5,7 +5,8 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
-import { translateProductImages } from "@/lib/import/translateAssets";
+import { translateProductImages, promoteIfReady } from "@/lib/import/translateAssets";
+import { productPublishGate, gateSummary, isPlaceholderBrand, PLACEHOLDER_BRAND } from "@/lib/productPublishGate";
 import { sourceForUrl } from "@/lib/import/sources";
 import { saveImageUpload, deleteImageUpload, deleteUploadIfUnused } from "@/lib/storage";
 import { normalizeSku, skuError } from "@/lib/sku";
@@ -167,6 +168,12 @@ function parseExtraCategories(formData: FormData): string[] {
 function validate(f: ReturnType<typeof parseFields>, tiers: { minQty: number }[]): string | null {
   if (!f.name) return "상품명을 입력해주세요.";
   if (!f.brand) return "브랜드를 입력해주세요.";
+  // 자리표시자("미정")는 **판매로 내보낼 때만** 막는다. 숨김 상태로 가격·카테고리만
+  // 먼저 저장하는 건 정상 작업이라, 그것까지 막으면 수집분을 손볼 수가 없다.
+  // (판매 전환은 requestPublish 게이트가 따로 막으므로 이중 방어다)
+  if (f.status === "ACTIVE" && isPlaceholderBrand(f.brand)) {
+    return `판매하려면 실제 브랜드를 입력해주세요. (수집 기본값 "${PLACEHOLDER_BRAND}"으로는 판매할 수 없습니다)`;
+  }
   if (!f.categorySlug) return "대표 카테고리를 선택해주세요.";
   const sku = skuError(f.sku);
   if (sku) return sku;
@@ -251,6 +258,9 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
       where: { id },
       data: {
         ...fields,
+        // ACTIVE 는 게이트를 거쳐야 한다 — 여기서는 일단 현 상태를 건드리지 않고
+        // 아래 requestPublish 가 검증 결과에 따라 ACTIVE/보류를 정한다
+        ...(fields.status === "ACTIVE" ? { status: undefined } : {}),
         ...(image.url ? { image: image.url } : {}),
         priceTiers: { create: tiers },
         categories: { create: cats },
@@ -259,7 +269,7 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
   ]);
   await syncOptions(id, parseOptions(formData));
   if (image.url) await registerThumbnailAsset(id, image.url, image.bytes ?? 0);
-  if (fields.status === "ACTIVE") await translateOnPublish(id);
+  if (fields.status === "ACTIVE") await requestPublish(id);
   await audit({
     action: "PRODUCT_UPDATE",
     target: "product",
@@ -307,22 +317,97 @@ async function translateOnPublish(productId: string): Promise<void> {
   // 상세페이지는 로그인 확인(cookies) 때문에 항상 동적 렌더라 캐시 무효화가 필요 없다.
   void translateProductImages(productId)
     .then((r) => {
-      console.log(`[publish] 이미지 번역 ${r.done}장 (실패 ${r.failed} · 건너뜀 ${r.skipped})`);
+      console.log(`[publish] 이미지 번역 검증 ${r.verified}장 (검수 ${r.review} · 실패 ${r.failed} · 건너뜀 ${r.skipped})`);
     })
     .catch((e) => console.warn(`[publish] 이미지 번역 실패: ${e}`));
+}
+
+/**
+ * 판매 전환 게이트 (설계 2026-08-24 v2.1 정책 9·10).
+ *
+ * 번역 대상 소스는 전 이미지가 검증 통과(VERIFIED·NO_FOREIGN_TEXT·legacy)여야
+ * ACTIVE 가 된다. 아니면 HIDDEN 인 채 publishRequestedAt 만 기록하고 번역을
+ * 돌린다 — 끝나면 translateProductImages 안의 promoteIfReady 가 자동 승격한다.
+ * 예전에는 ACTIVE 를 먼저 반영해 번역 중 중국어 원본이 손님에게 보였다.
+ */
+async function requestPublish(id: string): Promise<{ state: "active" | "pending"; why: string }> {
+  const p = await db.product.findUnique({
+    where: { id },
+    select: { sourceUrl: true, brand: true },
+  });
+  const needsTranslation = sourceForUrl(p?.sourceUrl ?? "")?.translate === true;
+  const assets = needsTranslation
+    ? await db.productAsset.findMany({
+        where: { productId: id },
+        select: { translateStatus: true, originalUrl: true },
+      })
+    : [];
+  // 브랜드 미정도 보류 사유다 — 목록의 판매중 토글은 폼 검증(validate)을 안 거쳐
+  // 여기가 유일한 방어선이다
+  const gate = productPublishGate(assets, needsTranslation, p?.brand);
+  if (!gate.ready) {
+    await db.product.update({
+      where: { id },
+      data: { status: "HIDDEN", publishRequestedAt: new Date() },
+    });
+    await translateOnPublish(id);
+    // 사유를 그대로 실어 보낸다 — "번역 검증 대기"로 뭉뚱그리면 브랜드가 비어서
+    // 막힌 상품을 운영자가 번역 끝나기만 기다리게 된다 (영원히 안 풀린다)
+    return { state: "pending", why: gateSummary(gate) };
+  }
+  await db.product.update({ where: { id }, data: { status: "ACTIVE", publishRequestedAt: null } });
+  await translateOnPublish(id);
+  return { state: "active", why: "" };
 }
 
 export async function setProductStatus(id: string, status: "ACTIVE" | "HIDDEN"): Promise<void> {
   await requireAdmin();
   const p = await db.product.findUnique({ where: { id }, select: { name: true } });
-  await db.product.update({ where: { id }, data: { status } });
-  if (status === "ACTIVE") await translateOnPublish(id);
+  let summary: string;
+  if (status === "ACTIVE") {
+    const r = await requestPublish(id);
+    summary = `${p?.name ?? id} → ${r.state === "active" ? "판매중" : `판매 보류(${r.why || "검증 대기"})`}`;
+  } else {
+    await db.product.update({ where: { id }, data: { status, publishRequestedAt: null } });
+    summary = `${p?.name ?? id} → 숨김`;
+  }
   await audit({
     action: "PRODUCT_STATUS",
     target: "product",
     targetId: id,
-    summary: `${p?.name ?? id} → ${status === "ACTIVE" ? "판매중" : "숨김"}`,
+    summary,
   });
+  revalidatePath("/admin/products");
+  revalidatePath(`/products/${id}`);
+}
+
+/**
+ * 목록에서 브랜드만 바로 입력한다.
+ *
+ * 수집 상품은 브랜드를 모른 채 들어오는데(1688 공장 상품은 브랜드가 아예 없다),
+ * 수백 건을 상품마다 수정 폼을 열어 채우는 건 현실적이지 않다. 목록에서 바로
+ * 치고 엔터만 누르면 되게 한다.
+ *
+ * 브랜드를 채우면 브랜드 때문에 보류돼 있던 상품은 여기서 바로 승격을 시도한다
+ * — 안 그러면 운영자가 "판매" 버튼을 한 번 더 눌러야 하는지 알 수 없다.
+ */
+export async function setProductBrand(id: string, formData: FormData): Promise<void> {
+  await requireAdmin();
+  const brand = String(formData.get("brand") ?? "").trim();
+  // 빈 값·"미정"으로 되돌리는 건 저장하지 않는다 — 실수로 지우고 엔터를 쳐도
+  // 이미 채워둔 브랜드가 날아가지 않는다
+  if (isPlaceholderBrand(brand)) return;
+  const before = await db.product.findUnique({ where: { id }, select: { brand: true, name: true } });
+  if (!before || before.brand === brand) return;
+  await db.product.update({ where: { id }, data: { brand } });
+  await audit({
+    action: "PRODUCT_UPDATE",
+    target: "product",
+    targetId: id,
+    summary: `${before.name} 브랜드 → ${brand}`,
+    meta: { before: before.brand, after: brand },
+  });
+  await promoteIfReady(id);
   revalidatePath("/admin/products");
   revalidatePath(`/products/${id}`);
 }

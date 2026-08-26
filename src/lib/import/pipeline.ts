@@ -5,6 +5,7 @@ import { parseDomestic } from "./parseDomestic";
 import { mirrorImages } from "./mirror";
 import { translateDraft, asIsDraft } from "./translate";
 import { sourceById, sourceForUrl, type SourceSite } from "./sources";
+import { PLACEHOLDER_BRAND } from "@/lib/productPublishGate";
 import type { ImportPayload, ParseResult } from "./types";
 
 /**
@@ -214,7 +215,9 @@ export async function runImport(payload: ImportPayload): Promise<ImportOutcome> 
     const product = await db.product.create({
       data: {
         name: translation.name,
-        brand: "미정",
+        // 수집 시점엔 브랜드를 모른다. 자리표시자로 들어가지만 그대로는 판매
+        // 전환도 노출도 안 된다 (productPublishGate·브랜드관·상품 상세가 걸러낸다)
+        brand: PLACEHOLDER_BRAND,
         categorySlug: categorySlug ?? guessed,
         // 카테고리를 못 찾으면 링크 없이 만든다 — 상품은 어차피 HIDDEN 이고
         // 운영자가 가격을 넣을 때 카테고리도 함께 고르게 된다

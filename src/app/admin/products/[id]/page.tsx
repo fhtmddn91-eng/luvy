@@ -65,6 +65,9 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
               bytes: a.bytes,
               originalUrl: a.originalUrl,
               ocrData: a.ocrData,
+              translateStatus: a.translateStatus,
+              reviewReasons: a.reviewReasons,
+              candidateUrl: a.candidateUrl,
             }))}
           />
         </Panel>

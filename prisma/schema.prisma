@@ -63,6 +63,12 @@ model Product {
   /** 수입 원본 (1688 등). sourceId 로 같은 상품 재수집을 막는다. */
   sourceUrl    String      @default("")
   sourceId     String?     @unique
+  /**
+   * 판매 전환 요청 시각 — 번역 검증이 안 끝나 HIDDEN 으로 붙잡아 둔 상태.
+   * 전 이미지가 검증을 통과하면 자동으로 ACTIVE 로 승격하고 비운다.
+   * 번역 중·검수 대기인 중국어 이미지가 손님에게 먼저 보이는 창을 없앤다.
+   */
+  publishRequestedAt DateTime?
   createdAt    DateTime    @default(now())
   priceTiers   PriceTier[]
   cartItems    CartItem[]
@@ -146,7 +152,43 @@ model ProductAsset {
   originalUrl String? // 번역 전 원본 (/uploads/..) — null 이면 미번역
   ocrData     String? // OCR 결과+번역 문구 JSON — 어드민에서 문구 수정 시 재렌더 근거
 
+  // 번역 검증 상태 (2026-08-24 설계 v2.1).
+  // null = 기록 없음(국내·수동 등록, 또는 구 파이프라인 번역본 legacy — 노출 허용).
+  // VERIFIED · NO_FOREIGN_TEXT 만 검사를 실제 통과한 것이고, 나머지
+  // (TRANSLATING · NEEDS_REVIEW · RETRYABLE · VERIFICATION_FAILED · FAILED)는
+  // 전부 판매 노출 차단 — 불확실한 이미지는 손님에게 나가지 않는다.
+  translateStatus String?
+  reviewReasons   String? // NEEDS_REVIEW 등 사유 — JSON [{code, detail}]
+  candidateUrl    String? // 검수 대기 번역 후보 (/uploads/..). url 은 원본 유지 — 승인해야 승격
+  candidateOcr    String? // 후보에 딸린 OCR·번역문 JSON — 승인 시 ocrData 로 승격
+  reviewedAt      DateTime? // 운영자가 승인/거부한 시각 — 자동 판정과 구분
+  originalSha256  String? // 번역 원본 바이트의 SHA-256 — TranslationCache 연결·중복 측정
+
   @@index([productId])
+  @@index([translateStatus])
+}
+
+/**
+ * (원본 바이트, 파이프라인 버전) → 번역 결과 캐시. 같은 그림·같은 파이프라인은
+ * 두 번 렌더하지 않는다 — VERIFIED 재호출 금지를 자산이 아니라 바이트 단위로 보장.
+ * pipelineVersion 은 모델 ID·프롬프트·패치 알고리즘·검증 정책 버전을 전부 담는다 —
+ * 어느 하나라도 바뀌면 키가 달라져 구버전 결과가 새 파이프라인에 자동 재사용되지 않는다.
+ */
+model TranslationCache {
+  sha256          String
+  pipelineVersion String
+  status          String // VERIFIED | NO_FOREIGN_TEXT | NEEDS_REVIEW | VERIFICATION_FAILED | RETRYABLE | FAILED
+  ocrData         String? // 교차 OCR + 확정 번역 JSON
+  resultFile      String? // 번역본(또는 검수 후보) 파일 — StoredFile.name
+  storedFile      StoredFile? @relation(fields: [resultFile], references: [name], onDelete: SetNull)
+  verifyData      String? // 검수 결과·사유 JSON
+  // 끊어진 캐시 — 파일 소실·손상·운영자 거부로 재사용 불가가 된 시각·사유
+  staleAt         DateTime?
+  staleReason     String?
+  createdAt       DateTime @default(now())
+
+  @@id([sha256, pipelineVersion])
+  @@index([resultFile])
 }
 
 /** 1688 수집 이력 — 실패 원인 추적과 재시도를 위해 남긴다. */
@@ -366,6 +408,8 @@ model StoredFile {
   // 1688 판매자는 배지·배너를 여러 상품에 재사용하므로, 이걸 기억해 두면
   // 다운로드·저장·이미지 번역 비용이 상품 수만큼 중복으로 나가지 않는다.
   sourceUrl String?
+
+  translationCaches TranslationCache[]
 
   @@index([sourceUrl])
 }

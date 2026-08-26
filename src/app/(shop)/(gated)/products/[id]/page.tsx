@@ -10,6 +10,7 @@ import { won } from "@/lib/format";
 import { AssetDownloads } from "@/components/product/AssetDownloads";
 import { ProductGallery } from "@/components/product/ProductGallery";
 import { WishButton } from "@/components/product/WishButton";
+import { isPlaceholderBrand } from "@/lib/productPublishGate";
 import { RecentViewTracker } from "@/components/product/RecentViewTracker";
 import { requireApprovedUser } from "@/lib/auth";
 import { isWished } from "@/lib/wishlist";
@@ -54,9 +55,13 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           images={gallery}
         />
         <div>
-          <p className="text-[13px] font-semibold text-brand-500">
-            {product.brand}{category ? ` · ${category.name}` : ""}
-          </p>
+          {/* 브랜드가 자리표시자("미정")면 줄에서 뺀다 — 카테고리만 남긴다.
+              게이트가 새 노출은 막지만, 이미 판매중인 기존 수집분에도 즉시 적용돼야 한다 */}
+          {(() => {
+            const showBrand = !isPlaceholderBrand(product.brand);
+            const line = [showBrand ? product.brand : null, category?.name ?? null].filter(Boolean).join(" · ");
+            return line ? <p className="text-[13px] font-semibold text-brand-500">{line}</p> : null;
+          })()}
           <h1 className="mt-2 text-[26px] font-extrabold leading-snug text-ink">{product.name}</h1>
           {/* 품번 — 거래처가 발주서에 적는 값이라 상세에 노출한다 */}
           {product.sku && (

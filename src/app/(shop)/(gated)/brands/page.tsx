@@ -2,6 +2,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { ProductThumb } from "@/components/product/ProductThumb";
 import { Icon } from "@/components/ui/Icon";
+import { isPlaceholderBrand } from "@/lib/productPublishGate";
 
 export default async function BrandsPage() {
   const products = await db.product.findMany({
@@ -10,9 +11,12 @@ export default async function BrandsPage() {
     select: { id: true, name: true, brand: true, image: true },
   });
 
-  // 브랜드별 그룹 (상품 많은 순)
+  // 브랜드별 그룹 (상품 많은 순).
+  // 자리표시자("미정")는 브랜드가 아니다 — 넣으면 수집분이 대다수라 맨 앞
+  // 최대 카드로 떠서 "LUVY가 취급하는 브랜드"로 계수된다
   const byBrand = new Map<string, typeof products>();
   for (const p of products) {
+    if (isPlaceholderBrand(p.brand)) continue;
     const list = byBrand.get(p.brand) ?? [];
     list.push(p);
     byBrand.set(p.brand, list);
