@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { parseOrderFilter, orderWhere, filterQuery } from "./orderQuery";
+import {
+  parseOrderFilter,
+  orderWhere,
+  filterQuery,
+  orderFilterLabel,
+  AWAITING_DEPOSIT,
+} from "./orderQuery";
 
 describe("parseOrderFilter", () => {
   it("모르는 상태·잘못된 날짜는 버린다", () => {
@@ -52,5 +58,46 @@ describe("filterQuery", () => {
     const f = parseOrderFilter({ q: "젤", from: "2026-07-01" });
     expect(filterQuery(f, { status: "CANCELED" })).toContain("status=CANCELED");
     expect(filterQuery(f, { status: "CANCELED" })).toContain("from=2026-07-01");
+  });
+});
+
+describe("입금대기 가상 필터", () => {
+  it("탭 값으로 받아들인다 (ORDER_STATUS 에 없는 코드지만)", () => {
+    expect(parseOrderFilter({ status: AWAITING_DEPOSIT }).status).toBe(AWAITING_DEPOSIT);
+  });
+
+  it("무통장 + 접수됨 + 입금 미확인 만 고른다", () => {
+    const w = orderWhere(parseOrderFilter({ status: AWAITING_DEPOSIT }));
+    expect(w).toMatchObject({
+      paymentMethod: "BANK_TRANSFER",
+      status: "RECEIVED",
+      depositConfirmedAt: null,
+    });
+  });
+
+  it("입금 확인이 끝난 주문은 이 필터에 걸리지 않는다", () => {
+    // depositConfirmedAt: null 조건이 빠지면 확인된 주문까지 '입금대기'로 보인다
+    const w = orderWhere(parseOrderFilter({ status: AWAITING_DEPOSIT }));
+    expect(w.depositConfirmedAt).toBeNull();
+  });
+
+  it("일반 상태 필터는 결제수단을 건드리지 않는다", () => {
+    const w = orderWhere(parseOrderFilter({ status: "PREPARING" }));
+    expect(w).toEqual({ status: "PREPARING" });
+  });
+
+  it("검색어·기간과 함께 쓸 수 있다", () => {
+    const f = parseOrderFilter({ status: AWAITING_DEPOSIT, q: "러비" });
+    const w = orderWhere(f);
+    expect(w.status).toBe("RECEIVED");
+    expect(w.OR).toBeDefined();
+    expect(filterQuery(f)).toContain(`status=${AWAITING_DEPOSIT}`);
+  });
+
+  it("탭 이름을 붙여준다", () => {
+    expect(orderFilterLabel(AWAITING_DEPOSIT)).toBe("입금대기");
+    expect(orderFilterLabel("ALL")).toBe("전체");
+    expect(orderFilterLabel("SHIPPED")).toBe("배송중");
+    expect(orderFilterLabel("WEIRD")).toBe("WEIRD");
   });
 });

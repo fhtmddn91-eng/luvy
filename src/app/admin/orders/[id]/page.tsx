@@ -3,10 +3,13 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
-import { FULFILLMENT_STATUSES, orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
-import { setOrderStatus, cancelOrderPayment } from "@/lib/actions/admin-orders";
+import { orderStatusLabel, orderStatusTone, needsDepositConfirm } from "@/lib/orderStatus";
+import { cancelOrderPayment } from "@/lib/actions/admin-orders";
 import { courierName, hasShipment, trackingUrl } from "@/lib/shipping";
 import { ShippingForm } from "@/components/admin/ShippingForm";
+import { OrderStatusForm } from "@/components/admin/OrderStatusForm";
+import { DepositForm } from "@/components/admin/DepositForm";
+import { depositGapLabel, elapsedLabel } from "@/lib/deposit";
 import { paymentMethodLabel } from "@/lib/paymentMethods";
 
 const dateFmt = (d: Date) =>
@@ -30,6 +33,16 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
   const shipment = { courier: order.courier, trackingNo: order.trackingNo };
   const shipped = hasShipment(shipment);
   const trackUrl = trackingUrl(shipment);
+
+  const awaitingDeposit = needsDepositConfirm({
+    from: order.status,
+    paymentMethod: order.paymentMethod,
+    depositConfirmedAt: order.depositConfirmedAt,
+  });
+  const elapsed = elapsedLabel(order.createdAt, new Date());
+  const depositGap = order.depositConfirmedAt
+    ? depositGapLabel(order.depositAmount, order.total)
+    : "";
 
   return (
     <div className="max-w-[840px]">
@@ -221,27 +234,52 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
             />
           </section>
 
+          {awaitingDeposit && (
+            <section className="border border-brand-200 bg-brand-50 p-6">
+              <h2 className="text-[15px] font-bold text-ink-deep">입금 확인</h2>
+              <p className="mb-4 mt-1 text-[12px] leading-relaxed text-ink-soft">
+                주문 후 <strong className="font-bold text-brand-600">{elapsed}</strong> 경과 · 미입금 상태로
+                재고를 물고 있습니다. 통장에서 확인한 뒤 아래를 채워주세요.
+              </p>
+              <DepositForm orderId={order.id} total={order.total} />
+            </section>
+          )}
+
+          {order.depositConfirmedAt && (
+            <section className="border border-hairline bg-white p-6">
+              <h2 className="mb-3 text-[15px] font-bold text-ink-deep">입금 기록</h2>
+              <dl className="space-y-1.5 text-[13px]">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted">입금자명</dt>
+                  <dd className="font-semibold text-ink-deep">{order.depositorName}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted">입금액</dt>
+                  <dd className="font-semibold text-ink-deep">
+                    {won(order.depositAmount)}
+                    {depositGap && <span className="ml-1 font-bold text-brand-600">({depositGap})</span>}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted">확인</dt>
+                  <dd className="text-right text-ink-soft">
+                    {order.depositConfirmedBy}
+                    <br />
+                    {dateFmt(order.depositConfirmedAt)}
+                  </dd>
+                </div>
+              </dl>
+            </section>
+          )}
+
           <section className="border border-hairline bg-white p-6">
             <h2 className="mb-4 text-[15px] font-bold text-ink-deep">상태 변경</h2>
-            <form action={setOrderStatus.bind(null, order.id)} className="space-y-3">
-              <select
-                name="status"
-                defaultValue={order.status}
-                className="h-11 w-full border border-hairline bg-white px-3 text-[14px] focus:border-ink-deep focus:outline-none"
-              >
-                {FULFILLMENT_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {orderStatusLabel(s)}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="submit"
-                className="h-11 w-full bg-ink-deep text-[12px] font-bold uppercase tracking-[0.12em] text-white transition-opacity hover:opacity-80"
-              >
-                변경 저장
-              </button>
-            </form>
+            <OrderStatusForm orderId={order.id} status={order.status} />
+            {awaitingDeposit && (
+              <p className="mt-3 text-[12px] leading-relaxed text-muted">
+                무통장 입금이 확인되기 전에는 접수됨을 벗어날 수 없습니다.
+              </p>
+            )}
             {order.status !== "CANCELED" && (
               <form
                 action={cancelOrderPayment.bind(null, order.id)}

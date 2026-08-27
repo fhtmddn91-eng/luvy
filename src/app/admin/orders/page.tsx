@@ -3,7 +3,15 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
 import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
-import { parseOrderFilter, orderWhere, filterQuery } from "@/lib/orderQuery";
+import {
+  parseOrderFilter,
+  orderWhere,
+  filterQuery,
+  orderFilterLabel,
+  AWAITING_DEPOSIT,
+} from "@/lib/orderQuery";
+import { needsDepositConfirm } from "@/lib/orderStatus";
+import { elapsedLabel, isStaleDeposit } from "@/lib/deposit";
 import { courierName, hasShipment } from "@/lib/shipping";
 import {
   PageHeader,
@@ -23,7 +31,16 @@ const dateFmt = (d: Date) =>
     minute: "2-digit",
   }).format(d);
 
-const filters = ["ALL", "RECEIVED", "PREPARING", "SHIPPED", "DELIVERED", "CANCELED"];
+// '입금대기'를 접수됨 앞에 둔다 — 재고를 물고 있는 주문이라 가장 먼저 봐야 한다
+const filters = [
+  "ALL",
+  AWAITING_DEPOSIT,
+  "RECEIVED",
+  "PREPARING",
+  "SHIPPED",
+  "DELIVERED",
+  "CANCELED",
+];
 
 export default async function AdminOrdersPage({
   searchParams,
@@ -33,6 +50,8 @@ export default async function AdminOrdersPage({
   await requireAdmin();
   const filter = parseOrderFilter(await searchParams);
   const active = filter.status;
+  // 행마다 new Date() 를 부르면 같은 표 안에서 기준 시각이 흔들린다
+  const now = new Date();
 
   const orders = await db.order.findMany({
     where: orderWhere(filter),
@@ -66,7 +85,7 @@ export default async function AdminOrdersPage({
           items={filters.map((f) => ({
             // 탭을 옮겨도 검색어·기간은 유지된다
             href: `/admin/orders${filterQuery(filter, { status: f })}`,
-            label: f === "ALL" ? "전체" : orderStatusLabel(f),
+            label: orderFilterLabel(f),
             active: active === f,
           }))}
         />
@@ -171,6 +190,20 @@ export default async function AdminOrdersPage({
                       <StatusPill tone={orderStatusTone(o.status)}>
                         {orderStatusLabel(o.status)}
                       </StatusPill>
+                      {/* 미입금은 재고를 잠근 채 기다리는 상태다 — 얼마나 됐는지 바로 보여준다 */}
+                      {needsDepositConfirm({
+                        from: o.status,
+                        paymentMethod: o.paymentMethod,
+                        depositConfirmedAt: o.depositConfirmedAt,
+                      }) && (
+                        <span
+                          className={`mt-1 block text-[11px] font-bold ${
+                            isStaleDeposit(o.createdAt, now) ? "text-brand-600" : "text-muted"
+                          }`}
+                        >
+                          미입금 {elapsedLabel(o.createdAt, now)}
+                        </span>
+                      )}
                     </td>
                     <td className="whitespace-nowrap px-5 py-3.5 text-right text-[13px] text-muted sm:px-6">
                       {dateFmt(o.createdAt)}

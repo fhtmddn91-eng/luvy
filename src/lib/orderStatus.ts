@@ -18,8 +18,65 @@ export const ORDER_STATUS: Record<string, StatusMeta> = {
   PAYMENT_FAILED: { label: "결제실패", tone: "bg-hairline-soft text-muted" },
 };
 
-/** 어드민에서 수동으로 지정 가능한 배송 상태 흐름. */
-export const FULFILLMENT_STATUSES = ["RECEIVED", "PREPARING", "SHIPPED", "DELIVERED", "CANCELED"] as const;
+/**
+ * 어드민 '상태 변경' 에서 수동으로 지정 가능한 값.
+ *
+ * **CANCELED 는 여기 없다.** 예전엔 들어 있어서 드롭다운에서 '취소'를 고르면
+ * 상태만 바뀌고 재고 복원도 환불도 안 됐다 — 바로 아래 붙어 있는 '주문 취소'
+ * 버튼과 생김새가 같아 어느 쪽을 눌렀는지도 남지 않았다. 취소는 재고·환불을
+ * 함께 처리하는 cancelOrderCore 한 경로로만 간다.
+ */
+export const MANUAL_STATUSES = ["RECEIVED", "PREPARING", "SHIPPED", "DELIVERED"] as const;
+
+export const isManualStatus = (s: string): boolean =>
+  (MANUAL_STATUSES as readonly string[]).includes(s);
+
+/** 되돌릴 수 없는 종료 상태 */
+const TERMINAL_STATUSES = ["CANCELED", "PAYMENT_FAILED"] as const;
+
+export interface StatusChangeInput {
+  from: string;
+  to: string;
+  /** paymentMethods.ts 의 value. 무통장이면 입금 확인을 거쳐야 접수를 벗어난다 */
+  paymentMethod: string;
+  /** 무통장 입금 확인 시각. null 이면 아직 돈이 안 들어온 것으로 본다 */
+  depositConfirmedAt: Date | null;
+}
+
+/**
+ * 무통장 주문이 '접수됨'을 벗어나려면 입금 확인을 거쳐야 하는가.
+ *
+ * 판정을 **RECEIVED 를 떠날 때만** 한다. 이미 배송준비 이상으로 가 있는 주문은
+ * 이 기능이 생기기 전에 운영자가 통장을 보고 넘긴 것들이라, 여기서 막으면
+ * 기존 주문의 송장 입력이 통째로 잠긴다.
+ */
+export function needsDepositConfirm(i: {
+  from: string;
+  paymentMethod: string;
+  depositConfirmedAt: Date | null;
+}): boolean {
+  return i.from === "RECEIVED" && i.paymentMethod === "BANK_TRANSFER" && i.depositConfirmedAt === null;
+}
+
+/**
+ * 상태 변경을 거부할 이유. null 이면 통과.
+ *
+ * UI 에서 감추는 것만으로는 부족해서 서버에서 같은 판단을 한다 — 서버 액션은
+ * 폼 값을 그대로 받으므로 화면에 없는 값도 들어올 수 있다.
+ */
+export function statusChangeRejection(i: StatusChangeInput): string | null {
+  if (i.to === "CANCELED") {
+    return "취소는 '주문 취소' 버튼으로만 처리할 수 있습니다. 재고 복원과 환불이 함께 이뤄져야 합니다.";
+  }
+  if (!isManualStatus(i.to)) return "이 화면에서 지정할 수 없는 상태입니다.";
+  if ((TERMINAL_STATUSES as readonly string[]).includes(i.from)) {
+    return `이미 종료된 주문(${orderStatusLabel(i.from)})의 상태는 되돌릴 수 없습니다.`;
+  }
+  if (i.to !== i.from && needsDepositConfirm(i)) {
+    return "무통장 입금이 아직 확인되지 않았습니다. '입금 확인'을 먼저 처리해주세요.";
+  }
+  return null;
+}
 
 /**
  * 회원이 직접 취소할 수 있는 상태. 발송 이후에는 취소가 아니라 반품 절차라

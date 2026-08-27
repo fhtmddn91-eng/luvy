@@ -5,11 +5,26 @@ import { ORDER_STATUS } from "@/lib/orderStatus";
  * 어드민 주문 목록/CSV 가 공유하는 검색 조건.
  * 목록에서 보고 있는 것과 내려받는 것이 항상 같아야 하므로 한 곳에서 만든다.
  */
+/**
+ * 상태 코드가 아니라 "무통장 + 접수됨 + 입금 미확인"을 한 번에 거르는 가상 필터.
+ *
+ * 주문은 접수 즉시 재고를 문다. 안 들어올 돈을 기다리는 주문이 재고를 잠그고
+ * 있으므로, 운영자가 이 묶음만 따로 볼 수 있어야 손으로 취소해 재고를 푼다.
+ */
+export const AWAITING_DEPOSIT = "AWAITING_DEPOSIT";
+
 export interface OrderFilter {
-  status: string; // "ALL" 또는 주문 상태 코드
+  status: string; // "ALL" | 주문 상태 코드 | AWAITING_DEPOSIT
   q: string;
   from: string; // YYYY-MM-DD (비어 있으면 무시)
   to: string;
+}
+
+/** 필터 탭에 쓸 이름. 가상 필터는 ORDER_STATUS 에 없으므로 여기서 붙인다 */
+export function orderFilterLabel(status: string): string {
+  if (status === "ALL") return "전체";
+  if (status === AWAITING_DEPOSIT) return "입금대기";
+  return ORDER_STATUS[status]?.label ?? status;
 }
 
 export function parseOrderFilter(sp: {
@@ -18,7 +33,8 @@ export function parseOrderFilter(sp: {
   from?: string;
   to?: string;
 }): OrderFilter {
-  const status = sp.status && ORDER_STATUS[sp.status] ? sp.status : "ALL";
+  const known = sp.status === AWAITING_DEPOSIT || (sp.status ? Boolean(ORDER_STATUS[sp.status]) : false);
+  const status = known ? sp.status! : "ALL";
   return {
     status,
     q: (sp.q ?? "").trim().slice(0, 80),
@@ -33,7 +49,13 @@ const isDate = (s?: string): s is string =>
 
 export function orderWhere(f: OrderFilter): Prisma.OrderWhereInput {
   const where: Prisma.OrderWhereInput = {};
-  if (f.status !== "ALL") where.status = f.status;
+  if (f.status === AWAITING_DEPOSIT) {
+    where.paymentMethod = "BANK_TRANSFER";
+    where.status = "RECEIVED";
+    where.depositConfirmedAt = null;
+  } else if (f.status !== "ALL") {
+    where.status = f.status;
+  }
 
   if (f.q) {
     where.OR = [

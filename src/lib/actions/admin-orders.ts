@@ -3,8 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
-import { FULFILLMENT_STATUSES } from "@/lib/orderStatus";
+import { statusChangeRejection, orderStatusLabel } from "@/lib/orderStatus";
 import { cancelOrderCore, RefundFailedError } from "@/lib/orderCancel";
+import { parseDepositInput, depositGapLabel } from "@/lib/deposit";
 import { audit, shortId } from "@/lib/audit";
 import {
   courierName,
@@ -32,23 +33,132 @@ function revalidateOrder(id: string): void {
   revalidatePath(`/orders/${id}`);
 }
 
-export async function setOrderStatus(id: string, formData: FormData): Promise<void> {
+export interface StatusFormState {
+  error?: string;
+  ok?: boolean;
+}
+
+/**
+ * 배송 상태 변경.
+ *
+ * 취소는 여기로 오지 않는다 — statusChangeRejection 이 CANCELED 를 거부한다.
+ * 화면 드롭다운에서 뺀 것만으로는 부족하다: 서버 액션은 폼 값을 그대로 받으므로
+ * 목록에 없는 값도 들어올 수 있고, 그 길로 들어오면 재고 복원·환불이 통째로 빠진다.
+ */
+export async function setOrderStatus(
+  id: string,
+  _prev: StatusFormState,
+  formData: FormData,
+): Promise<StatusFormState> {
   await requireAdmin();
   const status = String(formData.get("status") ?? "").trim();
-  // 허용된 배송 상태만 반영 (임의 문자열 주입 방지)
-  if (!(FULFILLMENT_STATUSES as readonly string[]).includes(status)) return;
-  const before = await db.order.findUnique({ where: { id }, select: { status: true } });
+
+  const before = await db.order.findUnique({
+    where: { id },
+    select: { status: true, paymentMethod: true, depositConfirmedAt: true },
+  });
+  if (!before) return { error: "주문을 찾을 수 없습니다." };
+
+  const why = statusChangeRejection({
+    from: before.status,
+    to: status,
+    paymentMethod: before.paymentMethod,
+    depositConfirmedAt: before.depositConfirmedAt,
+  });
+  if (why) return { error: why };
+
+  if (status === before.status) return { ok: true };
+
   await db.order.update({ where: { id }, data: { status } });
 
   await audit({
     action: "ORDER_STATUS",
     target: "order",
     targetId: id,
-    summary: `주문 ${shortId(id)} ${before?.status} → ${status}`,
-    meta: { from: before?.status, to: status },
+    summary: `주문 ${shortId(id)} ${orderStatusLabel(before.status)} → ${orderStatusLabel(status)}`,
+    meta: { from: before.status, to: status },
   });
 
   revalidateOrder(id);
+  return { ok: true };
+}
+
+export interface DepositFormState {
+  error?: string;
+  ok?: boolean;
+  values?: { depositorName: string; depositAmount: string };
+}
+
+/**
+ * 무통장 입금 확인 → 배송준비 전환.
+ *
+ * 상태만 바꾸는 대신 이 액션을 거치게 하는 이유: "돈이 들어왔다"는 판단은
+ * 운영자가 통장을 보고 내리는 것인데, 예전 흐름은 그 근거를 아무 데도 남기지
+ * 않았다. 누가·언제·얼마를·누구 이름으로 확인했는지가 없으면 나중에 입금 분쟁이
+ * 났을 때 시스템에서 확인할 방법이 없다.
+ *
+ * 부분·초과 입금은 **막지 않고 기록한다** — 배송비를 빼고 넣거나 여러 주문을
+ * 한 번에 보내는 일이 잦아서, 여기서 차단하면 운영자가 시스템을 우회한다.
+ */
+export async function confirmDeposit(
+  id: string,
+  _prev: DepositFormState,
+  formData: FormData,
+): Promise<DepositFormState> {
+  const admin = await requireAdmin();
+  const raw = {
+    depositorName: String(formData.get("depositorName") ?? ""),
+    depositAmount: String(formData.get("depositAmount") ?? ""),
+  };
+  const values = { depositorName: raw.depositorName, depositAmount: raw.depositAmount };
+
+  const order = await db.order.findUnique({
+    where: { id },
+    select: { status: true, paymentMethod: true, depositConfirmedAt: true, total: true },
+  });
+  if (!order) return { error: "주문을 찾을 수 없습니다.", values };
+  if (order.paymentMethod !== "BANK_TRANSFER") {
+    return { error: "무통장입금 주문이 아닙니다.", values };
+  }
+  if (order.depositConfirmedAt) return { error: "이미 입금 확인된 주문입니다.", values };
+  if (order.status !== "RECEIVED") {
+    return { error: `접수됨 상태에서만 입금을 확인할 수 있습니다. (현재 ${orderStatusLabel(order.status)})`, values };
+  }
+
+  const parsed = parseDepositInput(raw);
+  if (!parsed.ok) return { error: parsed.error, values };
+
+  // 조건부 claim — 운영자가 두 번 눌러도 확인 기록이 덮이거나 두 번 남지 않는다
+  const claimed = await db.order.updateMany({
+    where: { id, status: "RECEIVED", depositConfirmedAt: null },
+    data: {
+      status: "PREPARING",
+      depositConfirmedAt: new Date(),
+      depositConfirmedBy: admin.email,
+      depositorName: parsed.value.depositorName,
+      depositAmount: parsed.value.depositAmount,
+    },
+  });
+  if (claimed.count !== 1) return { error: "이미 처리된 주문입니다.", values };
+
+  const gap = depositGapLabel(parsed.value.depositAmount, order.total);
+  await audit({
+    action: "ORDER_DEPOSIT_CONFIRM",
+    target: "order",
+    targetId: id,
+    summary:
+      `주문 ${shortId(id)} 입금 확인 — ${parsed.value.depositorName} ` +
+      `${parsed.value.depositAmount.toLocaleString("ko-KR")}원${gap ? ` (${gap})` : ""} → 배송준비`,
+    meta: {
+      depositorName: parsed.value.depositorName,
+      depositAmount: parsed.value.depositAmount,
+      total: order.total,
+      gap: gap || null,
+    },
+  });
+
+  revalidateOrder(id);
+  return { ok: true };
 }
 
 /**

@@ -257,10 +257,24 @@ model Order {
   /** 취소 주체. MEMBER | ADMIN (취소 전에는 빈 문자열) */
   canceledBy  String      @default("")
   cancelReason String     @default("")
+  /**
+   * 무통장 입금 확인. null 이면 접수됐어도 아직 돈이 안 들어온 것으로 본다 —
+   * 예전엔 둘 다 RECEIVED 하나라 미입금과 입금완료를 구분할 방법이 없었다.
+   */
+  depositConfirmedAt DateTime?
+  /** 입금 확인을 처리한 관리자 아이디 — 누가 보고 발송을 열었는지 남긴다 */
+  depositConfirmedBy String  @default("")
+  /** 통장에 찍힌 입금자명. 사업자 주문은 주문자와 다른 경우가 흔해 대사에 꼭 필요하다 */
+  depositorName      String  @default("")
+  /** 실제 입금액. 주문 총액과 다르면(부분·초과 입금) 이 숫자가 대사 근거가 된다 */
+  depositAmount      Int     @default(0)
   createdAt   DateTime    @default(now())
   user        User        @relation(fields: [userId], references: [id])
   items       OrderItem[]
   payment     Payment?
+
+  /** 어드민 '입금대기' 필터 — 무통장 + 접수됨 + 미확인 을 한 번에 훑는다 */
+  @@index([paymentMethod, status, depositConfirmedAt])
 }
 
 model Payment {

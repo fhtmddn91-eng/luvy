@@ -14,6 +14,7 @@ export const AUDIT_ACTIONS = {
 
   // 주문
   ORDER_STATUS: "주문 상태 변경",
+  ORDER_DEPOSIT_CONFIRM: "무통장 입금 확인",
   ORDER_SHIPPING: "송장 등록/수정",
   ORDER_SHIPPING_CLEAR: "송장 삭제",
   ORDER_CANCEL_ADMIN: "주문 취소 (관리자)",
@@ -63,7 +64,7 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
     key: "order",
     label: "주문",
     actions: [
-      "ORDER_STATUS", "ORDER_SHIPPING", "ORDER_SHIPPING_CLEAR",
+      "ORDER_STATUS", "ORDER_DEPOSIT_CONFIRM", "ORDER_SHIPPING", "ORDER_SHIPPING_CLEAR",
       "ORDER_CANCEL_ADMIN", "ORDER_CANCEL_MEMBER", "ORDER_REFUND_FAILED",
     ],
   },
@@ -92,6 +93,8 @@ const CRITICAL: AuditAction[] = [
   "ADMIN_PASSWORD", "PRODUCT_DELETE",
   // 입금 계좌 바꿔치기는 곧바로 돈이 새는 사고다 — 눈에 띄게
   "SETTING_BANK",
+  // 입금 확인은 "돈을 받았다"고 선언하고 발송을 여는 동작이다 — 누가 눌렀는지 남아야 한다
+  "ORDER_DEPOSIT_CONFIRM",
 ];
 
 export const isCritical = (action: string): boolean =>
