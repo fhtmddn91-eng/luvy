@@ -6,7 +6,7 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { translateProductImages, promoteIfReady } from "@/lib/import/translateAssets";
-import { productPublishGate, gateSummary, isPlaceholderBrand, PLACEHOLDER_BRAND } from "@/lib/productPublishGate";
+import { productPublishGate, productSaveStatusData, gateSummary, isPlaceholderBrand, PLACEHOLDER_BRAND } from "@/lib/productPublishGate";
 import { sourceForUrl } from "@/lib/import/sources";
 import { saveImageUpload, deleteImageUpload, deleteUploadIfUnused } from "@/lib/storage";
 import { normalizeSku, skuError } from "@/lib/sku";
@@ -259,8 +259,10 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
       data: {
         ...fields,
         // ACTIVE 는 게이트를 거쳐야 한다 — 여기서는 일단 현 상태를 건드리지 않고
-        // 아래 requestPublish 가 검증 결과에 따라 ACTIVE/보류를 정한다
-        ...(fields.status === "ACTIVE" ? { status: undefined } : {}),
+        // 아래 requestPublish 가 검증 결과에 따라 ACTIVE/보류를 정한다.
+        // 반대로 숨김 저장은 대기 중인 판매 요청까지 취소한다 — 안 그러면 번역
+        // 완료 시점의 promoteIfReady 가 운영자가 숨긴 상품을 되살린다.
+        ...productSaveStatusData(fields.status),
         ...(image.url ? { image: image.url } : {}),
         priceTiers: { create: tiers },
         categories: { create: cats },

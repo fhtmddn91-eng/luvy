@@ -16,9 +16,9 @@ import {
   parseOcrBoxes,
   type OcrBox,
 } from "@/lib/imageTranslate";
-import { runAssetTranslation, promoteIfReady } from "@/lib/import/translateAssets";
+import { runAssetTranslation, promoteIfReady, demoteIfUnsafe } from "@/lib/import/translateAssets";
 import { sha256Of, saveTranslationCache, markCacheStale } from "@/lib/translateCache";
-import { TRANSLATE_STATUS } from "@/lib/productPublishGate";
+import { TRANSLATE_STATUS, revertedAssetTranslation } from "@/lib/productPublishGate";
 import { assetKindFor, nextThumbnail, type AssetTarget } from "@/lib/productAssets";
 import { audit } from "@/lib/audit";
 
@@ -136,6 +136,9 @@ export async function addProductAssets(
     summary: `${target === "MAIN" ? "대표" : "상세"} 이미지 ${saved}장 추가`,
   });
   await syncProductThumbnail(productId);
+  // 판매 중 상품에 미번역 원본이 붙었으면 즉시 내린다 — 안 그러면 번역도 검수도
+  // 안 거친 중국어 이미지가 그 순간부터 손님 화면에 뜬다
+  await demoteIfUnsafe(productId);
   revalidateProduct(productId);
   return { ok: saved };
 }
@@ -186,6 +189,9 @@ export async function deleteProductAsset(assetId: string): Promise<void> {
   });
   // 지운 게 썸네일이었다면 남은 이미지로 다시 맞춘다 (깨진 썸네일 방지)
   await syncProductThumbnail(asset.productId, asset.url);
+  // 판매를 막고 있던 이미지를 지운 것일 수 있다 — 남은 장이 전부 통과면 되올린다.
+  // (이 호출이 없어서, 실패한 1장을 지워도 상품이 "판매 보류"에 계속 남았다)
+  await promoteIfReady(asset.productId);
   revalidateProduct(asset.productId);
 }
 
@@ -218,6 +224,9 @@ export async function translateProductAsset(assetId: string): Promise<TranslateS
       meta: { assetId, result, ...(message ? { message } : {}) },
     });
     if (result === "verified") await syncProductThumbnail(asset.productId, asset.url);
+    // 판매 중 상품을 수동 번역하면 결과가 검수 대기일 수 있다 — 그 상태로
+    // 팔리고 있으면 안 되므로 내리고, 통과면 promoteIfReady 가 올린다
+    await demoteIfUnsafe(asset.productId);
     await promoteIfReady(asset.productId);
     revalidateProduct(asset.productId);
     if (result === "verified") return { ok: true };
@@ -304,6 +313,8 @@ export async function rejectAssetCandidate(assetId: string): Promise<TranslateSt
     summary: `번역 후보 거부 (${asset.kind}) — 원본 유지`,
     meta: { assetId },
   });
+  // FAILED 는 노출 불가다 — 판매 중이었으면 내린다
+  await demoteIfUnsafe(asset.productId);
   revalidateProduct(asset.productId);
   return { ok: true };
 }
@@ -417,6 +428,137 @@ export async function updateAssetTranslation(
   }
 }
 
+/**
+ * 운영자가 고친 이미지를 직접 올린다 — 모델 실패와 무관한 복구 바닥.
+ *
+ * 재생성은 실패할 수 있고 비용도 든다. 어떤 실패 유형이든 확실히 복구되는
+ * 수단이 하나는 있어야 운영자가 막히지 않는다(이미지 API 호출 0회).
+ *
+ * 올린 파일은 **후보로만** 들어간다 — url·originalUrl 은 손대지 않는다.
+ * 승인해야 손님용으로 승격되고, 그때 approveAssetCandidate 가 원본 보존까지 맡는다.
+ */
+export async function uploadAssetCandidate(
+  assetId: string,
+  _prev: TranslateState,
+  formData: FormData,
+): Promise<TranslateState> {
+  await requireAdmin();
+  const asset = await db.productAsset.findUnique({ where: { id: assetId } });
+  if (!asset) return { error: "이미지를 찾을 수 없습니다." };
+
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) return { error: "올릴 이미지를 선택해주세요." };
+  // GIF 는 이번 범위 밖 — 프레임 합성 규칙이 따로 있어 정지 이미지와 섞으면 안 된다
+  if (file.type === "image/gif") return { error: "GIF 는 직접 업로드를 지원하지 않습니다." };
+
+  // 크기·MIME·매직바이트 검증은 saveImageUpload 안에서 한다 (file.type 은 위조 가능)
+  const saved = await saveImageUpload(file);
+  if (!saved.ok) return { error: saved.error };
+
+  // 이전 후보는 정리 — 후보는 항상 한 장만 남긴다
+  if (asset.candidateUrl) await deleteUploadIfUnused(asset.candidateUrl, { exceptAssetId: asset.id });
+
+  await db.productAsset.update({
+    where: { id: asset.id },
+    data: {
+      // url·originalUrl 불변 — 승인 전까지 손님에게 나가는 그림은 그대로다
+      translateStatus: TRANSLATE_STATUS.NEEDS_REVIEW,
+      reviewReasons: JSON.stringify([
+        { code: "MANUAL_EDIT", detail: "운영자 직접 업로드 — 육안 확인 후 승인" },
+      ]),
+      candidateUrl: saved.url,
+      // 우리가 만든 그림이 아니라 문구 좌표를 알 수 없다. 승인 시 ocrData 는 비워진다
+      candidateOcr: null,
+    },
+  });
+
+  await audit({
+    action: "ASSET_TRANSLATE",
+    target: "product",
+    targetId: asset.productId,
+    summary: `수정본 직접 업로드 → 후보 생성 (${asset.kind})`,
+    meta: { assetId, bytes: file.size, mime: file.type },
+  });
+  // 검수 대기가 되었으니 판매 중이었으면 내린다
+  await demoteIfUnsafe(asset.productId);
+  revalidateProduct(asset.productId);
+  return { ok: true };
+}
+
+/**
+ * 운영자 개선 지시를 얹어 AI 로 다시 만든다 (이미지 API 1회 ≈ $0.067).
+ *
+ * "재렌더 승인"과 다른 점은 지시를 실어 보낸다는 것뿐이다 — 같은 조건으로
+ * 다시 돌리면 대개 같은 결과가 나오므로, 무엇이 잘못됐는지 알려줘야 한다.
+ * 결과는 후보로만 남는다(자동 게시 금지). 원본에서 다시 그리므로 원본은 불변.
+ */
+export async function regenerateAssetWithHint(
+  assetId: string,
+  _prev: TranslateState,
+  formData: FormData,
+): Promise<TranslateState> {
+  await requireAdmin();
+  if (!process.env.GEMINI_API_KEY) return { error: "GEMINI_API_KEY 미설정 — 번역을 쓸 수 없습니다." };
+
+  const asset = await db.productAsset.findUnique({ where: { id: assetId } });
+  if (!asset) return { error: "이미지를 찾을 수 없습니다." };
+
+  const hint = String(formData.get("hint") ?? "").trim().slice(0, 300);
+  if (!hint) return { error: "무엇을 고쳐야 하는지 지시를 적어주세요." };
+
+  // 문구 좌표가 있어야 재생성 프롬프트를 만든다. 검수 대기 자산은 candidateOcr 에,
+  // 검증된 자산은 ocrData 에 들어 있다.
+  const raw = asset.ocrData ?? asset.candidateOcr;
+  if (!raw) {
+    return { error: "번역 문구 기록이 없어 개선 재생성을 할 수 없습니다. '재렌더 승인'을 먼저 쓰세요." };
+  }
+  // 원본에서 다시 그린다 — 번역본 위에 덧그리면 오차가 쌓인다
+  const sourceUrl = asset.originalUrl ?? asset.url;
+  const file = await readPublicUpload(path.basename(sourceUrl));
+  if (!file) return { error: "원본 파일을 읽을 수 없습니다." };
+
+  let boxes: OcrBox[];
+  try {
+    boxes = parseOcrBoxes(JSON.parse(raw));
+  } catch {
+    return { error: "번역 문구 기록을 읽을 수 없습니다." };
+  }
+  if (boxes.length === 0) return { error: "다시 만들 문구가 없습니다." };
+
+  try {
+    const rendered = await renderTranslatedImage(file.data, file.contentType, boxes, { hint });
+    const saved = await saveImageBuffer(rendered.data, rendered.mime, 15 * 1024 * 1024);
+    if (!saved.ok) return { error: `후보 저장 실패: ${saved.error}` };
+    if (asset.candidateUrl) await deleteUploadIfUnused(asset.candidateUrl, { exceptAssetId: asset.id });
+
+    await db.productAsset.update({
+      where: { id: asset.id },
+      data: {
+        // url·originalUrl 불변 — 승인 전까지 노출되지 않는다
+        translateStatus: TRANSLATE_STATUS.NEEDS_REVIEW,
+        reviewReasons: JSON.stringify([
+          { code: "MANUAL_EDIT", detail: `개선 지시 재생성: ${hint}` },
+        ]),
+        candidateUrl: saved.url,
+        candidateOcr: JSON.stringify(boxes),
+      },
+    });
+
+    await audit({
+      action: "ASSET_TRANSLATE",
+      target: "product",
+      targetId: asset.productId,
+      summary: `개선 지시 재생성 → 후보 생성 (${asset.kind})`,
+      meta: { assetId, hint, cost: "image-http-1 (≈$0.067 추정)" },
+    });
+    await demoteIfUnsafe(asset.productId);
+    revalidateProduct(asset.productId);
+    return { ok: true };
+  } catch (e) {
+    return { error: `개선 재생성 실패: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
 /** 번역을 버리고 원본 이미지로 되돌린다 */
 export async function revertAssetTranslation(assetId: string): Promise<void> {
   await requireAdmin();
@@ -432,12 +574,12 @@ export async function revertAssetTranslation(assetId: string): Promise<void> {
   await db.productAsset.update({
     where: { id: assetId },
     data: {
-      url: asset.originalUrl,
-      originalUrl: null,
+      // 운영자가 의도적으로 원본을 택한 것 — legacy 취급(노출 허용)으로 남긴다.
+      // originalUrl 까지 지우면 게이트가 "미번역"으로 보고 이 상품은 판매 전환이
+      // 영영 안 된다 (revertedAssetTranslation 주석의 실사례)
+      ...revertedAssetTranslation(asset.originalUrl),
       ocrData: null,
       bytes: original?.data.byteLength ?? asset.bytes,
-      // 운영자가 의도적으로 원본을 택한 것 — 상태 기록을 비워 legacy 취급(노출 허용)
-      translateStatus: null,
       reviewReasons: null,
       candidateUrl: null,
       candidateOcr: null,
@@ -452,6 +594,9 @@ export async function revertAssetTranslation(assetId: string): Promise<void> {
     summary: `이미지 번역 원본 복원 (${asset.kind})`,
     meta: { assetId },
   });
+  // 복원 자체는 노출 허용이지만, 같은 상품의 다른 이미지가 검수 대기일 수 있다
+  await demoteIfUnsafe(asset.productId);
+  await promoteIfReady(asset.productId);
   revalidateProduct(asset.productId);
 }
 

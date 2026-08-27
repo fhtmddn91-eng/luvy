@@ -209,6 +209,60 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     expect(imageHttp).toBe(0);
   });
 
+  /**
+   * "외국어를 못 찾은 것"과 "찾았는데 못 번역한 것"은 절대 같은 상태가 아니다.
+   *
+   * 실사례(2026-08-27 감사): 번역 모델이 원문을 그대로 돌려주거나(에코) 빈
+   * 문자열을 주면 그 박스가 조용히 버려지고, 전 박스가 버려지면 NO_FOREIGN_TEXT
+   * 로 판정됐다. 이건 **노출 허용** 상태라 중국어 원본이 "검증 완료"로 손님에게
+   * 나가고, sha256 캐시에까지 저장돼 같은 바이트의 모든 자산이 같은 오판을
+   * 물려받았다. 자동 통과가 아니라 검수로 가야 한다.
+   */
+  it("전 문구가 에코(원문 그대로)면 NO_FOREIGN_TEXT 가 아니라 NEEDS_REVIEW", async () => {
+    mock = happyMock();
+    mock.translate = [["强震深处"]]; // 번역 모델이 원문을 되돌려줌
+    const r = await translateImageAuto(ORIG_PNG, "image/png");
+    expect(r.status).toBe("NEEDS_REVIEW");
+    expect(imageHttp).toBe(0); // 싼 단계에서 막는다 — 이미지 호출 낭비 금지
+    if (r.status === "NEEDS_REVIEW") {
+      expect(r.reasons.map((x) => x.code)).toContain("UNTRANSLATED");
+      expect(JSON.stringify(r.reasons)).toContain("强震深处");
+    }
+  });
+
+  it("전 문구의 번역이 비어 있으면 NEEDS_REVIEW", async () => {
+    mock = happyMock();
+    mock.translate = [[""]];
+    const r = await translateImageAuto(ORIG_PNG, "image/png");
+    expect(r.status).toBe("NEEDS_REVIEW");
+    expect(imageHttp).toBe(0);
+  });
+
+  it("일부만 에코여도 렌더 전에 멈춘다 — 남은 원문이 그대로 실려 나가지 않는다", async () => {
+    mock = happyMock();
+    mock.ocr[0] = [ocrItem(BOX, "强震深处"), ocrItem([300, 100, 400, 900], "防水设计")];
+    mock.ocr[1] = [ocrItem(BOX_BAND0, "强震深处")];
+    mock.translate = [["강렬한 진동", "防水设计"]]; // 둘째만 에코
+    const r = await translateImageAuto(ORIG_PNG, "image/png");
+    expect(r.status).toBe("NEEDS_REVIEW");
+    expect(imageHttp).toBe(0);
+    if (r.status === "NEEDS_REVIEW") {
+      expect(JSON.stringify(r.reasons)).toContain("防水设计");
+    }
+  });
+
+  it("원문이 외국어가 아니면 번역문이 같아도 정상 NO_FOREIGN_TEXT (과잉 차단 금지)", async () => {
+    // "USB" 처럼 바꿀 것이 없는 문구는 번역문이 원문과 같은 게 정상이다.
+    // 에코 차단이 여기까지 번지면 멀쩡한 이미지가 전부 검수로 쏟아진다.
+    mock = happyMock();
+    mock.ocr[0] = [ocrItem(BOX, "USB")];
+    mock.ocr[1] = [ocrItem(BOX_BAND0, "USB")];
+    mock.translate = [["USB"]];
+    const r = await translateImageAuto(ORIG_PNG, "image/png");
+    expect(r.status).toBe("NO_FOREIGN_TEXT");
+    expect(imageHttp).toBe(0);
+  });
+
   it("교정 후에도 2차 검수 실격: 이미지 HTTP 0회 + NEEDS_REVIEW, 사유에 원문·1차·교정·양쪽 지적", async () => {
     mock = happyMock();
     mock.ocr[0] = [ocrItem(BOX, "奏响快乐和弦")];

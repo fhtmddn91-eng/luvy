@@ -20,6 +20,7 @@ import {
   hasManualOverride,
   mustOverlay,
   eraseTargets,
+  pickTranslated,
   regionIsStatic,
   inventedInBox,
   textBands,
@@ -47,6 +48,7 @@ import {
   edgeCrossing,
   dropRiskyWm,
   clipRectAgainst,
+  regenPromptWithHint,
   unchangedBox,
   gateLeftover,
   type OcrBox,
@@ -1357,13 +1359,26 @@ describe("gateLeftover — 최종 관문 판정", () => {
     expect(gateLeftover([line([146, 80, 203, 569], "舒适体验升级")], [])).toBe(1);
   });
 
-  it("추출기가 워터마크로 본 줄은 면책 — 워터마크는 남는 게 정상일 수 있다", () => {
-    expect(gateLeftover([line([100, 50, 150, 900], "东莞市带劲科技有限公司", true)], [])).toBe(0);
+  /**
+   * 실사례(2026-08-27 감사): "판독이 워터마크로 본 줄은 무조건 면책"이 지우라고
+   * **시킨** 워터마크의 지우기 실패까지 통째로 덮었다. dropRiskyWm 이 "지움을
+   * 포기한" 워터마크를 배열에서 아예 빼기 때문에, 남아 있는 wm 박스는 전부
+   * 지우기 대상이다 — 그게 완성본에 그대로 읽히면 실패지 정상이 아니다.
+   * 반만 지워진 워터마크(잔획)가 VERIFIED 로 나가던 유일한 경로였다.
+   */
+  it("지우라고 시킨 워터마크가 완성본에 남아 있으면 잔류로 센다", () => {
+    expect(gateLeftover([line([100, 50, 150, 900], "东莞市带劲科技有限公司", true)], [])).toBe(1);
   });
 
-  it("지움을 포기한 워터마크 박스 자리와 겹치는 줄도 면책 (실측 #5·#6: 사진 겹침 유지)", () => {
-    const keptWm = { ...line([100, 50, 150, 900], "东莞市带劲科技有限公司"), wm: true, mode: "erase" as const };
-    expect(gateLeftover([line([105, 60, 145, 880], "东莞市带劲科技有限公司")], [keptWm])).toBe(0);
+  it("지움을 포기한 워터마크 자리와 겹치는 줄만 면책 (실측 #5·#6: 사진 겹침 유지)", () => {
+    // 호출부가 "포기한 것"만 넘긴다 — 시킨 것과 포기한 것을 여기서 구분할 수 없다
+    const gaveUp = { ...line([100, 50, 150, 900], "东莞市带劲科技有限公司"), wm: true };
+    expect(gateLeftover([line([105, 60, 145, 880], "东莞市带劲科技有限公司")], [gaveUp])).toBe(0);
+  });
+
+  it("포기한 워터마크 자리와 겹치면 판독이 wm 으로 봤든 아니든 면책", () => {
+    const gaveUp = { ...line([100, 50, 150, 900], "水印"), wm: true };
+    expect(gateLeftover([line([105, 60, 145, 880], "水印", true)], [gaveUp])).toBe(0);
   });
 
   it("외국어가 아닌 줄(한글·영문)은 세지 않는다", () => {
@@ -1382,3 +1397,150 @@ describe("gateLeftover — 최종 관문 판정", () => {
 });
 
 
+
+/**
+ * pickTranslated — "번역 실패"와 "바꿀 게 없어서 그대로"를 가른다.
+ *
+ * 이 구분이 없어서 실사례(2026-08-27 감사)가 났다: 에코·빈 번역이 조용히
+ * 버려지고 전량 버려지면 NO_FOREIGN_TEXT(노출 허용)가 됐다. 반대로 과잉
+ * 차단도 위험하다 — USB·단위·브랜드처럼 원래 안 바뀌는 문구까지 실패로
+ * 치면 멀쩡한 이미지가 전부 검수 대기로 쏟아져 운영이 마비된다.
+ */
+describe("pickTranslated — 번역 실패만 잡고 정상 무변경은 통과시킨다", () => {
+  const b = (zh: string) => ({
+    box: [100, 100, 200, 900] as [number, number, number, number],
+    zh,
+    ko: "",
+    bg: "#fff",
+    fg: "#000",
+  });
+
+  it("정상 번역은 채택되고 실패 목록은 비어 있다", () => {
+    const r = pickTranslated([b("强震深处")], ["강렬한 진동"]);
+    expect(r.boxes).toHaveLength(1);
+    expect(r.boxes[0].ko).toBe("강렬한 진동");
+    expect(r.untranslated).toEqual([]);
+  });
+
+  it("중국어 에코는 번역 실패로 잡는다", () => {
+    const r = pickTranslated([b("强震深处")], ["强震深处"]);
+    expect(r.boxes).toHaveLength(0);
+    expect(r.untranslated).toEqual(["强震深处"]);
+  });
+
+  it("가나 전용 일본어 에코도 잡는다 — 한자 보정이 안 돌아 여기까지 온다", () => {
+    const r = pickTranslated([b("ぬるぬる")], ["ぬるぬる"]);
+    expect(r.untranslated).toEqual(["ぬるぬる"]);
+  });
+
+  it("외국어인데 번역이 비면 실패로 잡는다", () => {
+    expect(pickTranslated([b("防水设计")], [""]).untranslated).toEqual(["防水设计"]);
+    expect(pickTranslated([b("防水设计")], [undefined as unknown as string]).untranslated).toEqual(["防水设计"]);
+  });
+
+  /* ── 대조군: 원래 안 바뀌는 문구는 실패가 아니다 ── */
+  it.each([
+    ["영문 규격", "USB"],
+    ["브랜드명", "LUVY"],
+    ["한국어(이미 번역됨)", "루비"],
+    ["용량 단위", "500mAh"],
+    ["치수", "10cm"],
+    ["모델코드", "IPX7"],
+    ["숫자", "2024"],
+    ["기호", "★"],
+  ])("%s(%s)는 번역문이 같아도 실패로 치지 않는다", (_label, text) => {
+    const r = pickTranslated([b(text)], [text]);
+    expect(r.boxes).toHaveLength(0); // 바꿀 게 없어 렌더 대상은 아니고
+    expect(r.untranslated).toEqual([]); // 그렇다고 검수로 보내지도 않는다
+  });
+
+  it("한자가 섞인 문구는 에코면 실패로 잡는다 — USB充电 같은 혼합", () => {
+    expect(pickTranslated([b("USB充电")], ["USB充电"]).untranslated).toEqual(["USB充电"]);
+  });
+
+  it("여러 문구 중 실패한 것만 골라낸다", () => {
+    const r = pickTranslated(
+      [b("强震深处"), b("USB"), b("防水设计")],
+      ["강렬한 진동", "USB", "防水设计"],
+    );
+    expect(r.boxes.map((x) => x.ko)).toEqual(["강렬한 진동"]);
+    expect(r.untranslated).toEqual(["防水设计"]); // USB 는 안 섞인다
+  });
+});
+
+
+/**
+ * 패치 알파의 feather 는 **잘라낸 뒤** 다시 잡아야 한다.
+ *
+ * 실사례(2026-08-27 감사): clipRectAgainst 가 이웃을 피해 사각형을 줄이면서
+ * feather 는 그대로 뒀다. 잘린 두께가 2×feather 보다 얇으면 alpha 계산
+ * `min(1, edge/feather)` 이 어느 픽셀에서도 1 에 도달하지 못해 **패치 전체가
+ * 반투명**으로 얹힌다 — 원문·워터마크가 유령처럼 비쳐 나오는, 무결 원칙이
+ * 금지하는 "덧그린 흔적"의 생성기다.
+ */
+describe("clipRectAgainst — 잘라낸 뒤 feather 재계산", () => {
+  const core = { x0: 100, y0: 100, x1: 200, y1: 108 };
+
+  it("잘려서 얇아지면 feather 를 두께 절반 이하로 줄인다", () => {
+    const r = { x0: 90, y0: 90, x1: 210, y1: 200, feather: 10 };
+    // 이웃이 아래에서 올라와 높이가 90~120(30px)으로 잘린다 → feather 10 이면
+    // edge 최댓값이 15 라 아슬아슬하지만, 더 얇아지면 255 에 못 닿는다
+    const clipped = clipRectAgainst(r, core, [{ x0: 90, y0: 120, x1: 210, y1: 300 }]);
+    const thickness = Math.min(clipped.x1 - clipped.x0, clipped.y1 - clipped.y0);
+    expect(clipped.feather).toBeLessThanOrEqual(thickness / 2);
+  });
+
+  it("아주 얇게 잘려도 alpha 가 255 에 도달할 수 있어야 한다", () => {
+    const thinCore = { x0: 100, y0: 100, x1: 200, y1: 104 };
+    const r = { x0: 90, y0: 98, x1: 210, y1: 200, feather: 10 };
+    const clipped = clipRectAgainst(r, thinCore, [{ x0: 90, y0: 106, x1: 210, y1: 300 }]);
+    const h = clipped.y1 - clipped.y0;
+    const maxEdge = Math.floor(Math.min(h, clipped.x1 - clipped.x0) / 2);
+    // buildPatchOverlay: a = min(1, edge/feather)*255 — edge 최댓값이 feather 이상이어야 불투명해진다
+    expect(maxEdge).toBeGreaterThanOrEqual(clipped.feather);
+  });
+
+  it("안 잘렸으면 feather 를 건드리지 않는다", () => {
+    const r = { x0: 90, y0: 90, x1: 210, y1: 200, feather: 6 };
+    expect(clipRectAgainst(r, core, []).feather).toBe(6);
+  });
+
+  it("feather 는 음수가 되지 않는다", () => {
+    const r = { x0: 100, y0: 100, x1: 100, y1: 100, feather: 8 };
+    expect(clipRectAgainst(r, core, []).feather).toBeGreaterThanOrEqual(0);
+  });
+});
+
+/**
+ * 운영자 개선 지시 — 재생성 프롬프트에 실제로 실려야 한다.
+ * 지시를 받아 놓고 프롬프트에 안 넣으면 "재생성했는데 똑같다"가 된다.
+ */
+describe("regenPromptWithHint — 개선 지시가 프롬프트에 실린다", () => {
+  const box = {
+    box: [100, 100, 200, 900] as [number, number, number, number],
+    zh: "强震深处",
+    ko: "강렬한 진동",
+    bg: "#ffffff",
+    fg: "#000000",
+  };
+
+  it("지시가 없으면 기존 프롬프트와 같다", () => {
+    expect(regenPromptWithHint([box])).toBe(regenPromptWithHint([box], ""));
+  });
+
+  it("지시를 주면 프롬프트에 그대로 들어간다", () => {
+    const p = regenPromptWithHint([box], "글자가 잘렸으니 더 작게");
+    expect(p).toContain("글자가 잘렸으니 더 작게");
+  });
+
+  it("지시가 있어도 절대 규칙은 유지된다", () => {
+    const p = regenPromptWithHint([box], "배경을 바꿔주세요");
+    expect(p).toContain("제품 사진");
+    expect(p).toContain("강렬한 진동");
+  });
+
+  it("지나치게 긴 지시는 잘라 넣는다 (프롬프트 오염 방지)", () => {
+    const p = regenPromptWithHint([box], "가".repeat(1000));
+    expect(p.length).toBeLessThan(regenPromptWithHint([box]).length + 500);
+  });
+});

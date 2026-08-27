@@ -4,7 +4,7 @@ import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
 import { getAllCategories } from "@/lib/categories";
 import { setProductStatus, deleteProduct, setProductBrand } from "@/lib/actions/admin-products";
-import { isPlaceholderBrand } from "@/lib/productPublishGate";
+import { isPlaceholderBrand, BLOCKING_TRANSLATE_STATUSES } from "@/lib/productPublishGate";
 import { ProductThumb } from "@/components/product/ProductThumb";
 import { stockLabel, stockState } from "@/lib/stock";
 import {
@@ -58,7 +58,8 @@ export default async function AdminProductsPage({
  const blockedRows = await db.productAsset.groupBy({
  by: ["productId"],
  where: {
- translateStatus: { in: ["TRANSLATING", "NEEDS_REVIEW", "RETRYABLE", "VERIFICATION_FAILED", "FAILED"] },
+ // 게이트와 같은 목록을 쓴다 — 따로 적어 두면 새 상태가 생겼을 때 어긋난다
+ translateStatus: { in: BLOCKING_TRANSLATE_STATUSES },
  },
  _count: { _all: true },
  });

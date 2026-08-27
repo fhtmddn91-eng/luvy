@@ -15,6 +15,13 @@ export const TRANSLATE_STATUS = {
   NO_FOREIGN_TEXT: "NO_FOREIGN_TEXT",
   /** 검사는 됐는데 합격을 못 줌(잔류·새 문구·밀집 등) — 후보 보존, 노출 차단 */
   NEEDS_REVIEW: "NEEDS_REVIEW",
+  /**
+   * 운영자가 번역본을 버리고 원본을 택함 — **노출 차단**.
+   * 복원은 "이 번역본이 나쁘다"는 결정이지 "외국어 원본을 손님에게 내보내도
+   * 좋다"는 승인이 아니다. 자동 통과시키면 '원본 유지' 버튼 하나로 외국어 원본
+   * 노출 금지가 통째로 우회된다 — 판매하려면 명시적 승인을 따로 받는다.
+   */
+  ORIGINAL_KEPT: "ORIGINAL_KEPT",
   /** 일시 오류(타임아웃·429·5xx) — 운영자 재시도 승인 대기, 노출 차단 */
   RETRYABLE: "RETRYABLE",
   /** 검사를 하지 못함(판독·관문 호출 실패) — 노출 차단 */
@@ -35,6 +42,7 @@ export type ReviewCode =
   | "OCR_DISAGREEMENT" // 교차 OCR 이 합의 못 한 문구
   | "DENSE_GRID" // 문구 30개 이상 밀집 — 자동 합격 불가
   | "MEANING_UNCERTAIN" // 의미 검수 2회 실패 (렌더 전 차단)
+  | "UNTRANSLATED" // 외국어인데 번역이 비었거나 원문 그대로(에코) — "외국어 없음"과 절대 합치면 안 됨
   | "EXPANDED_PATCH_REVIEW" // 확장 rect 패치 — 링 검증 미탐(장식 진해짐·윤곽 밀림) 위험, 육안 승인 필수
   | "UNEXPLAINED_TEXT" // 원본의 문자 영역이 번역·보존·검수 어디에도 안 잡힘 (OCR 누락 의심)
   | "LOW_CONFIDENCE_TEXT" // 작은 글자·저대비·하단 — 판독 확신이 낮아 자동 통과 불가
@@ -61,6 +69,44 @@ export type ReviewCode =
 export interface ReviewReason {
   code: ReviewCode;
   detail: string;
+}
+
+/**
+ * 상품 저장 폼의 상태 값으로부터 실제로 쓸 status·publishRequestedAt 을 정한다.
+ *
+ * ACTIVE 는 여기서 쓰지 않는다(status: undefined) — 번역·브랜드 게이트를 거치는
+ * requestPublish 가 ACTIVE 로 올릴지 보류할지 정한다.
+ *
+ * **ACTIVE 가 아닌 저장은 대기 중인 판매 요청을 반드시 취소한다.**
+ * 실사례(2026-08-27 감사): 숨김 저장이 publishRequestedAt 을 남겨둬서, 판매 요청
+ * 후 마음을 바꿔 숨긴 상품을 백그라운드 번역 완료 시점의 promoteIfReady 가
+ * 그 기록만 보고 ACTIVE 로 되살렸다 — 운영자가 숨긴 상품이 손님에게 노출됐다.
+ */
+export function productSaveStatusData(formStatus: string): {
+  status?: string;
+  publishRequestedAt?: null;
+} {
+  if (formStatus === "ACTIVE") return { status: undefined };
+  return { status: formStatus, publishRequestedAt: null };
+}
+
+/**
+ * 운영자가 "원본 유지"를 택했을 때 자산에 쓸 상태.
+ *
+ * **노출은 차단한다(fail-closed).** 복원은 "이 번역본이 나쁘다"는 결정이지
+ * "중국어 원본을 손님에게 내보내도 좋다"는 승인이 아니다 — 통과시키면
+ * promoteIfReady 가 ACTIVE 로 올려서 외국어 원본 노출 금지가 우회된다.
+ *
+ * 다만 originalUrl 은 남긴다. 실사례(2026-08-27 감사): 복원이 originalUrl 까지
+ * null 로 지워서 게이트가 이걸 "미번역"과 구분하지 못했고, 어드민 화면에도
+ * 왜 막혔는지가 안 보였다. ORIGINAL_KEPT 로 사유를 분명히 남긴다.
+ */
+export function revertedAssetTranslation(originalUrl: string): {
+  url: string;
+  originalUrl: string;
+  translateStatus: string;
+} {
+  return { url: originalUrl, originalUrl, translateStatus: TRANSLATE_STATUS.ORIGINAL_KEPT };
 }
 
 /** 노출(판매·VERIFIED 취급)이 허용되는 상태 — null 은 legacy(구 파이프라인·국내) */
@@ -99,6 +145,8 @@ export interface GateResult {
     failed: number;
     /** 번역 대상인데 아직 안 돌린 장 (originalUrl·상태 둘 다 없음) */
     untranslated: number;
+    /** 운영자가 원본을 택한 장 — 외국어가 남아 있을 수 있어 명시적 판매 승인 필요 */
+    originalKept: number;
     /** 브랜드가 자리표시자("미정")·빈 값 — 운영자가 입력해야 풀린다 */
     brandMissing: number;
   };
@@ -115,13 +163,14 @@ export interface GateResult {
  * 호출부 하나가 빠뜨려도 조용히 통과한다(번역 게이트가 그렇게 새는 걸 이미 겪었다).
  */
 export function productPublishGate(assets: GateAsset[], needsTranslation: boolean, brand: string | null | undefined): GateResult {
-  const blocking = { translating: 0, review: 0, retryable: 0, failed: 0, untranslated: 0, brandMissing: 0 };
+  const blocking = { translating: 0, review: 0, retryable: 0, failed: 0, untranslated: 0, originalKept: 0, brandMissing: 0 };
   if (isPlaceholderBrand(brand)) blocking.brandMissing = 1;
   if (!needsTranslation) return { ready: blocking.brandMissing === 0, blocking };
   for (const a of assets) {
     const s = a.translateStatus;
     if (s === TRANSLATE_STATUS.TRANSLATING) blocking.translating++;
     else if (s === TRANSLATE_STATUS.NEEDS_REVIEW || s === TRANSLATE_STATUS.VERIFICATION_FAILED) blocking.review++;
+    else if (s === TRANSLATE_STATUS.ORIGINAL_KEPT) blocking.originalKept++;
     else if (s === TRANSLATE_STATUS.RETRYABLE) blocking.retryable++;
     else if (s === TRANSLATE_STATUS.FAILED) blocking.failed++;
     else if (s === null && a.originalUrl === null) blocking.untranslated++;
@@ -130,6 +179,23 @@ export function productPublishGate(assets: GateAsset[], needsTranslation: boolea
   const ready = Object.values(blocking).every((n) => n === 0);
   return { ready, blocking };
 }
+
+/**
+ * 판매 노출을 막는 번역 상태 전부 — 어드민 "판매 보류" 배지의 카운트 기준.
+ *
+ * 게이트와 따로 관리하면 어긋난다. 실사례(2026-08-27 감사): 어드민 목록이
+ * 이 배열을 직접 적어 두는 바람에 ORIGINAL_KEPT 가 빠졌고, 그 상태로만 막힌
+ * 상품은 배지에 사유 없이 "보류"로만 떠서 무엇을 해야 풀리는지 알 수 없었다.
+ * productPublishGate 와 양방향 일치를 테스트로 못 박는다.
+ */
+export const BLOCKING_TRANSLATE_STATUSES: string[] = [
+  TRANSLATE_STATUS.TRANSLATING,
+  TRANSLATE_STATUS.NEEDS_REVIEW,
+  TRANSLATE_STATUS.VERIFICATION_FAILED,
+  TRANSLATE_STATUS.RETRYABLE,
+  TRANSLATE_STATUS.FAILED,
+  TRANSLATE_STATUS.ORIGINAL_KEPT,
+];
 
 /** 어드민 배지용 요약문 — "번역 중 2 · 검수 1" */
 export function gateSummary(g: GateResult): string {
@@ -140,6 +206,7 @@ export function gateSummary(g: GateResult): string {
   if (g.blocking.review) parts.push(`검수 ${g.blocking.review}`);
   if (g.blocking.retryable) parts.push(`재시도 대기 ${g.blocking.retryable}`);
   if (g.blocking.failed) parts.push(`실패 ${g.blocking.failed}`);
+  if (g.blocking.originalKept) parts.push(`원본 유지 ${g.blocking.originalKept}`);
   if (g.blocking.brandMissing) parts.push("브랜드 미정");
   return parts.join(" · ");
 }

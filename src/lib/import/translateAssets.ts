@@ -6,6 +6,7 @@ import { translateImageAuto, type TranslateOutcome, type OcrBox } from "@/lib/im
 import { sha256Of, lookupTranslationCache, saveTranslationCache } from "@/lib/translateCache";
 import { productPublishGate, TRANSLATE_STATUS, type ReviewReason } from "@/lib/productPublishGate";
 import { sourceForUrl } from "@/lib/import/sources";
+import { createKeyedLock } from "@/lib/keyedLock";
 
 /**
  * 수집 상품 이미지 속 중국어를 한국어로 바꾼다 (설계 2026-08-24 v2.1).
@@ -17,6 +18,12 @@ import { sourceForUrl } from "@/lib/import/sources";
 
 /** CDN·모델 한도를 건드리지 않을 만큼만 동시에 */
 const CONCURRENCY = 3;
+
+/**
+ * 자산 단위 선점 — 겹친 실행이 같은 자산에 유료 호출을 두 번 보내지 못하게 한다.
+ * 모듈 최상단에 둬야 실행끼리 공유된다(호출마다 새로 만들면 아무것도 못 막는다).
+ */
+const assetLock = createKeyedLock();
 
 export interface AssetTranslateReport {
   verified: number;
@@ -235,11 +242,53 @@ export async function promoteIfReady(productId: string): Promise<boolean> {
   // 자동 승격으로 새어 손님 화면에 "미정" 브랜드가 뜬다
   const gate = productPublishGate(assets, needsTranslation, product.brand);
   if (!gate.ready) return false;
-  await db.product.update({
-    where: { id: productId },
+  // 조건부 갱신 — 게이트를 보는 사이에 운영자가 상품을 숨겨(판매 요청 취소)
+  // 버렸으면 승격하지 않는다. 읽고→검사→쓰기로 하면 그 취소를 덮어써서
+  // 숨긴 상품이 손님에게 다시 뜬다. 번역은 장당 십수 초 × 수십 장이라
+  // 그 사이 운영자 조작과 겹칠 창이 실제로 넓다.
+  const claimed = await db.product.updateMany({
+    where: { id: productId, publishRequestedAt: { not: null } },
     data: { status: "ACTIVE", publishRequestedAt: null },
   });
+  if (claimed.count !== 1) return false;
   console.log(`[publish] 번역 검증 완료 — ${productId} 판매중으로 자동 승격`);
+  return true;
+}
+
+/**
+ * 판매 중(ACTIVE) 상품의 이미지가 노출 불가 상태가 되면 즉시 숨김으로 내린다.
+ *
+ * 실사례(2026-08-27 감사): 노출 게이트가 **판매 전환 시점에만** 돌았다. 이미
+ * ACTIVE 인 상품에 원본 이미지를 추가하거나 수동 번역을 걸면(TRANSLATING →
+ * NEEDS_REVIEW) 그 사이 중국어 원본이 손님에게 그대로 보이는데 상품은 ACTIVE 로
+ * 남았다 — 승격만 있고 강등이 없었던 탓이다.
+ *
+ * 내릴 때 판매 요청(publishRequestedAt)을 남기므로, 번역·검수가 끝나면
+ * promoteIfReady 가 자동으로 되올린다. 운영자가 다시 누를 필요가 없다.
+ * 이미 숨김인 상품은 건드리지 않는다 — 의도적으로 숨긴 상품을 판매 대기로
+ * 바꿔 놓으면 번역이 끝나는 순간 제멋대로 팔리기 시작한다.
+ */
+export async function demoteIfUnsafe(productId: string): Promise<boolean> {
+  const product = await db.product.findUnique({
+    where: { id: productId },
+    select: { status: true, sourceUrl: true, brand: true },
+  });
+  if (product?.status !== "ACTIVE") return false;
+
+  const needsTranslation = sourceForUrl(product.sourceUrl)?.translate === true;
+  const assets = await db.productAsset.findMany({
+    where: { productId },
+    select: { translateStatus: true, originalUrl: true },
+  });
+  if (productPublishGate(assets, needsTranslation, product.brand).ready) return false;
+
+  // 조건부 갱신 — 이미 누가 내렸으면(다른 요청) 판매 요청을 덧쓰지 않는다
+  const claimed = await db.product.updateMany({
+    where: { id: productId, status: "ACTIVE" },
+    data: { status: "HIDDEN", publishRequestedAt: new Date() },
+  });
+  if (claimed.count !== 1) return false;
+  console.log(`[publish] 노출 불가 이미지 발생 — ${productId} 판매 보류로 강등`);
   return true;
 }
 
@@ -259,6 +308,7 @@ export async function translateProductImages(productId: string): Promise<AssetTr
   });
 
   // 배치(N장씩 Promise.all)는 매 배치가 가장 느린 장을 기다린다 — 풀 방식은
+  // (선점 잠금은 모듈 최상단 assetLock — 실행끼리 공유해야 의미가 있다)
   // 슬롯이 빌 때마다 다음 장을 바로 당긴다(운영 신고: 상품당 10분+).
   let next = 0;
   const results: RunResult[] = [];
@@ -279,6 +329,11 @@ export async function translateProductImages(productId: string): Promise<AssetTr
           // 검수 대기 이미지가 통째로 유료 재렌더된다(장당 ~₩100). 재실행은 설계대로
           // 운영자 승인(approveAssetRerender → force)뿐이다.
           // TRANSLATING 은 판정이 아니라 중단된 흔적이므로 다시 돌린다.
+          //
+          // ORIGINAL_KEPT 도 건너뛴다 — 운영자가 "이 번역본 대신 원본을 쓰겠다"고
+          // 내린 결정이라 자동 재번역이 그걸 덮으면 안 된다. 목록에서 빠져 있던
+          // 탓에 "판매"를 누를 때마다 다시 돌아 결정이 뒤집히고 유료 호출까지
+          // 나갔다(2026-08-27 감사).
           const judged: (string | null)[] = [
             TRANSLATE_STATUS.VERIFIED,
             TRANSLATE_STATUS.NO_FOREIGN_TEXT,
@@ -286,6 +341,7 @@ export async function translateProductImages(productId: string): Promise<AssetTr
             TRANSLATE_STATUS.VERIFICATION_FAILED,
             TRANSLATE_STATUS.RETRYABLE,
             TRANSLATE_STATUS.FAILED,
+            TRANSLATE_STATUS.ORIGINAL_KEPT,
           ];
           if (judged.includes(a.translateStatus) || (a.translateStatus === null && a.originalUrl !== null)) {
             results[i] = "skipped";
@@ -315,8 +371,17 @@ export async function translateProductImages(productId: string): Promise<AssetTr
             results[i] = "verified";
             continue;
           }
-          const { result } = await runAssetTranslation(a);
-          results[i] = result;
+          // 이 자산을 원자적으로 선점한다. 백그라운드 번역이 도는 중에 운영자가
+          // "판매"를 다시 누르면 2차 실행이 겹치는데, 위 건너뛰기 목록은
+          // TRANSLATING 을 일부러 제외하므로(중단 흔적 재개) 1차가 작업 중인
+          // 자산을 2차가 또 집는다 — 1차 결과는 아직 캐시에 없어 미스가 나고
+          // 같은 원본에 유료 호출이 두 번 나간다(30장이면 ~$2).
+          const claim = await assetLock.run(a.id, () => runAssetTranslation(a));
+          if (!claim.ran) {
+            results[i] = "skipped";
+            continue;
+          }
+          results[i] = claim.value.result;
         } catch (e) {
           console.warn(`[import] 이미지 번역 실패 ${a.url}: ${e instanceof Error ? e.message : e}`);
           results[i] = "failed";

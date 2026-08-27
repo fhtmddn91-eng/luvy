@@ -13,6 +13,8 @@ import {
   approveAssetCandidate,
   rejectAssetCandidate,
   approveAssetRerender,
+  uploadAssetCandidate,
+  regenerateAssetWithHint,
   setAssetTarget,
   type AssetFormState,
   type TranslateState,
@@ -46,6 +48,9 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   RETRYABLE: { label: "재시도 대기", cls: "bg-amber-500 text-white" },
   VERIFICATION_FAILED: { label: "검사 실패", cls: "bg-red-600 text-white" },
   FAILED: { label: "번역 실패", cls: "bg-red-600 text-white" },
+  // 원본을 택한 것 자체는 실패가 아니지만 판매는 막힌다 — 외국어가 남아 있을 수 있어
+  // 명시적 판매 승인이 필요하다는 뜻이라 경고색으로 둔다
+  ORIGINAL_KEPT: { label: "원본 유지 (판매 승인 필요)", cls: "bg-amber-500 text-white" },
 };
 
 /** 사유 JSON → 사람이 읽는 한 줄 */
@@ -97,16 +102,99 @@ function CandidateReview({ a }: { a: AssetRow }) {
       }
     });
   const reasons = reasonSummary(a.reviewReasons);
+  const hintRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  // 원본은 번역 전 파일. 아직 번역 안 된 자산은 url 이 곧 원본이다.
+  const originalSrc = a.originalUrl ?? a.url;
+  const hasResult = Boolean(a.originalUrl) && a.url !== a.originalUrl;
+
+  const runForm = (fn: (fd: FormData) => Promise<TranslateState>, fd: FormData) =>
+    run(() => fn(fd));
+
   return (
     <div className="mt-1 border border-amber-300 bg-amber-50 p-1.5 text-[11px]">
       {reasons && <p className="mb-1 leading-snug text-amber-900">{reasons}</p>}
-      {a.candidateUrl && (
-        <div className="mb-1">
-          <p className="mb-0.5 font-bold text-amber-900">번역 후보 (승인 전까지 노출 안 됨)</p>
+
+      {/* 원본 ↔ 현재 결과 ↔ 후보 나란히 비교 — 무엇이 잘못됐는지 눈으로 대조한다 */}
+      <div className="mb-1.5 grid grid-cols-2 gap-1 sm:grid-cols-3">
+        <figure className="m-0">
+          <figcaption className="mb-0.5 font-bold text-muted">원본</figcaption>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={a.candidateUrl} alt="번역 후보" loading="lazy" className="max-h-40 w-full bg-white object-contain" />
-        </div>
-      )}
+          <img src={originalSrc} alt="번역 전 원본" loading="lazy" className="max-h-40 w-full bg-white object-contain" />
+        </figure>
+        {hasResult && (
+          <figure className="m-0">
+            <figcaption className="mb-0.5 font-bold text-muted">현재 (손님 노출)</figcaption>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={a.url} alt="현재 결과" loading="lazy" className="max-h-40 w-full bg-white object-contain" />
+          </figure>
+        )}
+        {a.candidateUrl && (
+          <figure className="m-0">
+            <figcaption className="mb-0.5 font-bold text-amber-900">후보 (승인 전까지 노출 안 됨)</figcaption>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={a.candidateUrl} alt="번역 후보" loading="lazy" className="max-h-40 w-full bg-white object-contain" />
+          </figure>
+        )}
+      </div>
+
+      {/* ① 개선 지시 재생성 — 같은 조건으로 다시 돌리면 대개 같은 결과다 */}
+      <div className="mb-1.5 border-t border-amber-200 pt-1.5">
+        <label className="mb-0.5 block font-bold text-amber-900" htmlFor={`hint-${a.id}`}>
+          무엇이 잘못됐는지 적고 다시 만들기
+        </label>
+        <textarea
+          id={`hint-${a.id}`}
+          ref={hintRef}
+          rows={2}
+          maxLength={300}
+          placeholder="예) 하단 표의 글자가 잘렸습니다. 더 작은 글씨로 넣어주세요."
+          className="w-full border border-hairline bg-white p-1 text-[11px]"
+        />
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            const fd = new FormData();
+            fd.set("hint", hintRef.current?.value ?? "");
+            runForm((f) => regenerateAssetWithHint(a.id, {}, f), fd);
+          }}
+          className="mt-0.5 border border-amber-500 px-2 py-0.5 font-semibold text-amber-900 disabled:opacity-40"
+        >
+          개선 지시로 재생성 (이미지 1회 ≈₩100 추정)
+        </button>
+      </div>
+
+      {/* ② 직접 업로드 — 모델이 몇 번 실패해도 확실히 복구되는 바닥 (호출 0회) */}
+      <div className="mb-1.5 border-t border-amber-200 pt-1.5">
+        <label className="mb-0.5 block font-bold text-amber-900" htmlFor={`file-${a.id}`}>
+          직접 고친 이미지 올리기 (비용 없음)
+        </label>
+        <input
+          id={`file-${a.id}`}
+          ref={fileRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/avif"
+          className="w-full text-[11px]"
+        />
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            const f = fileRef.current?.files?.[0];
+            if (!f) { setMsg("올릴 이미지를 선택해주세요."); return; }
+            const fd = new FormData();
+            fd.set("file", f);
+            runForm((x) => uploadAssetCandidate(a.id, {}, x), fd);
+          }}
+          className="mt-0.5 border border-hairline px-2 py-0.5 font-semibold text-ink-deep disabled:opacity-40"
+        >
+          후보로 올리기
+        </button>
+        <p className="mt-0.5 leading-snug text-muted">
+          올린 이미지도 바로 노출되지 않습니다 — 아래 &lsquo;후보 승인&rsquo;을 눌러야 손님에게 나갑니다.
+        </p>
+      </div>
       <div className="flex flex-wrap items-center gap-1">
         {a.candidateUrl && (
           <button
@@ -584,7 +672,7 @@ export function ProductAssetsManager({
                     <button type="submit" className="px-1 font-semibold text-muted hover:text-ink-deep">삭제</button>
                   </form>
                 </div>
-                {["NEEDS_REVIEW", "RETRYABLE", "VERIFICATION_FAILED", "FAILED"].includes(a.translateStatus ?? "") && (
+                {["NEEDS_REVIEW", "RETRYABLE", "VERIFICATION_FAILED", "FAILED", "ORIGINAL_KEPT"].includes(a.translateStatus ?? "") && (
                   <CandidateReview a={a} />
                 )}
                 {a.originalUrl && (

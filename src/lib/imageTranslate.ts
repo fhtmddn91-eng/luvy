@@ -762,16 +762,53 @@ async function extractForeignCross(data: Buffer, mime: string): Promise<OcrBox[]
 
 export async function ocrImage(data: Buffer, mime: string): Promise<OcrBox[]> {
   const extracted = await extractForeign(data, mime);
-  return translateExtracted(data, mime, extracted);
+  return (await translateExtracted(data, mime, extracted)).boxes;
+}
+
+/**
+ * 번역 결과를 채택/탈락으로 가른다.
+ *
+ * 탈락에는 성격이 전혀 다른 두 가지가 섞여 있고, 이 둘을 구분하지 않은 것이
+ * 실사례(2026-08-27 감사)의 뿌리다.
+ *  - **정상 무변경**: 원문에 바꿀 외국어가 없다(USB·숫자·모델코드). 번역문이
+ *    원문과 같은 게 맞으므로 조용히 빼도 된다.
+ *  - **번역 실패**: 외국어인데 번역이 비었거나 원문이 그대로 돌아왔다(에코).
+ *    이걸 같이 조용히 빼면 남는 박스가 0개가 되어 "외국어 없음"(노출 허용)으로
+ *    판정됐다 — 중국어 원본이 "검증 완료"로 손님에게 나가고 그 오판이 sha256
+ *    캐시에 저장돼 같은 바이트의 모든 자산에 번졌다.
+ *
+ * 한자 재번역 보정이 한자만 보기 때문에(hasHanzi), 가나 전용 일본어는 보정
+ * 자체가 안 돌아 에코가 그대로 여기까지 온다 — isForeignSource 로 함께 잡는다.
+ */
+export function pickTranslated(
+  solid: OcrBox[],
+  koList: string[],
+): { boxes: OcrBox[]; untranslated: string[] } {
+  const boxes: OcrBox[] = [];
+  const untranslated: string[] = [];
+  solid.forEach((b, i) => {
+    const ko = koList[i] ?? "";
+    if (ko && ko !== b.zh) {
+      boxes.push({ ...b, ko });
+      return;
+    }
+    // 바꿀 외국어가 없는 문구는 무변경이 정상 — 검수로 보내면 멀쩡한 이미지가 쏟아진다
+    if (isForeignSource(b.zh)) untranslated.push(b.zh);
+  });
+  return { boxes, untranslated };
 }
 
 /** 추출된 문구 목록을 오탐 필터 → 번역(예산·한자·축약 보정)까지 끌고 간다 */
-async function translateExtracted(data: Buffer, mime: string, extracted: OcrBox[]): Promise<OcrBox[]> {
-  if (extracted.length === 0) return [];
+async function translateExtracted(
+  data: Buffer,
+  mime: string,
+  extracted: OcrBox[],
+): Promise<{ boxes: OcrBox[]; untranslated: string[] }> {
+  if (extracted.length === 0) return { boxes: [], untranslated: [] };
 
   // 글자가 없는 영역을 글자로 착각한 오탐을 대비로 걸러낸다
   const kept = await filterByContrast(data, mime, extracted);
-  if (kept.length === 0) return [];
+  if (kept.length === 0) return { boxes: [], untranslated: [] };
 
   // 워터마크는 번역하지 않는다 — 지우기만 한다. 남기면 "완성본에 한자가
   // 희미하게 남는다"는 결함이 되고, 한국어로 바꾸는 건 남의 상호를 우리
@@ -780,7 +817,7 @@ async function translateExtracted(data: Buffer, mime: string, extracted: OcrBox[
     .filter((b) => b.wm)
     .map((b) => ({ ...b, mode: "erase" as const, ko: "" }));
   const solid = kept.filter((b) => !b.wm);
-  if (solid.length === 0) return wmBoxes;
+  if (solid.length === 0) return { boxes: wmBoxes, untranslated: [] };
 
   // 문구마다 "자리에 들어갈 수 있는 글자 수"를 계산해 번역 단계에서부터 지키게 한다
   const meta = await sharp(mime === "image/gif" ? await sharp(data, { page: 0, pages: 1 }).png().toBuffer() : data).metadata();
@@ -825,10 +862,8 @@ async function translateExtracted(data: Buffer, mime: string, extracted: OcrBox[
     }
   }
 
-  return [
-    ...solid.map((b, i) => ({ ...b, ko: koList[i] })).filter((b) => b.ko && b.ko !== b.zh),
-    ...wmBoxes,
-  ];
+  const picked = pickTranslated(solid, koList);
+  return { boxes: [...picked.boxes, ...wmBoxes], untranslated: picked.untranslated };
 }
 
 /**
@@ -2005,7 +2040,13 @@ export function clipRectAgainst(
     else if (a.x1 <= core.x0 && a.x1 > x0) x0 = Math.ceil(a.x1);
     // 어느 조건도 안 맞으면 코어끼리 겹친 것 — 가를 수 없다
   }
-  return { x0, y0, x1, y1, feather: r.feather };
+  // feather 를 **자른 뒤 두께에 맞춰 다시 잡는다.**
+  // buildPatchOverlay 의 알파는 `min(1, edge/feather)` 이고 edge 최댓값은
+  // 두께의 절반이다. 잘려서 두께가 2×feather 보다 얇아지면 어느 픽셀도 255 에
+  // 닿지 못해 **패치 전체가 반투명**으로 얹힌다 — 원문·워터마크가 유령처럼
+  // 비쳐 나오는, 무결 원칙이 금지하는 덧그린 흔적이 된다 (2026-08-27 감사).
+  const feather = Math.max(0, Math.min(r.feather, Math.floor(Math.min(x1 - x0, y1 - y0) / 2)));
+  return { x0, y0, x1, y1, feather };
 }
 
 /** 재생성본에서 글자 영역만 페더링된 알파로 오려낸 오버레이(RGBA raw) */
@@ -2361,7 +2402,12 @@ export const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-3.1-flash-i
  */
 const REGEN_ATTEMPTS = 1;
 
-function regenPrompt(boxes: OcrBox[]): string {
+/** 운영자 개선 지시를 프롬프트에 실을 수 있는 형태 — 테스트에서 직접 검증한다 */
+export function regenPromptWithHint(boxes: OcrBox[], hint?: string): string {
+  return regenPrompt(boxes, hint);
+}
+
+function regenPrompt(boxes: OcrBox[], hint?: string): string {
   // 유지로 지정한 항목은 재생성 대상에서 빼야 모델이 건드리지 않는다
   const tlist = boxes
     .filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim())
@@ -2392,7 +2438,23 @@ ${elist}
 - 라틴 문자 브랜드명·모델명·숫자·단위(mm, MIN, MAH, dB 등)는 그대로 둘 것
 - 위 목록에 없는 글자는 다시 그리지 말고 원본 그대로 둘 것
 - 목록에 없는 문구를 새로 만들어 넣지 말 것
-- 띠·배지·버튼의 위치와 모양을 옮기거나 바꾸지 말 것`;
+- 띠·배지·버튼의 위치와 모양을 옮기거나 바꾸지 말 것${hintBlock(hint)}`;
+}
+
+/**
+ * 운영자가 결과를 보고 적어 준 개선 지시.
+ *
+ * **절대 규칙 뒤에 붙인다** — 앞에 두면 "배경을 바꿔주세요" 같은 지시가 규칙을
+ * 눌러 제품 사진이 바뀐다. 길이도 자른다: 긴 문장을 그대로 넣으면 지시가
+ * 프롬프트 본문을 밀어내 번역 목록이 뒤로 흘러간다.
+ */
+function hintBlock(hint?: string): string {
+  const h = (hint ?? "").trim().slice(0, 300);
+  if (!h) return "";
+  return `
+
+운영자 개선 지시 (위 절대 규칙을 어기지 않는 선에서 반영):
+${h}`;
 }
 
 
@@ -2978,6 +3040,8 @@ async function regenerateStill(
   boxes: OcrBox[],
   /** 편집 금지 영역 — 패치가 삼키면 영문·모델코드가 갈린다 (H3) */
   preserved: PreservedItem[] = [],
+  /** 운영자 개선 지시 — 재생성 프롬프트에 실린다 */
+  hint?: string,
 ): Promise<{
   data: Buffer;
   mime: string;
@@ -2999,7 +3063,7 @@ async function regenerateStill(
   const H = meta.height ?? 0;
   if (!W || !H) throw new Error("이미지 크기를 읽을 수 없습니다.");
 
-  const png = await callImageEdit(data, mime, regenPrompt(boxes), W, H);
+  const png = await callImageEdit(data, mime, regenPrompt(boxes, hint), W, H);
   // 지움(워터마크) 박스도 패치 대상이다 — 빼면 모델이 지워 준 자리가 합성에서
   // 빠져 워터마크가 도로 남는다
   const targets = boxes.filter(
@@ -3839,7 +3903,7 @@ export async function renderTranslatedImage(
    * 아무리 고쳐도 없앨 수 없는 한계였다. 모델은 배경까지 다시 그리므로
    * 자국이 아예 생기지 않는다(실상품 이미지로 확인).
    */
-  opts: { regenerate?: boolean } = {},
+  opts: { regenerate?: boolean; hint?: string } = {},
 ): Promise<{ data: Buffer; mime: string }> {
   // 수동 경로(어드민 문구 수정 재렌더)도 예산 스코프 안에서 돈다 — 지금은 어느
   // 갈래든 호출 1회지만, 그건 REGEN_ATTEMPTS=1 이라는 우연한 상수에 기대는 것이라
@@ -3852,7 +3916,7 @@ async function renderTranslatedImageInner(
   data: Buffer,
   mime: string,
   boxes: OcrBox[],
-  opts: { regenerate?: boolean },
+  opts: { regenerate?: boolean; hint?: string },
 ): Promise<{ data: Buffer; mime: string }> {
   ensureFonts();
   // GIF 는 워터마크 지우기를 하지 않는다 — 프레임마다 로컬 지우개를 돌리면
@@ -3881,7 +3945,7 @@ async function renderTranslatedImageInner(
   // 안전 필터 거부 시 띠 재생성 폴백을 없앴다(설계 2026-08-24 v2.1). 실패·불합격은
   // 호출한 쪽이 후보·사유로 받아 검수로 보내고, 추가 렌더는 운영자 승인뿐이다.
   // pending(경계 불합격 박스)은 원문이 그대로 남는다 — 부분 성공도 VERIFIED 금지.
-  const out = await regenerateStill(data, mime, boxes);
+  const out = await regenerateStill(data, mime, boxes, [], opts.hint);
   return { data: out.data, mime: out.mime };
 }
 
@@ -3890,17 +3954,20 @@ async function renderTranslatedImageInner(
  * 외국어"만 센다.
  *
  * 면책 대상:
- *   - 추출기가 워터마크로 본 줄: 워터마크는 깨끗이 지워질 때만 지우는 정책이라
- *     남아 있는 게 정상일 수 있다
- *   - 우리가 지움을 포기한 워터마크 박스(keptWm) 자리와 겹치는 줄
+ *   - **지움을 포기한** 워터마크(gaveUpWm) 자리와 겹치는 줄 — 이웃 글자와 겹쳐
+ *     안 지우기로 한 것들이라 남아 있는 게 정상이다
  *   - 외국어가 아닌 줄 (한글·영문·숫자)
+ *
+ * 예전에는 "판독이 워터마크로 본 줄"을 무조건 면책했는데, 그게 지우라고 **시킨**
+ * 워터마크의 지우기 실패까지 통째로 덮었다. dropRiskyWm 이 포기한 워터마크를
+ * 배열에서 아예 빼기 때문에 남아 있는 wm 박스는 전부 지우기 대상이고, 그게
+ * 완성본에 읽히면 실패다 — 반만 지워진 워터마크(잔획)가 VERIFIED 로 나가던
+ * 유일한 경로였다 (2026-08-27 감사). 그래서 호출부가 "포기한 것"만 넘긴다.
  */
-export function gateLeftover(found: OcrBox[], boxes: OcrBox[]): number {
-  const keptWm = boxes.filter((b) => b.wm);
+export function gateLeftover(found: OcrBox[], gaveUpWm: OcrBox[]): number {
   return found.filter((f) => {
-    if (f.wm) return false;
     if (!isForeignSource(f.zh)) return false;
-    if (keptWm.some((w) => flaggedHits(f.box, w))) return false;
+    if (gaveUpWm.some((w) => flaggedHits(f.box, w))) return false;
     return true;
   }).length;
 }
@@ -4105,16 +4172,37 @@ async function translateImageAutoInner(
 
   // ② 문구 번역 (오탐 필터·길이 예산·한자·축약 보정 포함)
   let boxes: OcrBox[];
+  /** 외국어인데 번역이 비었거나 에코로 돌아온 원문 — 자동 통과 금지 신호 */
+  let untranslated: string[] = [];
+  /** 이웃 글자와 겹쳐 지움을 포기한 워터마크 — 최종 관문에서 이것만 면책한다 */
+  let gaveUpWm: OcrBox[] = [];
   if (resume?.boxes) {
     boxes = resume.boxes;
   } else {
     try {
-      boxes = await translateExtracted(data, mime, merged);
+      const t = await translateExtracted(data, mime, merged);
+      boxes = t.boxes;
+      untranslated = t.untranslated;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const t = transientReason(msg);
       return t ? { status: "RETRYABLE", reasons: [t] } : { status: "FAILED", reason: `번역 실패: ${msg}` };
     }
+  }
+
+  // 번역 못 한 외국어가 하나라도 있으면 **렌더 전에** 멈춘다.
+  //  - 전량 실패: 예전엔 NO_FOREIGN_TEXT(노출 허용)로 새어 원본이 검증 완료로 나갔다
+  //  - 부분 실패: 남은 원문이 그대로 실려 최종 관문(LEFTOVER)에 걸릴 게 뻔하다.
+  //    거기까지 가면 이미지 호출 $0.067 을 쓰고 같은 NEEDS_REVIEW 에 도달한다 —
+  //    싼 단계에서 막아 비싼 단계를 살린다(규칙 1).
+  if (untranslated.length > 0) {
+    return {
+      status: "NEEDS_REVIEW",
+      data: null,
+      mime: null,
+      boxes,
+      reasons: [{ code: "UNTRANSLATED", detail: untranslated.join(" · ").slice(0, 300) }],
+    };
   }
   if (eraseTargets(boxes).length === 0) return { status: "NO_FOREIGN_TEXT" };
 
@@ -4279,7 +4367,11 @@ async function translateImageAutoInner(
     } else if (mime === "image/gif") {
       rendered = await renderGif(data, boxes.filter((b) => !b.wm));
     } else {
+      // dropRiskyWm 이 빼는 것 = 이웃 글자와 겹쳐 **지움을 포기한** 워터마크.
+      // 최종 관문은 이것만 면책한다 — 지우라고 시킨 워터마크가 남으면 실패다.
+      const beforeDrop = boxes;
       boxes = dropRiskyWm(boxes);
+      gaveUpWm = beforeDrop.filter((b) => b.wm && !boxes.includes(b));
       if (mustOverlay(boxes)) {
         // 자동 흐름에서 여기 오는 경우는 "지울 워터마크만 있는 장"뿐이다
         const r = await eraseThenDraw(data, mime, eraseTargets(boxes), boxes);
@@ -4405,7 +4497,7 @@ async function translateImageAutoInner(
     // 전체 1회만 읽던 시절, 최초 판독이 놓친 문구를 관문도 같이 놓쳐(같은 모델이라
     // 실명이 상관된다) 중국어가 그대로 보이는 이미지가 VERIFIED 로 나갔다 (H1).
     const gateFound = await extractForeignCross(rendered.data, rendered.mime);
-    const leftover = gateLeftover(gateFound, boxes);
+    const leftover = gateLeftover(gateFound, gaveUpWm);
     if (leftover > 0) reasons.push({ code: "LEFTOVER", detail: `외국어 ${leftover}건 잔존` });
 
     // 제품 무결성 (전체 채택 경로) — 픽셀 동일성 관문을 대신하는 의미 관문.
