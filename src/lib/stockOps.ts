@@ -101,6 +101,21 @@ export async function restoreStock(tx: TxClient, lines: StockLine[]): Promise<vo
   }
 }
 
+/**
+ * 재고를 되돌리려고 주문 품목을 읽을 때 쓰는 select.
+ *
+ * `optionId` 를 빼면 안 된다 — 옵션에서 뺀 재고를 상품으로 되돌리게 된다.
+ * 실사례(2026-08-27): 취소 시 이 select 가 좁아서 옵션 재고는 영영 안 돌아오고,
+ * 상품·옵션이 둘 다 추적이면 안 뺀 상품 재고가 늘어 "재고는 있는데 물건은 없는"
+ * 상태가 됐다. 두 호출부(orderCancel·payments)가 같은 표를 보게 여기 모은다.
+ */
+export const STOCK_LINE_SELECT = {
+  productId: true,
+  name: true,
+  quantity: true,
+  optionId: true,
+} as const;
+
 /** 주문의 품목을 재고 조작용 형태로 변환 */
 export function linesFromOrderItems(
   items: { productId: string; name: string; quantity: number; optionId?: string }[],

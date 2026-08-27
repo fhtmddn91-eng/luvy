@@ -2,7 +2,7 @@ import "server-only";
 
 import { db } from "@/lib/db";
 import { cancelPortOnePayment } from "@/lib/portone";
-import { restoreStock, linesFromOrderItems, type TxClient } from "@/lib/stockOps";
+import { restoreStock, linesFromOrderItems, STOCK_LINE_SELECT, type TxClient } from "@/lib/stockOps";
 
 export class RefundFailedError extends Error {
   constructor(cause: string) {
@@ -35,10 +35,7 @@ async function claimCancel(tx: TxClient, orderId: string, meta: CancelMeta): Pro
   });
   if (claimed.count !== 1) return;
 
-  const items = await tx.orderItem.findMany({
-    where: { orderId },
-    select: { productId: true, name: true, quantity: true },
-  });
+  const items = await tx.orderItem.findMany({ where: { orderId }, select: STOCK_LINE_SELECT });
   await restoreStock(tx, linesFromOrderItems(items));
 }
 

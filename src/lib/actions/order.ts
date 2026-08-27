@@ -51,8 +51,10 @@ export async function placeOrder(_prev: OrderState, formData: FormData): Promise
     return { error: "지금 이용할 수 있는 결제 수단을 선택해주세요." };
   }
 
-  const draft = await buildOrderDraft(user.id);
-  if (!draft) return { error: "장바구니가 비어 있습니다." };
+  // 주문 불가 품목이 섞여 있으면 여기서 전체가 멈춘다 — 일부만 주문되지 않는다
+  const draftResult = await buildOrderDraft(user.id);
+  if (!draftResult.ok) return { error: draftResult.error };
+  const draft = draftResult.draft;
 
   let order;
   try {
@@ -102,8 +104,10 @@ export async function createPendingOrder(formData: FormData): Promise<PendingOrd
     return { ok: false, error: "수령인, 연락처, 주소를 모두 입력해주세요." };
   }
 
-  const draft = await buildOrderDraft(user.id);
-  if (!draft) return { ok: false, error: "장바구니가 비어 있습니다." };
+  // 주문 불가 품목이 섞여 있으면 여기서 전체가 멈춘다 — 일부만 결제되지 않는다
+  const draftResult = await buildOrderDraft(user.id);
+  if (!draftResult.ok) return { ok: false, error: draftResult.error };
+  const draft = draftResult.draft;
 
   // 결제창을 띄우기 전에 재고를 선점한다.
   // 결제가 끝난 뒤에 차감하면, 마지막 재고를 두 명이 동시에 결제해

@@ -4,7 +4,8 @@ import { shippingFor, type Tier } from "@/lib/pricing";
 import { optionUnitPrice } from "@/lib/options";
 import { getShippingPolicy } from "@/lib/settings";
 import { fetchPortOnePayment } from "@/lib/portone";
-import { restoreStock, linesFromOrderItems } from "@/lib/stockOps";
+import { restoreStock, linesFromOrderItems, STOCK_LINE_SELECT } from "@/lib/stockOps";
+import { partitionCart, blockedCartMessage } from "@/lib/orderDraft";
 
 export interface OrderDraft {
   items: {
@@ -27,18 +28,26 @@ export interface OrderDraft {
   orderName: string;
 }
 
-/** 사용자 장바구니로부터 주문 스냅샷/금액을 계산. 비어있으면 null. */
-export async function buildOrderDraft(userId: string): Promise<OrderDraft | null> {
+export type OrderDraftResult =
+  | { ok: true; draft: OrderDraft }
+  | { ok: false; error: string };
+
+/**
+ * 사용자 장바구니로부터 주문 스냅샷/금액을 계산.
+ *
+ * 주문 불가 품목(비활성·가격 미설정)이 하나라도 있으면 **주문 전체를 멈춘다**.
+ * 예전엔 그런 품목을 조용히 빼고 나머지만 주문해서, 손님이 본 장바구니와
+ * 실제 주문서의 품목·금액이 달라졌다(orderDraft.ts 참고).
+ */
+export async function buildOrderDraft(userId: string): Promise<OrderDraftResult> {
   const cart = await db.cartItem.findMany({
     where: { userId },
     include: { product: { include: { priceTiers: true, options: true } } },
   });
-  // 주문 가능한 항목만: 판매중(ACTIVE)이고 도매가 티어가 하나 이상 있어야 함.
-  // (비활성/티어 없는 상품이 0원으로 주문되는 것을 방지)
-  const orderable = cart.filter(
-    (it) => it.product.status === "ACTIVE" && it.product.priceTiers.length > 0,
-  );
-  if (orderable.length === 0) return null;
+  if (cart.length === 0) return { ok: false, error: "장바구니가 비어 있습니다." };
+
+  const { orderable, blocked } = partitionCart(cart);
+  if (blocked.length > 0) return { ok: false, error: blockedCartMessage(blocked) };
 
   const items = orderable.map((it) => {
     const option = it.optionId ? it.product.options.find((o) => o.id === it.optionId) : undefined;
@@ -61,7 +70,10 @@ export async function buildOrderDraft(userId: string): Promise<OrderDraft | null
   const orderName =
     items.length === 1 ? items[0].name : `${items[0].name} 외 ${items.length - 1}건`;
 
-  return { items, subtotal, shippingFee, total: subtotal + shippingFee, orderName };
+  return {
+    ok: true,
+    draft: { items, subtotal, shippingFee, total: subtotal + shippingFee, orderName },
+  };
 }
 
 export type FinalizeResult =
@@ -108,7 +120,7 @@ export async function finalizePayment(paymentId: string): Promise<FinalizeResult
       if (claimed.count === 1) {
         const items = await tx.orderItem.findMany({
           where: { orderId: payment.orderId },
-          select: { productId: true, name: true, quantity: true },
+          select: STOCK_LINE_SELECT,
         });
         await restoreStock(tx, linesFromOrderItems(items));
       }
