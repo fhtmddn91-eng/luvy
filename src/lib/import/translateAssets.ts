@@ -206,7 +206,10 @@ async function storeOutcome(
       translateStatus: status,
       reviewReasons: reasonsJson(outcome.reasons),
       candidateUrl,
-      candidateOcr: candidateUrl ? boxesJson(outcome.boxes) : null,
+      // 문구 기록은 후보 파일이 없어도 남긴다. 후보와 묶어 지웠더니 렌더 전에
+      // 막힌 자산(에코 UNTRANSLATED·안전필터)에서 "문구 기록이 없어 개선 재생성을
+      // 할 수 없습니다"가 떴다 — 이미 뽑아 둔 문구를 버려 복구 길만 좁힌 셈이다.
+      candidateOcr: outcome.boxes.length > 0 ? boxesJson(outcome.boxes) : null,
     },
   });
   await saveTranslationCache({

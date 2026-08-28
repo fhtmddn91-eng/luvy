@@ -91,12 +91,14 @@ const NUDGE = 5;
 function CandidateReview({ a }: { a: AssetRow }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const run = (fn: () => Promise<TranslateState>) =>
     startTransition(async () => {
       setBusy(true);
       try {
         const r = await fn();
         setMsg(r.error ?? null);
+        setNote(r.notice ?? null);
       } finally {
         setBusy(false);
       }
@@ -226,6 +228,7 @@ function CandidateReview({ a }: { a: AssetRow }) {
         </button>
       </div>
       {msg && <p className="mt-1 text-red-700">{msg}</p>}
+      {note && <p className="mt-1 text-ink-soft">{note}</p>}
     </div>
   );
 }
@@ -432,6 +435,8 @@ export function ProductAssetsManager({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [trErrors, setTrErrors] = useState<string[]>([]);
+  /** 오류가 아닌 판정 안내(외국어 없음·검수 대기) — 빨간 오류와 색으로 구분한다 */
+  const [trNotices, setTrNotices] = useState<string[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
 
   // 드래그 순서 변경 — 저장 전까지는 화면에서만 순서를 바꾼다
@@ -488,19 +493,23 @@ export function ProductAssetsManager({
     const ids = assets.filter((a) => selected.has(a.id)).map((a) => a.id);
     if (ids.length === 0) return;
     setTrErrors([]);
+    setTrNotices([]);
     setProgress({ done: 0, total: ids.length });
     const errs: string[] = [];
+    const notes: string[] = [];
     for (let i = 0; i < ids.length; i++) {
       const idx = assets.findIndex((a) => a.id === ids[i]);
       try {
         const r = await translateProductAsset(ids[i]);
         if (r.error) errs.push(`${idx + 1}번: ${r.error}`);
+        else if (r.notice) notes.push(`${idx + 1}번: ${r.notice}`);
       } catch {
         errs.push(`${idx + 1}번: 요청 실패 (네트워크)`);
       }
       setProgress({ done: i + 1, total: ids.length });
     }
     setTrErrors(errs);
+    setTrNotices(notes);
     setProgress(null);
     setSelected(new Set());
   };
@@ -570,6 +579,14 @@ export function ProductAssetsManager({
           {trErrors.length > 0 && (
             <div className="mb-3 border border-brand-500 bg-brand-50 px-4 py-3 text-[12px] text-brand-700">
               {trErrors.map((e) => (
+                <p key={e}>{e}</p>
+              ))}
+            </div>
+          )}
+          {/* 정상 판정 안내 — 오류와 같은 빨간 상자로 내보내면 고장으로 읽힌다 */}
+          {trNotices.length > 0 && (
+            <div className="mb-3 border border-hairline bg-canvas px-4 py-3 text-[12px] text-ink-soft">
+              {trNotices.map((e) => (
                 <p key={e}>{e}</p>
               ))}
             </div>

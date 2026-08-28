@@ -65,8 +65,9 @@ vi.mock("@/lib/imageTranslate", () => ({
   },
   parseOcrBoxes: (v: unknown) => v as unknown[],
 }));
+const runResult = vi.hoisted(() => ({ value: { result: "verified" } as { result: string; message?: string } }));
 vi.mock("@/lib/import/translateAssets", () => ({
-  runAssetTranslation: async () => ({ result: "verified" }),
+  runAssetTranslation: async () => runResult.value,
   promoteIfReady: async () => false,
   demoteIfUnsafe: async (id: string) => { demoted.push(id); return false; },
 }));
@@ -77,7 +78,8 @@ vi.mock("@/lib/productAssets", () => ({
   assetKindFor: () => "DETAIL", nextThumbnail: () => null,
 }));
 
-const { uploadAssetCandidate, regenerateAssetWithHint } = await import("./actions/admin-assets");
+const { uploadAssetCandidate, regenerateAssetWithHint, translateProductAsset, approveAssetRerender } =
+  await import("./actions/admin-assets");
 
 const BOXES = JSON.stringify([{ box: [1, 2, 3, 4], zh: "强震", ko: "진동", bg: "#fff", fg: "#000" }]);
 
@@ -202,5 +204,66 @@ describe("regenerateAssetWithHint — 개선 지시 재생성도 후보로만", 
     seed();
     await regenerateAssetWithHint("a1", {}, fd({ hint: "가".repeat(500) }));
     expect(renderCalls[0].hint!.length).toBe(300);
+  });
+});
+
+
+/**
+ * 번역 버튼의 결과 표시 — 정상 결과를 오류로 보여주지 않는다.
+ *
+ * 실사례(2026-08-28 운영 테스트): "외국어 없음"과 "검수 대기"는 파이프라인이
+ * 의도대로 내린 **정상 판정**인데 { error } 로 돌아와 화면에 빨간 오류로 떴다.
+ * 번역을 누를 때마다 빨간 글씨가 나오니 운영자는 기능이 고장났다고 읽는다.
+ * 정상 판정은 notice(안내), 진짜 실패만 error 다.
+ */
+describe("translateProductAsset — 정상 판정은 notice, 실패만 error", () => {
+  it("외국어 없음은 안내로 돌아온다", async () => {
+    seed();
+    runResult.value = { result: "no_foreign" };
+    const r = await translateProductAsset("a1");
+    expect(r.error).toBeUndefined();
+    expect(r.notice).toContain("외국어");
+  });
+
+  it("검수 대기도 안내다 — 판정이지 고장이 아니다", async () => {
+    seed();
+    runResult.value = { result: "review", message: "LEFTOVER" };
+    const r = await translateProductAsset("a1");
+    expect(r.error).toBeUndefined();
+    expect(r.notice).toContain("검수 대기");
+    expect(r.notice).toContain("LEFTOVER"); // 사유는 그대로 보인다
+  });
+
+  it("검증 통과는 ok", async () => {
+    seed();
+    runResult.value = { result: "verified" };
+    const r = await translateProductAsset("a1");
+    expect(r.ok).toBe(true);
+    expect(r.error).toBeUndefined();
+  });
+
+  it("일시 오류·실패는 여전히 error 다", async () => {
+    seed();
+    runResult.value = { result: "retryable", message: "TIMEOUT" };
+    expect((await translateProductAsset("a1")).error).toContain("일시 오류");
+    runResult.value = { result: "failed", message: "원인" };
+    expect((await translateProductAsset("a1")).error).toContain("번역 실패");
+  });
+});
+
+
+describe("approveAssetRerender — 재렌더의 정상 판정도 안내다", () => {
+  it("검수 대기로 돌아오면 notice — 후보가 생겼다는 뜻이지 고장이 아니다", async () => {
+    seed({ translateStatus: "NEEDS_REVIEW" });
+    runResult.value = { result: "review", message: "MANUAL_EDIT" };
+    const r = await approveAssetRerender("a1");
+    expect(r.error).toBeUndefined();
+    expect(r.notice).toContain("검수 대기");
+  });
+
+  it("실패·일시 오류는 여전히 error", async () => {
+    seed({ translateStatus: "FAILED" });
+    runResult.value = { result: "failed", message: "원인" };
+    expect((await approveAssetRerender("a1")).error).toBeTruthy();
   });
 });

@@ -201,7 +201,16 @@ export async function deleteProductAsset(assetId: string): Promise<void> {
  * 원본에서 다시 렌더할 수 있고 언제든 원본으로 복원할 수 있다.
  */
 
-export type TranslateState = { error?: string; ok?: boolean };
+export type TranslateState = {
+  error?: string;
+  ok?: boolean;
+  /**
+   * 오류가 아닌 안내. "외국어 없음"·"검수 대기"는 파이프라인의 정상 판정인데
+   * error 로 돌려주니 화면에 빨간 오류로 떠서 운영자가 고장으로 읽었다
+   * (2026-08-28 운영 테스트). 정상 판정은 여기로, 진짜 실패만 error 로.
+   */
+  notice?: string;
+};
 
 /**
  * 이미지 속 중국어를 찾아 한국어 번역본을 만든다 (자동 흐름과 같은 규칙).
@@ -230,8 +239,9 @@ export async function translateProductAsset(assetId: string): Promise<TranslateS
     await promoteIfReady(asset.productId);
     revalidateProduct(asset.productId);
     if (result === "verified") return { ok: true };
-    if (result === "no_foreign") return { error: "번역할 외국어 텍스트가 없습니다 (교차 확인 완료)." };
-    if (result === "review") return { error: `검수 대기로 분류됐습니다 (${message ?? ""}) — 이미지 카드에서 후보를 확인하세요.` };
+    // 아래 둘은 정상 판정이다 — error 로 주면 화면에 빨간 오류로 떠서 고장으로 읽힌다
+    if (result === "no_foreign") return { ok: true, notice: "번역할 외국어 텍스트가 없습니다 (교차 확인 완료)." };
+    if (result === "review") return { ok: true, notice: `검수 대기로 분류됐습니다 (${message ?? ""}) — 이미지 카드에서 확인하세요.` };
     if (result === "retryable") return { error: `일시 오류(${message ?? ""}) — 이미지 카드에서 재시도를 승인하세요.` };
     return { error: `번역 실패: ${message ?? "원인 미상"}` };
   } catch (e) {
@@ -353,6 +363,9 @@ export async function approveAssetRerender(assetId: string): Promise<TranslateSt
   await promoteIfReady(asset.productId);
   revalidateProduct(asset.productId);
   if (result === "verified") return { ok: true };
+  // 검수 대기·외국어 없음은 정상 판정 — 후보가 생겼거나 바꿀 게 없다는 뜻이다
+  if (result === "review") return { ok: true, notice: `검수 대기로 분류됐습니다${message ? ` (${message})` : ""} — 후보를 확인하세요.` };
+  if (result === "no_foreign") return { ok: true, notice: "번역할 외국어 텍스트가 없습니다." };
   return { error: `재렌더 결과: ${result}${message ? ` (${message})` : ""}` };
 }
 

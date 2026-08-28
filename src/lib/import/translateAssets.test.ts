@@ -178,13 +178,24 @@ describe("runAssetTranslation — 저장 규칙 (정책 9·10)", () => {
     expect(JSON.parse(a.reviewReasons!)[0].code).toBe("LEFTOVER");
   });
 
-  it("후보 없는 NEEDS_REVIEW(안전필터 등): 파일 저장 없이 사유만", async () => {
+  it("후보 없는 NEEDS_REVIEW(안전필터 등): 파일 저장 없이 사유만 — 문구 기록은 남긴다", async () => {
     const a = seed();
     autoMock.mockResolvedValue({ status: "NEEDS_REVIEW", data: null, mime: null, boxes: BOXES, reasons: [{ code: "SAFETY_BLOCKED", detail: "x" }] });
     await runAssetTranslation(a);
     expect(a.url).toBe("/uploads/orig-1.jpg");
     expect(a.candidateUrl).toBeNull();
     expect(savedFiles).toHaveLength(0);
+    // 실사례(2026-08-28): candidateOcr 를 후보 파일과 묶어 null 로 지워서,
+    // 렌더 전에 막힌 자산(에코·안전필터)은 "문구 기록이 없어 개선 재생성을 할 수
+    // 없습니다"가 떴다 — 문구는 이미 뽑아 놓고 버린 것이다. 기록은 항상 남긴다.
+    expect(a.candidateOcr).toContain("강력 진동");
+  });
+
+  it("문구가 하나도 없는 판정은 candidateOcr 도 비운다", async () => {
+    const a = seed();
+    autoMock.mockResolvedValue({ status: "NEEDS_REVIEW", data: null, mime: null, boxes: [], reasons: [{ code: "VERIFY_FAILED", detail: "x" }] });
+    await runAssetTranslation(a);
+    expect(a.candidateOcr).toBeNull();
   });
 
   it("RETRYABLE: 상태·사유만 기록, url·파일 불변", async () => {
