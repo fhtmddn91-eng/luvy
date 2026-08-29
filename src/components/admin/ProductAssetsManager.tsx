@@ -19,6 +19,7 @@ import {
   type AssetFormState,
   type TranslateState,
 } from "@/lib/actions/admin-assets";
+import { reviewReasonsSummary } from "@/lib/productPublishGate";
 import { errorCls, helpCls, labelCls, fieldCls } from "@/components/ui/form";
 import { btnPrimary } from "@/components/ui/Panel";
 
@@ -53,16 +54,8 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   ORIGINAL_KEPT: { label: "원본 유지 (판매 승인 필요)", cls: "bg-amber-500 text-white" },
 };
 
-/** 사유 JSON → 사람이 읽는 한 줄 */
-function reasonSummary(json: string | null | undefined): string {
-  if (!json) return "";
-  try {
-    const arr = JSON.parse(json) as { code: string; detail?: string }[];
-    return arr.map((r) => `${r.code}${r.detail ? `: ${r.detail}` : ""}`).join(" · ").slice(0, 300);
-  } catch {
-    return json.slice(0, 200);
-  }
-}
+// 사유는 공용 한국어 요약(reviewReasonsSummary)을 쓴다 — 영어 코드 노출 금지
+const reasonSummary = reviewReasonsSummary;
 
 const kb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.round(n / 1024)}KB`);
 

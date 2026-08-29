@@ -72,6 +72,70 @@ export interface ReviewReason {
 }
 
 /**
+ * 사유 코드 → 운영자용 한국어 라벨.
+ *
+ * 실사례(2026-08-30 피드백): 검수 카드에 "OCR_DISAGREEMENT: …" 같은 영어 코드가
+ * 그대로 노출됐다. 운영자는 초보 1명이다 — 코드는 개발자용이지 화면용이 아니다.
+ * Record<ReviewCode, string> 이라 새 코드를 추가하면 라벨을 안 넣으면 컴파일이
+ * 안 된다 (조용한 누락 방지).
+ */
+export const REVIEW_CODE_LABELS: Record<ReviewCode, string> = {
+  LEFTOVER: "외국어가 남아 있습니다",
+  FLAGGED: "글자가 잘렸거나 깨졌을 수 있습니다",
+  NUMBER_CHANGED: "숫자·규격이 원본과 달라졌습니다",
+  NEW_TEXT: "원본에 없던 글자가 생겼습니다",
+  PATCH_REJECTED: "글자 주변 배경이 어색할 수 있습니다",
+  OCR_DISAGREEMENT: "글자 판독이 서로 달라 확인이 필요합니다",
+  DENSE_GRID: "문구가 너무 많아 자동 합격이 안 됩니다",
+  MEANING_UNCERTAIN: "번역 의미가 확실하지 않습니다",
+  UNTRANSLATED: "번역되지 않은 문구가 있습니다",
+  EXPANDED_PATCH_REVIEW: "수정 범위가 넓어 눈으로 확인이 필요합니다",
+  UNEXPLAINED_TEXT: "판독되지 않은 글자 영역이 있습니다",
+  LOW_CONFIDENCE_TEXT: "작은 글씨라 판독 확신이 낮습니다",
+  DECOR_ALTERED: "영문·로고 장식이 달라졌을 수 있습니다",
+  DUPLICATE_TRANSLATION: "서로 다른 문구가 같은 번역이 됐습니다",
+  UNTRACKED_PHRASE: "일부 문구의 처리 결과를 확인하지 못했습니다",
+  PRODUCT_CHANGED: "제품 모습이 원본과 달라 보입니다",
+  LAYOUT_SHIFTED: "판 배치가 원본과 달라졌습니다",
+  MEANING_MISMATCH: "번역 의미가 원문과 다를 수 있습니다",
+  TEXT_ALTERED: "확정한 번역문과 다르게 그려졌습니다",
+  SAFETY_BLOCKED: "모델이 이미지 생성을 거부했습니다",
+  RATIO_MISMATCH: "이미지 비율이 원본과 다릅니다",
+  OUTSIDE_CHANGED: "글자 밖 영역이 바뀌었습니다",
+  EXTRA_TEXT: "번역 외의 글자가 덧붙었습니다",
+  GIF_UNVERIFIED: "움직이는 이미지(GIF)라 눈으로 확인이 필요합니다",
+  MANUAL_EDIT: "직접 수정한 결과 — 확인 후 승인해주세요",
+  TIMEOUT: "시간이 초과됐습니다 — 재시도해주세요",
+  RATE_LIMITED: "호출 한도에 걸렸습니다 — 잠시 후 재시도해주세요",
+  AUTH_ERROR: "API 키 문제입니다 — 설정을 확인해주세요",
+  SERVER_ERROR: "번역 서버 오류입니다 — 재시도해주세요",
+  VERIFY_FAILED: "검사 과정이 실패했습니다",
+  RENDER_FAILED: "이미지 생성이 실패했습니다",
+};
+
+/** 코드 하나 → 한국어. 모르는 코드(장래 추가분)는 안전하게 감싼다 */
+export function reasonLabel(code: string): string {
+  return (REVIEW_CODE_LABELS as Record<string, string>)[code] ?? `확인 필요 (${code})`;
+}
+
+/**
+ * reviewReasons JSON → 운영자용 한국어 한 줄.
+ * 어떤 문구가 문제인지(detail 의 원문)는 그대로 보여준다 — 그건 코드가 아니라 단서다.
+ */
+export function reviewReasonsSummary(json: string | null | undefined): string {
+  if (!json) return "";
+  try {
+    const arr = JSON.parse(json) as { code: string; detail?: string }[];
+    return arr
+      .map((r) => `${reasonLabel(r.code)}${r.detail ? ` — ${r.detail}` : ""}`)
+      .join(" · ")
+      .slice(0, 300);
+  } catch {
+    return json.slice(0, 200);
+  }
+}
+
+/**
  * 상품 저장 폼의 상태 값으로부터 실제로 쓸 status·publishRequestedAt 을 정한다.
  *
  * ACTIVE 는 여기서 쓰지 않는다(status: undefined) — 번역·브랜드 게이트를 거치는
@@ -196,6 +260,14 @@ export const BLOCKING_TRANSLATE_STATUSES: string[] = [
   TRANSLATE_STATUS.FAILED,
   TRANSLATE_STATUS.ORIGINAL_KEPT,
 ];
+
+/**
+ * 번역 검수함이 다루는 상태 — 운영자가 지금 할 일이 있는 것만.
+ * BLOCKING 에서 TRANSLATING 만 뺀 것이다(진행 중이라 할 일이 없다).
+ */
+export const REVIEWABLE_TRANSLATE_STATUSES: string[] = BLOCKING_TRANSLATE_STATUSES.filter(
+  (s) => s !== TRANSLATE_STATUS.TRANSLATING,
+);
 
 /** 어드민 배지용 요약문 — "번역 중 2 · 검수 1" */
 export function gateSummary(g: GateResult): string {

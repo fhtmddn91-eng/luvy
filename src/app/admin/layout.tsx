@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
+import { REVIEWABLE_TRANSLATE_STATUSES } from "@/lib/productPublishGate";
 import { requireAdmin } from "@/lib/auth";
 import { logoutAction } from "@/lib/actions/auth";
 import { AdminSidebar } from "@/components/admin/AdminSidebar";
@@ -12,15 +13,19 @@ export default async function AdminLayout({
   const admin = await requireAdmin();
 
   // 처리 대기 건수 배지 — 페이지를 옮길 때마다 새로 계산된다
-  const [pendingMembers, newOrders, openInquiries] = await Promise.all([
+  const [pendingMembers, newOrders, openInquiries, pendingTranslations] = await Promise.all([
     db.user.count({ where: { status: "PENDING" } }),
     db.order.count({ where: { status: "RECEIVED" } }),
     db.inquiry.count({ where: { status: "OPEN" } }),
+    db.productAsset.count({
+      where: { translateStatus: { in: REVIEWABLE_TRANSLATE_STATUSES } },
+    }),
   ]);
   const badges = {
     "/admin/members": pendingMembers,
     "/admin/orders": newOrders,
     "/admin/inquiries": openInquiries,
+    "/admin/translations": pendingTranslations,
   };
 
   return (

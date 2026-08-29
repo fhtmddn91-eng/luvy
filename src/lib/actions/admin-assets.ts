@@ -298,6 +298,27 @@ export async function approveAssetCandidate(assetId: string): Promise<TranslateS
   return { ok: true };
 }
 
+/**
+ * 검수함의 일괄 승인 — 체크한 장들을 한 번에 승격한다.
+ * 규칙은 개별 승인(approveAssetCandidate)과 완전히 같다: 후보가 있는 장만,
+ * 같은 승격 경로로. 여기서 별도 로직을 만들면 승인 규칙이 두 갈래가 된다.
+ */
+export async function approveAssetCandidates(
+  assetIds: string[],
+): Promise<{ approved: number; skipped: number }> {
+  await requireAdmin();
+  let approved = 0;
+  let skipped = 0;
+  // 순차 실행 — 같은 상품의 승격(promoteIfReady)이 겹치면 조건부 갱신이 막아주지만,
+  // 굳이 경쟁을 만들 이유가 없다. 검수함 규모(수십 장)에서 순차는 충분히 빠르다.
+  for (const id of assetIds) {
+    const r = await approveAssetCandidate(id);
+    if (r.ok) approved++;
+    else skipped++;
+  }
+  return { approved, skipped };
+}
+
 /** 검수 대기 후보를 거부 — 원본 유지, 후보 파일 삭제, 같은 그림 캐시도 재사용 금지 */
 export async function rejectAssetCandidate(assetId: string): Promise<TranslateState> {
   await requireAdmin();
@@ -343,6 +364,10 @@ export async function approveAssetRerender(assetId: string): Promise<TranslateSt
     TRANSLATE_STATUS.NEEDS_REVIEW,
     TRANSLATE_STATUS.VERIFICATION_FAILED,
     TRANSLATE_STATUS.FAILED,
+    // 원본 유지도 허용 — 자동 재번역은 운영자 결정을 보호하려 막지만, 이 버튼을
+    // 누르는 건 그 운영자의 새 결정이다. 검수함에 떠 있는데 누르면 오류가 나는
+    // 막다른 길을 만들지 않는다.
+    TRANSLATE_STATUS.ORIGINAL_KEPT,
   ] as string[];
   if (!allowed.includes(asset.translateStatus ?? "")) {
     return { error: "재렌더 승인은 실패·검수 대기 이미지에서만 가능합니다." };

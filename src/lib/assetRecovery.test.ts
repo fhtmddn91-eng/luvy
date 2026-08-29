@@ -32,7 +32,12 @@ const renderCalls: { hint?: string }[] = [];
 vi.mock("@/lib/db", () => ({
   db: {
     productAsset: {
-      findUnique: async ({ where }: { where: { id: string } }) => assets.get(where.id) ?? null,
+      // Prisma 처럼 스냅샷을 돌려준다 — 같은 객체를 주면 이후 update 가 액션이
+      // 들고 있는 asset 변수까지 바꿔 실제와 다른 동작이 된다
+      findUnique: async ({ where }: { where: { id: string } }) => {
+        const row = assets.get(where.id);
+        return row ? { ...row } : null;
+      },
       update: async ({ where, data }: { where: { id: string }; data: Partial<AssetRow> }) => {
         const r = assets.get(where.id)!;
         Object.assign(r, data);
@@ -78,7 +83,7 @@ vi.mock("@/lib/productAssets", () => ({
   assetKindFor: () => "DETAIL", nextThumbnail: () => null,
 }));
 
-const { uploadAssetCandidate, regenerateAssetWithHint, translateProductAsset, approveAssetRerender } =
+const { uploadAssetCandidate, regenerateAssetWithHint, translateProductAsset, approveAssetRerender, approveAssetCandidates } =
   await import("./actions/admin-assets");
 
 const BOXES = JSON.stringify([{ box: [1, 2, 3, 4], zh: "强震", ko: "진동", bg: "#fff", fg: "#000" }]);
@@ -265,5 +270,63 @@ describe("approveAssetRerender — 재렌더의 정상 판정도 안내다", () 
     seed({ translateStatus: "FAILED" });
     runResult.value = { result: "failed", message: "원인" };
     expect((await approveAssetRerender("a1")).error).toBeTruthy();
+  });
+});
+
+
+/**
+ * 검수함의 일괄 승인 — 여러 장을 하나씩 누르는 대신 체크해서 한 번에.
+ * 승인 규칙은 개별 승인과 완전히 같아야 한다(후보가 있어야만, url 승격, 검수 해제).
+ */
+describe("approveAssetCandidates — 일괄 승인", () => {
+  // seed() 는 항상 a1 키로 넣어서 두 번 부르면 첫 행이 덮인다 — 직접 만든다
+  const seedWithCandidate = (id: string): AssetRow => {
+    const row: AssetRow = {
+      id, productId: "p1", kind: "DETAIL",
+      url: `/uploads/tr-${id}.jpg`, originalUrl: `/uploads/orig-${id}.jpg`,
+      ocrData: BOXES, candidateUrl: `/uploads/cand-${id}.jpg`, candidateOcr: BOXES,
+      translateStatus: "NEEDS_REVIEW", reviewReasons: null, bytes: 10,
+    };
+    assets.set(id, row);
+    return row;
+  };
+
+  it("후보 있는 장은 전부 승격되고 개수를 돌려준다", async () => {
+    const a = seedWithCandidate("a1");
+    const b = seedWithCandidate("a2");
+    const r = await approveAssetCandidates(["a1", "a2"]);
+    expect(r.approved).toBe(2);
+    expect(a.url).toBe("/uploads/cand-a1.jpg");
+    expect(b.url).toBe("/uploads/cand-a2.jpg");
+    expect(a.translateStatus).toBe("VERIFIED");
+  });
+
+  it("후보 없는 장은 건너뛰고 이유를 남긴다 — 전체가 죽지 않는다", async () => {
+    seedWithCandidate("a1");
+    const noCand = seedWithCandidate("a2");
+    noCand.candidateUrl = null;
+    const r = await approveAssetCandidates(["a1", "a2", "ghost"]);
+    expect(r.approved).toBe(1);
+    expect(r.skipped).toBe(2);
+    expect(assets.get("a1")!.translateStatus).toBe("VERIFIED");
+    expect(noCand.translateStatus).not.toBe("VERIFIED"); // 승인 규칙 우회 금지
+  });
+
+  it("빈 목록은 아무것도 하지 않는다", async () => {
+    const r = await approveAssetCandidates([]);
+    expect(r.approved).toBe(0);
+    expect(r.skipped).toBe(0);
+  });
+});
+
+
+describe("approveAssetRerender — 원본 유지 자산도 명시적 재시도는 된다", () => {
+  it("ORIGINAL_KEPT 에서 다시 만들기를 누르면 실행된다", async () => {
+    // 자동 재번역은 금지지만(운영자 결정 보호), 버튼을 누르는 건 그 운영자의
+    // 새 결정이다 — 검수함에 떠 있는데 눌러서 오류가 나면 막다른 길이 된다
+    seed({ translateStatus: "ORIGINAL_KEPT" });
+    runResult.value = { result: "review", message: "MANUAL_EDIT" };
+    const r = await approveAssetRerender("a1");
+    expect(r.error).toBeUndefined();
   });
 });

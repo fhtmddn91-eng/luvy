@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   productPublishGate,
   BLOCKING_TRANSLATE_STATUSES,
+  REVIEW_CODE_LABELS,
+  reasonLabel,
+  reviewReasonsSummary,
   productSaveStatusData,
   revertedAssetTranslation,
   allowsExposure,
@@ -245,5 +248,46 @@ describe("BLOCKING_TRANSLATE_STATUSES — 보류 카운트와 게이트가 어�
   it("노출 허용 상태는 목록에 없다", () => {
     expect(BLOCKING_TRANSLATE_STATUSES).not.toContain(TRANSLATE_STATUS.VERIFIED);
     expect(BLOCKING_TRANSLATE_STATUSES).not.toContain(TRANSLATE_STATUS.NO_FOREIGN_TEXT);
+  });
+});
+
+/**
+ * 운영자에게 보이는 사유는 전부 한국어여야 한다.
+ *
+ * 실사례(2026-08-30 피드백): 검수 카드에 "OCR_DISAGREEMENT: 舒适体验升级" 처럼
+ * 영어 코드가 그대로 노출됐다. 운영자는 초보 1명이다 — 코드는 개발자용이지
+ * 화면용이 아니다. 새 코드를 추가하면 라벨도 함께 추가해야 컴파일이 된다
+ * (Record<ReviewCode, string> — 빠지면 tsc 오류).
+ */
+describe("REVIEW_CODE_LABELS — 사유 코드는 화면에서 전부 한국어", () => {
+  it("모든 라벨이 비어 있지 않고 영어 코드 형태가 아니다", () => {
+    for (const [code, label] of Object.entries(REVIEW_CODE_LABELS)) {
+      expect(label.trim().length, code).toBeGreaterThan(0);
+      expect(label, code).not.toMatch(/^[A-Z_]+$/);
+      expect(label, code).toMatch(/[가-힣]/); // 한국어가 들어 있어야 한다
+    }
+  });
+
+  it("reasonLabel 은 모르는 코드도 안전하게 처리한다", () => {
+    expect(reasonLabel("OCR_DISAGREEMENT")).toContain("판독");
+    expect(reasonLabel("UNKNOWN_FUTURE_CODE")).toBe("확인 필요 (UNKNOWN_FUTURE_CODE)");
+  });
+
+  it("reviewReasonsSummary 는 JSON 사유를 한국어 한 줄로 만든다", () => {
+    const json = JSON.stringify([
+      { code: "OCR_DISAGREEMENT", detail: "舒适体验升级" },
+      { code: "UNTRANSLATED", detail: "防水设计" },
+    ]);
+    const s = reviewReasonsSummary(json);
+    expect(s).toContain("판독");
+    expect(s).toContain("舒适体验升级"); // 어떤 문구인지는 원문 그대로 보여준다
+    expect(s).not.toContain("OCR_DISAGREEMENT"); // 코드는 숨긴다
+    expect(s).not.toContain("UNTRANSLATED");
+  });
+
+  it("망가진 JSON·빈 값도 죽지 않는다", () => {
+    expect(reviewReasonsSummary(null)).toBe("");
+    expect(reviewReasonsSummary("")).toBe("");
+    expect(reviewReasonsSummary("깨진{json")).toBe("깨진{json");
   });
 });
