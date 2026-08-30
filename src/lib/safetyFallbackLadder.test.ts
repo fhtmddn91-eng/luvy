@@ -145,4 +145,27 @@ describe("renderSafetyFallback — 사다리·상한·사유", () => {
     expect(r.note).not.toContain("남았을 수 있는 글자");
     expect(r.note).not.toContain("확인이 안 됐습니다");
   }, 60_000);
+
+  // ── 육안 하자 방지 (2026-08-31 운영 신고) ──
+  it("사진 배경 문구는 로컬로 덮지 않고 미해결로 남긴다 — 흰 뭉개짐 방지", async () => {
+    stubGemini(log, "refuse", "korean"); // 모델이 전부 거부 → 로컬 단계까지 내려감
+    const img = await makeImage();
+    const r = await renderSafetyFallback(img, "image/jpeg", [
+      box([100, 100, 200, 600], { zh: "사진위글자", solid_bg: false }),
+      box([300, 100, 400, 600], { zh: "배지글자", solid_bg: true }),
+    ]);
+    // 사진 배경 문구만 미해결로 보고되고, 단색 배지 문구는 그려진다
+    expect(r.note).toContain("사진위글자");
+    expect(r.note).not.toContain("배지글자");
+  }, 60_000);
+
+  it("사진 배경 문구만 있는 띠는 로컬 덮기를 아예 쓰지 않는다 — 원본 유지가 바닥", async () => {
+    stubGemini(log, "refuse", "korean");
+    const img = await makeImage();
+    const r = await renderSafetyFallback(img, "image/jpeg", [
+      box([100, 100, 200, 600], { zh: "사진위글자", solid_bg: false }),
+    ]);
+    expect(r.note).toContain("사진위글자"); // 미해결로 정직하게 보고
+    expect(r.note).not.toContain("글자만 덮는 방식"); // 로컬 덮기를 안 썼다는 증거
+  }, 60_000);
 });

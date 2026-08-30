@@ -4092,6 +4092,77 @@ export function findLeftoverZh(observedTexts: string[], targets: OcrBox[]): stri
     .map((b) => b.zh);
 }
 
+/**
+ * 겹쳐 인쇄된 문구 묶기 — 서로 겹치는 박스를 한 그룹으로 만든다.
+ *
+ * 실사례(2026-08-31 액상): 원본이 큰 제목과 부제를 같은 자리에 겹쳐 인쇄한
+ * 디자인이었는데, 모델이 그린 글자 위에 로컬 렌더가 나머지 하나를 또 그려서
+ * 두 층이 섞였다. 겹치는 박스는 "한 덩어리"로 취급해 서로 다른 방식으로
+ * 그리지 않는다 — 층 섞임은 어떤 폰트·좌표 보정으로도 못 고친다.
+ */
+export function groupOverlappingBoxes(boxes: OcrBox[]): OcrBox[][] {
+  const hit = (a: OcrBox, b: OcrBox) => {
+    const [ay1, ax1, ay2, ax2] = a.box;
+    const [by1, bx1, by2, bx2] = b.box;
+    return ax1 < bx2 && bx1 < ax2 && ay1 < by2 && by1 < ay2;
+  };
+  const groups: OcrBox[][] = [];
+  for (const b of boxes) {
+    const touching = groups.filter((g) => g.some((m) => hit(m, b)));
+    if (touching.length === 0) {
+      groups.push([b]);
+      continue;
+    }
+    // 여러 그룹을 잇는 박스는 그 그룹들을 하나로 합친다 (연쇄 A-B, B-C)
+    const merged = [b, ...touching.flat()];
+    for (const g of touching) groups.splice(groups.indexOf(g), 1);
+    groups.push(merged);
+  }
+  return groups;
+}
+
+/**
+ * 이 박스에 로컬 덮기를 써도 되는가 — **사진·그라데이션 배경에는 금지**.
+ *
+ * 로컬 지우개는 원문 획을 지운 자리를 우리가 메워야 해서 사진 위에서는 뿌연
+ * 사각형이 남는다(이 파일의 eraseThenDraw 주석에 기록된 한계, 운영 신고
+ * 2026-08-31 "뒤에 흰색 일그러짐"). 못 고칠 바엔 원문을 남기고 사람에게
+ * 넘기는 게 이 몰의 무결 원칙이다. 판정이 없으면 단색 취급(기존 규약과 동일).
+ */
+export function canLocalOverlay(b: OcrBox): boolean {
+  return b.solid_bg !== false;
+}
+
+/**
+ * 띠 패치 가장자리의 알파를 낮춰 원본과 부드럽게 잇는다.
+ *
+ * 이미지 경계에 닿은 면은 페더하지 않는다 — 그쪽엔 이어붙일 이음선이 없고,
+ * 페더하면 원본 가장자리가 도로 비쳐 오히려 띠가 보인다.
+ */
+export function applyEdgeFeather(
+  rgba: Buffer,
+  w: number,
+  h: number,
+  feather: number,
+  edges: { left: boolean; top: boolean; right: boolean; bottom: boolean },
+): Buffer {
+  if (feather <= 0) return rgba;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const d = Math.min(
+        edges.left ? x + 1 : Infinity,
+        edges.top ? y + 1 : Infinity,
+        edges.right ? w - x : Infinity,
+        edges.bottom ? h - y : Infinity,
+      );
+      if (d >= feather) continue;
+      const i = (y * w + x) * 4;
+      rgba[i + 3] = Math.round(rgba[i + 3] * (d / feather));
+    }
+  }
+  return rgba;
+}
+
 /** 박스 중심이 띠 안에 있는가 — 띠에 걸친 박스를 어느 띠가 그릴지 정한다 */
 function boxInBand(b: OcrBox, band: BandRect, imgW: number, imgH: number): boolean {
   const [y1, x1, y2, x2] = b.box;
@@ -4192,28 +4263,65 @@ export async function renderSafetyFallback(
             /* 아래 로컬 단계로 */
           }
         }
-        // ③ 최후 — 순수 로컬 덮기 (호출 0회). 자국은 육안 관문이 거른다
+        // ③ 최후 — 순수 로컬 덮기 (호출 0회).
+        //    사진·그라데이션 배경 박스는 제외한다: 로컬 지우개가 그 위에서
+        //    뿌연 사각형을 남기기 때문(운영 신고 "흰색 일그러짐"). 그런 문구는
+        //    원문을 남기고 미해결로 알린다 — 더럽힐 바엔 원본 유지.
         if (!patch) {
-          const r = await renderStill(crop, "image/jpeg", mapped);
+          const drawable = mapped.filter(canLocalOverlay);
+          const skipped = mapped.filter((b) => !canLocalOverlay(b));
+          if (drawable.length === 0) throw new Error("사진 배경 문구만 남아 로컬 덮기 불가");
+          const r = await renderStill(crop, "image/jpeg", drawable);
           patch = await sharp(r.data).png().toBuffer();
-          leftover = [];
+          leftover = skipped.map((b) => b.zh);
           methods.local++;
         } else if ((leftover?.length ?? 0) > 0) {
           // 재시도·지우기까지 전부 막혔는데 잔존이 남은 패치 — 실사례(2026-08-30
           // 액상): 이 강등이 없으면 한자 잔존 패치가 그대로 채택된다. 잔존 자리만
           // 로컬로 덮어 ①이 성공시킨 나머지 문구의 품질은 지킨다.
-          const leftBoxes = mapped.filter((b) => leftover!.includes(b.zh));
-          if (leftBoxes.length > 0) {
-            const r = await renderStill(patch, "image/png", leftBoxes);
+          //
+          // 단 두 경우는 덮지 않는다:
+          //  - 모델이 이미 그린 문구와 겹치는 자리 → 두 층이 섞인다(실사례:
+          //    「밀착 핥기」 위에 「쾌감의 맥박」이 겹쳐 인쇄됨)
+          //  - 사진·그라데이션 배경 → 흰 뭉개짐
+          const groups = groupOverlappingBoxes(mapped);
+          const leftSet = new Set(leftover!);
+          const drawable = mapped.filter((b) => {
+            if (!leftSet.has(b.zh)) return false;
+            if (!canLocalOverlay(b)) return false;
+            const g = groups.find((grp) => grp.includes(b));
+            return !g || g.every((m) => leftSet.has(m.zh));
+          });
+          if (drawable.length > 0) {
+            const r = await renderStill(patch, "image/png", drawable);
             patch = await sharp(r.data).png().toBuffer();
-            leftover = [];
+            const drawn = new Set(drawable.map((b) => b.zh));
+            leftover = leftover!.filter((zh) => !drawn.has(zh));
             methods.local++;
           }
         }
         if (leftover && leftover.length > 0) unresolvedZh.push(...leftover);
         if (patch && leftover === null) leftoverCheckFailed++;
+        // 경계 페더 — 각지게 붙이면 이음선이 보인다. 이미지 끝에 닿은 면은
+        // 이어붙일 상대가 없으므로 페더하지 않는다(페더하면 원본이 도로 비친다).
+        const raw = await sharp(patch)
+          .resize(band.width, band.height, { fit: "fill" })
+          .ensureAlpha()
+          .raw()
+          .toBuffer();
+        const feather = Math.min(8, Math.floor(Math.min(band.width, band.height) / 4));
+        const feathered = applyEdgeFeather(raw, band.width, band.height, feather, {
+          left: band.left > 0,
+          top: band.top > 0,
+          right: band.left + band.width < W,
+          bottom: band.top + band.height < H,
+        });
         patches.push({
-          input: await sharp(patch).resize(band.width, band.height, { fit: "fill" }).png().toBuffer(),
+          input: await sharp(feathered, {
+            raw: { width: band.width, height: band.height, channels: 4 },
+          })
+            .png()
+            .toBuffer(),
           left: band.left,
           top: band.top,
         });
