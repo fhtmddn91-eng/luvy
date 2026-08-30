@@ -4166,6 +4166,17 @@ export async function renderSafetyFallback(
           patch = await sharp(r.data).png().toBuffer();
           leftover = [];
           methods.local++;
+        } else if ((leftover?.length ?? 0) > 0) {
+          // 재시도·지우기까지 전부 막혔는데 잔존이 남은 패치 — 실사례(2026-08-30
+          // 액상): 이 강등이 없으면 한자 잔존 패치가 그대로 채택된다. 잔존 자리만
+          // 로컬로 덮어 ①이 성공시킨 나머지 문구의 품질은 지킨다.
+          const leftBoxes = mapped.filter((b) => leftover!.includes(b.zh));
+          if (leftBoxes.length > 0) {
+            const r = await renderStill(patch, "image/png", leftBoxes);
+            patch = await sharp(r.data).png().toBuffer();
+            leftover = [];
+            methods.local++;
+          }
         }
         if (leftover && leftover.length > 0) unresolvedZh.push(...leftover);
         patches.push({
