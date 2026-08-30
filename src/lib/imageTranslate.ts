@@ -4053,6 +4053,22 @@ export function remapBoxToBand(b: OcrBox, band: BandRect, imgW: number, imgH: nu
   };
 }
 
+/**
+ * 띠 패치 판독문에서 "교체·삭제됐어야 할 원문"이 그대로 남았는지 찾는다.
+ *
+ * 실사례(2026-08-30 합환토·액상): 띠 재생성이 장식 제목 둘째 줄을 브랜드
+ * 로고로 착각해 보존했는데, 검사 없이 채택해 한자 잔존 후보가 검수함까지
+ * 올라갔다. keep(보존 지정) 원문은 남는 게 정상이라 잔존으로 치지 않는다.
+ */
+export function findLeftoverZh(observedTexts: string[], targets: OcrBox[]): string[] {
+  const norm = (s: string) => s.replace(/\s+/g, "");
+  const observed = norm(observedTexts.join(" "));
+  return targets
+    .filter((b) => (b.mode ?? "translate") !== "keep" && b.zh.trim())
+    .filter((b) => observed.includes(norm(b.zh)))
+    .map((b) => b.zh);
+}
+
 /** 박스 중심이 띠 안에 있는가 — 띠에 걸친 박스를 어느 띠가 그릴지 정한다 */
 function boxInBand(b: OcrBox, band: BandRect, imgW: number, imgH: number): boolean {
   const [y1, x1, y2, x2] = b.box;
@@ -4080,7 +4096,18 @@ export async function renderSafetyFallback(
 
   // 폴백 전용 예산 스코프 — 바깥(자동 1회) 예산과 분리해 상한을 따로 못 박는다
   const budget = { left: MAX_FALLBACK_CALLS, used: 0 };
-  const methods = { regen: 0, erase: 0, local: 0 };
+  const methods = { regen: 0, retry: 0, erase: 0, local: 0 };
+  /** 끝내 남은 원문 — 검수 카드에 실어 검수자가 바로 그 자리를 보게 한다 */
+  const unresolvedZh: string[] = [];
+  /** 띠 패치에 대상 원문이 남았는지 — 텍스트 모델(사실상 무료)로 확인. 실패 시 null(미상) */
+  const bandLeftover = async (patch: Buffer, mapped: OcrBox[]): Promise<string[] | null> => {
+    try {
+      const lines = await transcribeText(await sharp(patch).png().toBuffer(), "image/png");
+      return findLeftoverZh(lines.map((l) => l.text), mapped);
+    } catch {
+      return null; // 검사 실패 = 잔존 미상 — 채택은 하되 육안 관문이 남아 있다
+    }
+  };
   try {
     const patches: { input: Buffer; left: number; top: number }[] = [];
     await imageBudget.run(budget, async () => {
@@ -4091,20 +4118,43 @@ export async function renderSafetyFallback(
           .map((b) => remapBoxToBand(b, band, W, H));
         if (mapped.length === 0) continue;
         let patch: Buffer | null = null;
+        let leftover: string[] | null = null;
         // ① 띠 재생성 — 모델이 배경+글자를 함께. 실측상 장식체 모사가 가장 좋다
         if (budget.left > 0) {
           try {
             patch = await callImageEdit(crop, "image/jpeg", regenPrompt(mapped), band.width, band.height);
             methods.regen++;
+            leftover = await bandLeftover(patch, mapped);
           } catch {
             /* 띠도 거부·실패 — 재호출 없이 아래 단계로 */
           }
         }
-        // ② 모델은 지우기만, 확정 번역문은 로컬 렌더러가 그린다 (오탈자 0)
-        if (!patch && budget.left > 0) {
+        // ①-재시도: 장식 제목을 로고로 착각해 보존하는 습관(실사례: 转着戳·咬住舔)을
+        // "로고가 아니다" 지시로 깬다. 재시도가 더 나빠지면 원래 패치를 지킨다.
+        if (patch && (leftover?.length ?? 0) > 0 && budget.left > 0) {
+          try {
+            const hint = `이 조각 안의 다음 문구는 브랜드 로고가 아니라 제품 홍보 문구다 — 반드시 지정된 한국어로 교체하라: ${mapped
+              .filter((b) => leftover!.includes(b.zh))
+              .map((b) => `${b.zh}→${b.ko || "(지움)"}`)
+              .join(", ")}`;
+            const retried = await callImageEdit(crop, "image/jpeg", regenPrompt(mapped, hint), band.width, band.height);
+            methods.retry++;
+            const retriedLeftover = await bandLeftover(retried, mapped);
+            if ((retriedLeftover?.length ?? Infinity) < leftover!.length) {
+              patch = retried;
+              leftover = retriedLeftover;
+            }
+          } catch {
+            /* 재시도 실패 — 원래 패치 유지, 아래 강등 판단으로 */
+          }
+        }
+        // ② 그래도 남으면 지우기+로컬로 강등 — 교체가 구조적으로 보장된다
+        //    (재생성이 아예 실패한 띠도 여기로 온다)
+        if ((!patch || (leftover?.length ?? 0) > 0) && budget.left > 0) {
           try {
             const r = await eraseThenDraw(crop, "image/jpeg", eraseTargets(mapped), mapped);
             patch = await sharp(r.data).png().toBuffer();
+            leftover = r.unresolved.map((b) => b.zh);
             methods.erase++;
           } catch {
             /* 아래 로컬 단계로 */
@@ -4114,8 +4164,10 @@ export async function renderSafetyFallback(
         if (!patch) {
           const r = await renderStill(crop, "image/jpeg", mapped);
           patch = await sharp(r.data).png().toBuffer();
+          leftover = [];
           methods.local++;
         }
+        if (leftover && leftover.length > 0) unresolvedZh.push(...leftover);
         patches.push({
           input: await sharp(patch).resize(band.width, band.height, { fit: "fill" }).png().toBuffer(),
           left: band.left,
@@ -4129,9 +4181,11 @@ export async function renderSafetyFallback(
       mime === "image/png"
         ? { data: outPng, mime: "image/png" }
         : { data: await sharp(outPng).jpeg({ quality: 92 }).toBuffer(), mime: "image/jpeg" };
+    const counts = `재생성 ${methods.regen}·재시도 ${methods.retry}·지우기 ${methods.erase}·로컬 ${methods.local}`;
+    const leftoverNote = unresolvedZh.length > 0 ? ` · 잔존 의심: ${unresolvedZh.join(", ").slice(0, 120)}` : "";
     return {
       ...out,
-      note: `글자 띠 ${bands.length}곳 국소 편집(재생성 ${methods.regen}·지우기 ${methods.erase}·로컬 ${methods.local}) — 이음새 육안 확인 후 승인`,
+      note: `글자 띠 ${bands.length}곳 국소 편집(${counts})${leftoverNote} — 이음새 육안 확인 후 승인`,
     };
   } finally {
     console.log(

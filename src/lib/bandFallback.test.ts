@@ -9,7 +9,7 @@
  *     어긋나면 글자가 띠 밖에 그려져 합성 후 위치가 틀어진다
  */
 import { describe, it, expect } from "vitest";
-import { clusterBands, remapBoxToBand, type OcrBox } from "./imageTranslate";
+import { clusterBands, remapBoxToBand, findLeftoverZh, type OcrBox } from "./imageTranslate";
 
 const box = (b: [number, number, number, number]): OcrBox => ({
   box: b, zh: "测试", ko: "테스트", bg: "#fff", fg: "#000",
@@ -66,5 +66,29 @@ describe("remapBoxToBand — 좌표 재매핑", () => {
     expect(out.ko).toBe("테스트");
     expect(out.bold).toBe(true);
     expect(out.scale).toBe(1.2);
+  });
+});
+
+describe("findLeftoverZh — 띠 패치의 원문 잔존 검사", () => {
+  // 실사례(2026-08-30 합환토): 띠 재생성이 제목 둘째 줄(转着戳)을 로고로 착각해
+  // 그대로 두었는데, 검사 없이 채택해 잔존 후보가 검수함까지 올라갔다.
+  const t = (zh: string, ko = "번역"): OcrBox => ({ box: [0, 0, 100, 100], zh, ko, bg: "#fff", fg: "#000" });
+
+  it("판독문에 대상 원문이 그대로 있으면 잡는다 — 띄어쓰기가 달라도", () => {
+    expect(findLeftoverZh(["밀착 입", "转着 戳"], [t("夹住吸"), t("转着戳")])).toEqual(["转着戳"]);
+  });
+
+  it("교체가 끝난 띠는 빈 배열", () => {
+    expect(findLeftoverZh(["밀착 흡입", "분리형 컨트롤"], [t("夹住吸"), t("分体控制")])).toEqual([]);
+  });
+
+  it("보존 대상(로고·keep) 원문은 남아 있어도 잔존이 아니다", () => {
+    const keep: OcrBox = { ...t("次日达"), mode: "keep" };
+    expect(findLeftoverZh(["밀착 흡입", "次日达"], [t("夹住吸"), keep])).toEqual([]);
+  });
+
+  it("지움(erase) 대상이 남아 있으면 잔존이다", () => {
+    const erase: OcrBox = { ...t("水印水印"), mode: "erase" };
+    expect(findLeftoverZh(["水印水印"], [erase])).toEqual(["水印水印"]);
   });
 });
