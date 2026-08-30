@@ -3994,6 +3994,29 @@ export interface BandRect {
 const MAX_FALLBACK_CALLS = 5;
 /** 박스 주변 패딩(‰) — 딱 맞게 자르면 배경 문맥이 없어 복원이 깨진다 */
 const BAND_PAD_PERMIL = 60;
+/**
+ * 띠 하나의 면적 상한(이미지 대비). 연쇄 병합으로 띠가 이미지의 절반 가까이
+ * 커지면 "글자 영역만 보낸다"는 최소 범위 편집이 무너져 민감 영역까지 함께
+ * 전송된다 — 그런 띠는 모델로 보내지 않고 미해결로 남긴다.
+ */
+const MAX_BAND_AREA_RATIO = 0.4;
+
+/**
+ * 국소 폴백을 발동해도 되는 거부인가 — 구조화된 안전 코드 화이트리스트.
+ *
+ * "이미지를 반환하지 않음"(미반환)은 제외한다: 실측(2026-08-31)상 미반환은
+ * 재시도 1회에 뒤집히는 일시 증상이라, 띠 호출(최대 5회)을 태우는 폴백보다
+ * 재시도 안내가 싸고 정확하다. 429·타임아웃은 호출부에서 transientReason 이
+ * 먼저 가로채므로 여기 오지 않는다.
+ */
+const SAFETY_FALLBACK_REASONS = new Set(["PROHIBITED_CONTENT", "SAFETY", "IMAGE_SAFETY"]);
+
+export function shouldAttemptSafetyFallback(msg: string, mime: string, enabled: boolean): boolean {
+  if (!enabled) return false;
+  if (mime === "image/gif") return false; // 프레임 문제 — 정지 패치 트랙에서 다룬다
+  const m = msg.match(/모델 거부\(([A-Z_]+)\)/);
+  return m !== null && SAFETY_FALLBACK_REASONS.has(m[1]);
+}
 
 /**
  * 번역 대상 박스들을 "패딩 포함 띠"로 묶는다. 패딩 후 겹치는 박스를 한 띠로
@@ -4091,14 +4114,23 @@ export async function renderSafetyFallback(
     (b) => ((b.mode ?? "translate") === "translate" && b.ko.trim()) || b.mode === "erase",
   );
   if (targets.length === 0) throw new Error("국소 편집 대상 문구 없음");
-  const bands = clusterBands(targets, W, H);
-  if (bands.length === 0) throw new Error("띠를 만들 수 없음");
+  const allBands = clusterBands(targets, W, H);
+  if (allBands.length === 0) throw new Error("띠를 만들 수 없음");
+  // 면적 상한 — 연쇄 병합으로 커진 거대 띠는 "글자 영역만 보낸다"는 전제를
+  // 깨므로 모델로 보내지 않는다. 그 안의 문구는 미해결로 정직하게 남긴다.
+  const bands = allBands.filter((b) => (b.width * b.height) / (W * H) <= MAX_BAND_AREA_RATIO);
+  const oversizedZh = allBands
+    .filter((b) => (b.width * b.height) / (W * H) > MAX_BAND_AREA_RATIO)
+    .flatMap((band) => targets.filter((t) => boxInBand(t, band, W, H)).map((t) => t.zh));
+  if (bands.length === 0) throw new Error("글자 영역이 이미지 대부분을 덮어 국소 편집이 불가능함");
 
   // 폴백 전용 예산 스코프 — 바깥(자동 1회) 예산과 분리해 상한을 따로 못 박는다
   const budget = { left: MAX_FALLBACK_CALLS, used: 0 };
   const methods = { regen: 0, retry: 0, erase: 0, local: 0 };
   /** 끝내 남은 원문 — 검수 카드에 실어 검수자가 바로 그 자리를 보게 한다 */
-  const unresolvedZh: string[] = [];
+  const unresolvedZh: string[] = [...oversizedZh];
+  /** 잔존 검사(OCR)가 실패한 띠 수 — 침묵 채택 금지, 검수 사유로 알린다 */
+  let leftoverCheckFailed = 0;
   /** 띠 패치에 대상 원문이 남았는지 — 텍스트 모델(사실상 무료)로 확인. 실패 시 null(미상) */
   const bandLeftover = async (patch: Buffer, mapped: OcrBox[]): Promise<string[] | null> => {
     try {
@@ -4179,6 +4211,7 @@ export async function renderSafetyFallback(
           }
         }
         if (leftover && leftover.length > 0) unresolvedZh.push(...leftover);
+        if (patch && leftover === null) leftoverCheckFailed++;
         patches.push({
           input: await sharp(patch).resize(band.width, band.height, { fit: "fill" }).png().toBuffer(),
           left: band.left,
@@ -4198,9 +4231,12 @@ export async function renderSafetyFallback(
     );
     const leftoverNote =
       unresolvedZh.length > 0 ? ` · 아직 남았을 수 있는 글자: ${unresolvedZh.join(", ").slice(0, 120)}` : "";
+    const checkNote =
+      leftoverCheckFailed > 0 ? ` · ${leftoverCheckFailed}곳은 남은 글자 확인이 안 됐습니다 — 원문이 남았는지 함께 봐주세요` : "";
+    const seamNote = methods.local > 0 ? " · 일부는 글자만 덮는 방식이라 덧댄 자국이 보일 수 있습니다" : "";
     return {
       ...out,
-      note: `글자 영역 ${bands.length}곳을 자동으로 고쳤습니다${leftoverNote} — 덧댄 자국·이음새가 없는지 확인해주세요`,
+      note: `글자 영역 ${bands.length}곳을 자동으로 고쳤습니다${leftoverNote}${checkNote}${seamNote} — 덧댄 자국·이음새가 없는지 확인해주세요`,
     };
   } finally {
     console.log(
@@ -4671,9 +4707,10 @@ async function translateImageAutoInner(
     const t = transientReason(msg);
     if (t) return { status: "RETRYABLE", reasons: [t] };
     if (msg.includes("모델 거부") || msg.includes("반환하지 않음")) {
-      // 어드민 승인 재렌더에서만: 글자 띠 국소 편집 폴백 (GIF 는 프레임 문제로 제외).
+      // 어드민 승인 재렌더에서만 + 구조화된 안전 코드 화이트리스트에 한해:
+      // 글자 띠 국소 편집 폴백. 미반환(NO_IMAGE)·GIF 는 제외한다.
       // 성공해도 VERIFIED 는 없다 — 후보로만 떠서 이음새를 사람이 본다.
-      if (safetyFallback && mime !== "image/gif") {
+      if (shouldAttemptSafetyFallback(msg, mime, safetyFallback)) {
         try {
           const fb = await renderSafetyFallback(data, mime, boxes);
           return {
