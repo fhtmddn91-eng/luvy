@@ -2318,10 +2318,13 @@ async function tryBuildGifPatch(
     }
     return null;
   } catch (e) {
-    console.warn(
-      `[imageTranslate] GIF 정지 패치 실패 — 오버레이 폴백: ${e instanceof Error ? e.message : e}`,
-    );
-    return null;
+    // 삼키지 않는다 (2026-08-31 실측). 예전엔 여기서 null 로 뭉개서 429·타임아웃·
+    // 안전필터 거부가 전부 "GIF 정지 패치 실패"(FAILED)로 굳었다 — 월 한도 초과
+    // 때 정지 이미지는 RETRYABLE 로 살아나는데 GIF 만 재시도 승인 버튼이 안 떴다.
+    // 원래 오류를 그대로 올려야 호출부 분류기(transientReason·모델 거부)가 일한다.
+    // (주석에 있던 "오버레이 폴백"은 이미 제거된 경로다 — null 의 의미는
+    // "판정상 얹을 수 없음"뿐이고, 그 경우들은 위에서 명시적으로 return null 한다)
+    throw e;
   }
 }
 

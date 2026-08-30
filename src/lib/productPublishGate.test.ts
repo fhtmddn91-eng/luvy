@@ -5,6 +5,7 @@ import {
   REVIEW_CODE_LABELS,
   reasonLabel,
   reviewReasonsSummary,
+  hasSafetyRefusal,
   productSaveStatusData,
   revertedAssetTranslation,
   allowsExposure,
@@ -289,5 +290,62 @@ describe("REVIEW_CODE_LABELS — 사유 코드는 화면에서 전부 한국어"
     expect(reviewReasonsSummary(null)).toBe("");
     expect(reviewReasonsSummary("")).toBe("");
     expect(reviewReasonsSummary("깨진{json")).toBe("깨진{json");
+  });
+});
+
+/**
+ * 사유 표시 다듬기 (2026-08-31 운영 실측).
+ *
+ * 실전 검수함에서 확인된 노출 문제 세 가지:
+ *  1. 좌표 덤프 — "판독되지 않은 글자 영역 — [205,333,235,395] h24px 대비38 · …"
+ *     운영자에게 완전히 무의미한 기술 정보가 사유의 절반을 차지했다.
+ *  2. 월 지출 한도 초과가 영어 원문으로만 보였다 — 운영자가 원인을 알 수 없었다.
+ *  3. 안전필터 거부 판별이 화면에 필요하다 — 거부 카드는 유료 재생성보다
+ *     무료 직접 업로드를 먼저 권해야 한다.
+ */
+describe("reviewReasonsSummary — 좌표 덤프는 개수로 줄인다", () => {
+  it("좌표 상세는 '몇 곳'으로 요약한다", () => {
+    const json = JSON.stringify([
+      { code: "UNEXPLAINED_TEXT", detail: "[205,333,235,395] h24px 대비38 · [538,18,553,40] h12px 대비33" },
+      { code: "LOW_CONFIDENCE_TEXT", detail: "[570,853,578,865] h6px 확신0.4" },
+    ]);
+    const s = reviewReasonsSummary(json);
+    expect(s).toContain("2곳");
+    expect(s).toContain("1곳");
+    expect(s).not.toContain("[205"); // 좌표는 숨긴다
+    expect(s).not.toContain("h24px");
+  });
+
+  it("좌표가 아닌 상세(원문 문구)는 그대로 보여준다", () => {
+    const json = JSON.stringify([{ code: "OCR_DISAGREEMENT", detail: "强震, 后庭开肛" }]);
+    expect(reviewReasonsSummary(json)).toContain("强震");
+  });
+});
+
+describe("reasonLine — 월 한도 초과는 한국어로 설명한다", () => {
+  it("monthly spending cap 이 감지되면 전용 안내로 바꾼다", () => {
+    const s = reviewReasonsSummary(
+      JSON.stringify([{ code: "RATE_LIMITED", detail: "API 오류 429 (RESOURCE_EXHAUSTED | Your project has exceeded its monthly spending cap. Please go to AI Studio)" }]),
+    );
+    expect(s).toContain("이번 달");
+    expect(s).toContain("지출 한도");
+    expect(s).not.toContain("Your project"); // 영어 원문 숨김
+  });
+
+  it("일반 429 는 기존 안내 유지", () => {
+    const s = reviewReasonsSummary(JSON.stringify([{ code: "RATE_LIMITED", detail: "API 오류 429" }]));
+    expect(s).toContain("잠시 후 재시도");
+  });
+});
+
+describe("hasSafetyRefusal — 안전필터 거부 판별", () => {
+  it("SAFETY_BLOCKED 또는 모델 거부 문구가 있으면 true", () => {
+    expect(hasSafetyRefusal(JSON.stringify([{ code: "SAFETY_BLOCKED", detail: "x" }]))).toBe(true);
+    expect(hasSafetyRefusal(JSON.stringify([{ code: "RENDER_FAILED", detail: "모델 거부(PROHIBITED_CONTENT)" }]))).toBe(true);
+  });
+  it("그 외에는 false — 망가진 JSON 도 죽지 않는다", () => {
+    expect(hasSafetyRefusal(JSON.stringify([{ code: "LEFTOVER", detail: "1건" }]))).toBe(false);
+    expect(hasSafetyRefusal(null)).toBe(false);
+    expect(hasSafetyRefusal("깨진{")).toBe(false);
   });
 });

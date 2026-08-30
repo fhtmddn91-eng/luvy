@@ -1152,3 +1152,39 @@ describe("live11 #01 — 판독 중복은 병합으로, 잔여 충돌만 차단"
     }
   });
 });
+
+/**
+ * GIF 오류 분류 (2026-08-31 운영 실측).
+ *
+ * tryBuildGifPatch 의 catch 가 모든 오류를 삼키고 null 을 돌려줘서, GIF 의
+ * 429·타임아웃·안전필터 거부가 전부 일반 문구("GIF 정지 패치 실패")로 바뀌고
+ * FAILED 로 분류됐다 — 운영자의 "재시도 승인" 흐름이 GIF 에는 아예 안 떴다.
+ * 월 한도 초과로 전 GIF 가 죽었을 때 정지 이미지는 RETRYABLE 로 살아났는데
+ * GIF 만 FAILED 로 굳은 실사례가 이것이다.
+ */
+describe("GIF 오류 분류 — 일시 오류는 RETRYABLE 로 살아남는다", () => {
+  const gifOf = async (): Promise<Buffer> =>
+    sharp(ORIG_PNG).gif().toBuffer();
+
+  it("GIF 이미지 호출이 429 면 FAILED 가 아니라 RETRYABLE", async () => {
+    mock = happyMock();
+    mock.image = [{ status: 429 }];
+    const r = await translateImageAuto(await gifOf(), "image/gif");
+    expect(r.status).toBe("RETRYABLE");
+    if (r.status === "RETRYABLE") {
+      expect(r.reasons.map((x) => x.code)).toContain("RATE_LIMITED");
+    }
+  });
+
+  it("GIF 안전필터 거부는 NEEDS_REVIEW(SAFETY_BLOCKED) — 재시도 대상이 아니다", async () => {
+    mock = happyMock();
+    mock.image = [
+      { candidates: [{ content: { parts: [] }, finishReason: "PROHIBITED_CONTENT" }] } as unknown as Json,
+    ];
+    const r = await translateImageAuto(await gifOf(), "image/gif");
+    expect(r.status).toBe("NEEDS_REVIEW");
+    if (r.status === "NEEDS_REVIEW") {
+      expect(r.reasons.map((x) => x.code)).toContain("SAFETY_BLOCKED");
+    }
+  });
+});

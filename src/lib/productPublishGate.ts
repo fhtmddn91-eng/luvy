@@ -118,20 +118,55 @@ export function reasonLabel(code: string): string {
   return (REVIEW_CODE_LABELS as Record<string, string>)[code] ?? `확인 필요 (${code})`;
 }
 
+/** 좌표 덤프("[205,333,235,395] h24px 대비38 · …") 판별 — 운영자에게 무의미한 기술 정보 */
+const COORD_DUMP = /^\s*\[\d+,\d+,\d+,\d+\]/;
+
 /**
- * reviewReasons JSON → 운영자용 한국어 한 줄.
- * 어떤 문구가 문제인지(detail 의 원문)는 그대로 보여준다 — 그건 코드가 아니라 단서다.
+ * 사유 한 건 → 운영자용 한 줄.
+ *
+ * 실전 검수함(2026-08-31)에서 확인된 원칙:
+ *  - 좌표 덤프는 "N곳"으로 줄인다 — 어디인지는 원본·번역본을 눈으로 비교하면 보인다
+ *  - 월 지출 한도 초과는 영어 원문 대신 무엇을 하면 되는지 한국어로 말한다
+ *    (한도가 끝나 전부 429 로 죽었을 때 운영자가 원인을 몰라 헤맨 실사례)
+ *  - 그 외 detail(문제가 된 원문 문구)은 그대로 — 코드가 아니라 단서다
  */
+function reasonLine(code: string, detail?: string): string {
+  if (code === "RATE_LIMITED" && detail && /monthly spending cap/i.test(detail)) {
+    return "이번 달 API 지출 한도를 모두 썼습니다 — AI Studio 에서 한도를 올리거나 다음 달 1일 이후 재시도해주세요";
+  }
+  const label = reasonLabel(code);
+  if (!detail) return label;
+  if (COORD_DUMP.test(detail)) {
+    const spots = detail.split("·").filter((part) => COORD_DUMP.test(part.trim())).length || 1;
+    return `${label} (${spots}곳)`;
+  }
+  return `${label} — ${detail}`;
+}
+
+/** reviewReasons JSON → 운영자용 한국어 한 줄 */
 export function reviewReasonsSummary(json: string | null | undefined): string {
   if (!json) return "";
   try {
     const arr = JSON.parse(json) as { code: string; detail?: string }[];
-    return arr
-      .map((r) => `${reasonLabel(r.code)}${r.detail ? ` — ${r.detail}` : ""}`)
-      .join(" · ")
-      .slice(0, 300);
+    return arr.map((r) => reasonLine(r.code, r.detail)).join(" · ").slice(0, 300);
   } catch {
     return json.slice(0, 200);
+  }
+}
+
+/**
+ * 안전필터 거부인가 — 거부 카드는 유료 재생성이 또 거부될 가능성이 높아
+ * 화면이 무료 직접 업로드를 먼저 권해야 한다 (성인용품 특성상 구조적으로 발생).
+ */
+export function hasSafetyRefusal(json: string | null | undefined): boolean {
+  if (!json) return false;
+  try {
+    const arr = JSON.parse(json) as { code: string; detail?: string }[];
+    return arr.some(
+      (r) => r.code === "SAFETY_BLOCKED" || /모델 거부|PROHIBITED/i.test(r.detail ?? ""),
+    );
+  } catch {
+    return false;
   }
 }
 

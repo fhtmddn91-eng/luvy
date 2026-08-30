@@ -12,7 +12,7 @@ import {
   regenerateAssetWithHint,
   type TranslateState,
 } from "@/lib/actions/admin-assets";
-import { reviewReasonsSummary, TRANSLATE_STATUS } from "@/lib/productPublishGate";
+import { reviewReasonsSummary, hasSafetyRefusal, TRANSLATE_STATUS } from "@/lib/productPublishGate";
 import { btnPrimary } from "@/components/ui/Panel";
 
 export interface ReviewItem {
@@ -61,6 +61,9 @@ export function TranslationReviewList({ items }: { items: ReviewItem[] }) {
         else {
           setFailed(({ [id]: _drop, ...rest }) => rest);
           setDone((m) => ({ ...m, [id]: r.notice ?? label }));
+          // 서버가 기록한 새 상태·사유·후보를 다시 그린다 — 이게 없으면 결과가
+          // 새로고침 전까지 안 보여 "눌러도 아무 일 없다"로 읽힌다 (2026-08-31 실측)
+          router.refresh();
         }
       } catch {
         setFailed((m) => ({ ...m, [id]: "요청이 끊겼습니다 — 새로고침 후 다시 시도해주세요." }));
@@ -175,6 +178,46 @@ function ReviewCard({
   const resultSrc = item.candidateUrl ?? (item.originalUrl && item.url !== item.originalUrl ? item.url : null);
   const reasons = reviewReasonsSummary(item.reviewReasons);
   const retryable = item.translateStatus === TRANSLATE_STATUS.RETRYABLE;
+  /** 이 카드가 지금 처리 중인가 — 30초~1분 걸리는 작업이라 표시가 없으면 고장으로 읽힌다 */
+  const working = busy === item.id;
+  /**
+   * 안전필터 거부 — 재생성해도 또 거부될 가능성이 높다(성인용품 특성상 구조적).
+   * 유료 버튼을 앞세우면 ₩100 씩 헛돈을 쓰게 유도하므로, 무료 직접 업로드를
+   * 첫 번째 선택지로 올린다 (2026-08-31 운영 실측: 거부 4건 전부 이 패턴).
+   */
+  const refused = hasSafetyRefusal(item.reviewReasons);
+
+  /** 직접 업로드 블록 — 거부 카드에선 본문에, 그 외엔 "다른 방법"에 들어간다 */
+  const uploadBlock = (
+    <div>
+      <label className="mb-1 block font-bold text-ink-deep" htmlFor={`rv-file-${item.id}`}>
+        직접 고친 이미지 올리기 (무료)
+      </label>
+      <input
+        id={`rv-file-${item.id}`}
+        ref={fileRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/avif"
+        className="w-full"
+      />
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          const f = fileRef.current?.files?.[0];
+          if (!f) return;
+          const fd = new FormData();
+          fd.set("file", f);
+          run(item.id, "올렸습니다 — 위에서 확인하고 내보내주세요", () =>
+            uploadAssetCandidate(item.id, {}, fd),
+          );
+        }}
+        className="mt-1 border border-ink-deep px-3 py-1.5 font-bold text-ink-deep disabled:opacity-40"
+      >
+        올리기
+      </button>
+    </div>
+  );
 
   if (doneMsg) {
     return (
@@ -202,6 +245,11 @@ function ReviewCard({
         </Link>
       </div>
 
+      {working && (
+        <p className="mb-3 border-l-2 border-ink-deep bg-canvas px-3 py-2 text-[13px] font-bold text-ink-deep">
+          처리 중입니다… 30초~1분 걸립니다. 이 화면을 닫지 말고 기다려주세요.
+        </p>
+      )}
       {reasons && (
         <p className="mb-3 border-l-2 border-amber-500 bg-amber-50 px-3 py-2 text-[13px] leading-relaxed text-amber-900">
           {reasons}
@@ -239,32 +287,51 @@ function ReviewCard({
       {failMsg && <p className="mt-2 text-[13px] font-semibold text-red-700">{failMsg}</p>}
 
       {/* 기본 버튼 둘 */}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {item.candidateUrl && (
-          <label className="flex cursor-pointer items-center gap-2 text-[13px] font-bold text-ink-deep">
-            <input type="checkbox" checked={checked} onChange={onToggle} disabled={disabled} className="size-4 accent-ink-deep" />
-            선택
-          </label>
-        )}
-        {item.candidateUrl && (
+      {/* 거부 카드: 무료 업로드가 정답 — 유료 재생성을 앞세우면 헛돈을 쓴다 */}
+      {refused && !item.candidateUrl ? (
+        <div className="mt-3 space-y-2 text-[13px]">
+          <p className="text-ink-soft">
+            노출 수위가 있는 이미지는 AI가 다시 만들어도 <b>또 거부될 가능성이 높습니다.</b>{" "}
+            직접 고친 이미지를 올리는 것이 확실하고 무료입니다.
+          </p>
+          {uploadBlock}
           <button
             type="button"
             disabled={disabled}
-            onClick={() => run(item.id, "내보냈습니다", () => approveAssetCandidate(item.id))}
-            className={btnPrimary}
+            onClick={() => run(item.id, "다시 만드는 중 — 잠시 후 새로고침해주세요", () => approveAssetRerender(item.id))}
+            className="border border-hairline px-3 py-1.5 text-[12px] font-semibold text-muted hover:text-ink-deep disabled:opacity-40"
           >
-            이대로 내보내기
+            그래도 AI로 다시 만들어보기 (약 100원 · 거부될 수 있음)
           </button>
-        )}
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => run(item.id, "다시 만드는 중 — 잠시 후 새로고침해주세요", () => approveAssetRerender(item.id))}
-          className="border border-amber-500 px-3 py-2 text-[13px] font-bold text-amber-900 disabled:opacity-40"
-        >
-          {retryable ? "다시 시도하기" : "다시 만들기"} (약 100원)
-        </button>
-      </div>
+        </div>
+      ) : (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {item.candidateUrl && (
+            <label className="flex cursor-pointer items-center gap-2 text-[13px] font-bold text-ink-deep">
+              <input type="checkbox" checked={checked} onChange={onToggle} disabled={disabled} className="size-4 accent-ink-deep" />
+              선택
+            </label>
+          )}
+          {item.candidateUrl && (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => run(item.id, "내보냈습니다", () => approveAssetCandidate(item.id))}
+              className={btnPrimary}
+            >
+              이대로 내보내기
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => run(item.id, "다시 만드는 중 — 잠시 후 새로고침해주세요", () => approveAssetRerender(item.id))}
+            className="border border-amber-500 px-3 py-2 text-[13px] font-bold text-amber-900 disabled:opacity-40"
+          >
+            {retryable ? "다시 시도하기" : "다시 만들기"} (약 100원)
+          </button>
+        </div>
+      )}
 
       {/* 고급 — 접어둔다 */}
       <details className="mt-3 border-t border-hairline-soft pt-2">
@@ -301,34 +368,7 @@ function ReviewCard({
               </button>
             </div>
           )}
-          <div>
-            <label className="mb-1 block font-bold text-ink-deep" htmlFor={`rv-file-${item.id}`}>
-              직접 고친 이미지 올리기 (무료)
-            </label>
-            <input
-              id={`rv-file-${item.id}`}
-              ref={fileRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp,image/avif"
-              className="w-full"
-            />
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => {
-                const f = fileRef.current?.files?.[0];
-                if (!f) return;
-                const fd = new FormData();
-                fd.set("file", f);
-                run(item.id, "올렸습니다 — 위에서 확인하고 내보내주세요", () =>
-                  uploadAssetCandidate(item.id, {}, fd),
-                );
-              }}
-              className="mt-1 border border-hairline px-3 py-1.5 font-bold text-ink-deep disabled:opacity-40"
-            >
-              올리기
-            </button>
-          </div>
+          {!(refused && !item.candidateUrl) && uploadBlock}
           {item.candidateUrl && (
             <button
               type="button"
