@@ -352,6 +352,9 @@ export async function rejectAssetCandidate(assetId: string): Promise<TranslateSt
       summary: `번역 후보 거부 (${asset.kind}) — 승인본 유지`,
       meta: { assetId },
     });
+    // 판매 전환 보류 중이었으면 이 거부로 전 이미지가 노출 가능해졌을 수 있다 —
+    // 승인 경로(approveAssetCandidate)와 똑같이 승격 검사를 건다
+    await promoteIfReady(asset.productId);
     revalidateProduct(asset.productId);
     return { ok: true };
   }

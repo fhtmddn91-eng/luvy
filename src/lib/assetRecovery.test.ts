@@ -28,6 +28,7 @@ const assets = new Map<string, AssetRow>();
 const saved: string[] = [];
 const audits: { summary: string; meta?: unknown }[] = [];
 const demoted: string[] = [];
+const promoted = vi.hoisted(() => [] as string[]);
 const renderCalls: { hint?: string }[] = [];
 
 vi.mock("@/lib/db", () => ({
@@ -84,7 +85,7 @@ vi.mock("@/lib/import/translateAssets", async () => {
       await runGate.open;
       return runResult.value;
     },
-    promoteIfReady: async () => false,
+    promoteIfReady: async (id: string) => { promoted.push(id); return false; },
     demoteIfUnsafe: async (id: string) => { demoted.push(id); return false; },
   };
 });
@@ -134,7 +135,7 @@ const fd = (entries: Record<string, string | File>) => {
 const png = (type = "image/png") => new File([new Uint8Array([1, 2, 3])], "fix.png", { type });
 
 beforeEach(() => {
-  assets.clear(); saved.length = 0; audits.length = 0; demoted.length = 0; renderCalls.length = 0; staleMarks.length = 0;
+  assets.clear(); saved.length = 0; audits.length = 0; demoted.length = 0; promoted.length = 0; renderCalls.length = 0; staleMarks.length = 0;
   process.env.GEMINI_API_KEY = "test";
 });
 
@@ -471,6 +472,9 @@ describe("rejectAssetCandidate — 승인본이 걸려 있으면 거부해도 �
     expect(demoted).toEqual([]);
     // 승인본 캐시는 유효하다 — 무효화하면 다음 자동 번역이 돈 내고 다시 돈다
     expect(staleMarks).toEqual([]);
+    // 판매 전환 보류 중이었으면 이 거부로 전 이미지가 노출 가능해질 수 있다 —
+    // 승인 경로와 똑같이 승격 검사를 걸어야 상품이 숨김에 갇히지 않는다
+    expect(promoted).toEqual(["p1"]);
   });
 
   it("url = originalUrl(원본 노출 중)이면 기존대로 FAILED + 판매 점검 + 캐시 무효화", async () => {
