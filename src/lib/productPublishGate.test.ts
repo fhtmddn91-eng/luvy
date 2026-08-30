@@ -338,11 +338,22 @@ describe("reasonLine — 월 한도 초과는 한국어로 설명한다", () => 
   });
 });
 
-describe("hasSafetyRefusal — 안전필터 거부 판별", () => {
-  it("SAFETY_BLOCKED 또는 모델 거부 문구가 있으면 true", () => {
-    expect(hasSafetyRefusal(JSON.stringify([{ code: "SAFETY_BLOCKED", detail: "x" }]))).toBe(true);
+describe("hasSafetyRefusal — 진짜 거부만 판별한다", () => {
+  it("모델 거부(PROHIBITED) 문구가 있으면 true", () => {
+    expect(hasSafetyRefusal(JSON.stringify([{ code: "SAFETY_BLOCKED", detail: "모델 거부(PROHIBITED_CONTENT)" }]))).toBe(true);
     expect(hasSafetyRefusal(JSON.stringify([{ code: "RENDER_FAILED", detail: "모델 거부(PROHIBITED_CONTENT)" }]))).toBe(true);
   });
+
+  /**
+   * 실측(2026-08-31, 4회 반복 실험): "이미지를 반환하지 않음"은 거부와 다르다 —
+   * 재시도 1회에 뒤집혀 이미지가 생성됐다(1/1). 반면 PROHIBITED 는 재시도해도
+   * 반복 거부(2/2). 같은 SAFETY_BLOCKED 코드지만 화면 대응이 달라야 한다:
+   * 미반환은 재시도 우선, 거부만 직접 업로드 우선.
+   */
+  it("'이미지를 반환하지 않음'(일시 미반환)은 거부가 아니다 — 재시도 가치가 있다", () => {
+    expect(hasSafetyRefusal(JSON.stringify([{ code: "SAFETY_BLOCKED", detail: "이미지 모델이 이미지를 반환하지 않음" }]))).toBe(false);
+  });
+
   it("그 외에는 false — 망가진 JSON 도 죽지 않는다", () => {
     expect(hasSafetyRefusal(JSON.stringify([{ code: "LEFTOVER", detail: "1건" }]))).toBe(false);
     expect(hasSafetyRefusal(null)).toBe(false);

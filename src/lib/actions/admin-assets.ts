@@ -16,7 +16,7 @@ import {
   parseOcrBoxes,
   type OcrBox,
 } from "@/lib/imageTranslate";
-import { runAssetTranslation, promoteIfReady, demoteIfUnsafe } from "@/lib/import/translateAssets";
+import { runAssetTranslation, promoteIfReady, demoteIfUnsafe, assetLock } from "@/lib/import/translateAssets";
 import { sha256Of, saveTranslationCache, markCacheStale } from "@/lib/translateCache";
 import { TRANSLATE_STATUS, revertedAssetTranslation } from "@/lib/productPublishGate";
 import { assetKindFor, nextThumbnail, type AssetTarget } from "@/lib/productAssets";
@@ -394,6 +394,193 @@ export async function approveAssetRerender(assetId: string): Promise<TranslateSt
   return { error: `재렌더 결과: ${result}${message ? ` (${message})` : ""}` };
 }
 
+/**
+ * 백그라운드 재생성 — 시작만 하고 즉시 응답한다 (2026-08-31 실측 대응).
+ *
+ * 재생성은 30초~2분 걸리는데, 서버 액션 응답을 그 시간 동안 붙잡으면 프록시가
+ * 연결을 끊는다. 화면엔 "요청이 끊겼습니다"가 뜨지만 서버는 완주하고 기록해서,
+ * 운영자가 결과를 못 보고 또 눌러 이중 과금될 위험이 있었다(반복 실험으로 확인).
+ *
+ * 그래서: ① 잠금을 먼저 선점해 겹침을 끊고 ② 진행 표시(TRANSLATING)를 응답
+ * 전에 박아 화면 폴링이 상태를 따라가게 한 뒤 ③ 실제 실행은 뒤에서 돌린다.
+ * 백그라운드에서는 revalidatePath 를 부르면 안 된다 — 응답이 끝난 분리된
+ * 컨텍스트라 Next 가 예외를 던진다(translateOnPublish 의 실측 주석 참고).
+ */
+export async function startAssetRerender(assetId: string): Promise<TranslateState> {
+  await requireAdmin();
+  if (!process.env.GEMINI_API_KEY) return { error: "GEMINI_API_KEY 미설정 — 번역을 쓸 수 없습니다." };
+  const asset = await db.productAsset.findUnique({ where: { id: assetId } });
+  if (!asset) return { error: "이미지를 찾을 수 없습니다." };
+  // 진행 중 검사가 허용 목록보다 먼저다 — 진행 표시(TRANSLATING)는 허용 목록에
+  // 없어서, 순서를 바꾸면 겹쳐 누른 두 번째가 "불가" 오류로 보인다
+  if (asset.translateStatus === TRANSLATE_STATUS.TRANSLATING) {
+    return { ok: true, notice: "이미 진행 중입니다 — 잠시 후 자동으로 갱신됩니다." };
+  }
+  const allowed = [
+    TRANSLATE_STATUS.RETRYABLE,
+    TRANSLATE_STATUS.NEEDS_REVIEW,
+    TRANSLATE_STATUS.VERIFICATION_FAILED,
+    TRANSLATE_STATUS.FAILED,
+    TRANSLATE_STATUS.ORIGINAL_KEPT,
+  ] as string[];
+  if (!allowed.includes(asset.translateStatus ?? "")) {
+    return { error: "다시 만들기는 실패·검수 대기 이미지에서만 가능합니다." };
+  }
+
+  // 잠금은 응답 전에 선점한다 — 백그라운드로 미루면 두 번 누른 사이에 둘 다 시작된다
+  if (!assetLock.tryAcquire(asset.id)) {
+    return { ok: true, notice: "이미 진행 중입니다 — 잠시 후 자동으로 갱신됩니다." };
+  }
+
+  try {
+    if (asset.candidateUrl) await deleteUploadIfUnused(asset.candidateUrl, { exceptAssetId: asset.id });
+    // 진행 표시를 먼저 박는다 — 응답 직후 화면이 "다시 만드는 중"을 보여줄 수 있게
+    await db.productAsset.update({
+      where: { id: asset.id },
+      data: { translateStatus: TRANSLATE_STATUS.TRANSLATING },
+    });
+    await audit({
+      action: "ASSET_TRANSLATE",
+      target: "product",
+      targetId: asset.productId,
+      summary: `재렌더 시작 (${asset.kind})`,
+      meta: { assetId, cost: "image-http-1 (≈$0.067 추정)" },
+    });
+  } catch (e) {
+    assetLock.release(asset.id);
+    throw e;
+  }
+
+  void (async () => {
+    const { result, message } = await runAssetTranslation(asset, { force: true });
+    await audit({
+      action: "ASSET_TRANSLATE",
+      target: "product",
+      targetId: asset.productId,
+      summary: `재렌더 완료 (${asset.kind}) → ${result}`,
+      meta: { assetId, result, ...(message ? { message } : {}) },
+    });
+    if (result === "verified") await syncProductThumbnail(asset.productId, asset.url);
+    await demoteIfUnsafe(asset.productId);
+    await promoteIfReady(asset.productId);
+  })()
+    .catch(async (e) => {
+      // 어떤 예외로 끝나도 진행 표시에 갇히면 안 된다 — 실패로 착지시킨다
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[재렌더] 백그라운드 실패 ${assetId}: ${msg}`);
+      await db.productAsset
+        .update({
+          where: { id: asset.id },
+          data: {
+            translateStatus: TRANSLATE_STATUS.FAILED,
+            reviewReasons: JSON.stringify([{ code: "RENDER_FAILED", detail: msg.slice(0, 300) }]),
+          },
+        })
+        .catch(() => {});
+    })
+    .finally(() => assetLock.release(asset.id));
+
+  revalidateProduct(asset.productId);
+  return { ok: true, notice: "다시 만들기 시작 — 보통 1~2분 걸립니다. 이 화면에서 자동으로 갱신됩니다." };
+}
+
+/** 지시 재생성의 백그라운드판 — 검증은 응답 전에, 렌더는 뒤에서 */
+export async function startAssetRegenerateWithHint(
+  assetId: string,
+  _prev: TranslateState,
+  formData: FormData,
+): Promise<TranslateState> {
+  await requireAdmin();
+  if (!process.env.GEMINI_API_KEY) return { error: "GEMINI_API_KEY 미설정 — 번역을 쓸 수 없습니다." };
+
+  const asset = await db.productAsset.findUnique({ where: { id: assetId } });
+  if (!asset) return { error: "이미지를 찾을 수 없습니다." };
+  if (asset.translateStatus === TRANSLATE_STATUS.TRANSLATING) {
+    return { ok: true, notice: "이미 진행 중입니다 — 잠시 후 자동으로 갱신됩니다." };
+  }
+
+  const hint = String(formData.get("hint") ?? "").trim().slice(0, 300);
+  if (!hint) return { error: "무엇을 고쳐야 하는지 지시를 적어주세요." };
+  const raw = asset.ocrData ?? asset.candidateOcr;
+  if (!raw) {
+    return { error: "번역 문구 기록이 없어 개선 재생성을 할 수 없습니다. '다시 만들기'를 먼저 쓰세요." };
+  }
+  const sourceUrl = asset.originalUrl ?? asset.url;
+  const file = await readPublicUpload(path.basename(sourceUrl));
+  if (!file) return { error: "원본 파일을 읽을 수 없습니다." };
+  let boxes: OcrBox[];
+  try {
+    boxes = parseOcrBoxes(JSON.parse(raw));
+  } catch {
+    return { error: "번역 문구 기록을 읽을 수 없습니다." };
+  }
+  if (boxes.length === 0) return { error: "다시 만들 문구가 없습니다." };
+
+  if (!assetLock.tryAcquire(asset.id)) {
+    return { ok: true, notice: "이미 진행 중입니다 — 잠시 후 자동으로 갱신됩니다." };
+  }
+
+  try {
+    await db.productAsset.update({
+      where: { id: asset.id },
+      data: { translateStatus: TRANSLATE_STATUS.TRANSLATING },
+    });
+    await audit({
+      action: "ASSET_TRANSLATE",
+      target: "product",
+      targetId: asset.productId,
+      summary: `개선 지시 재생성 시작 (${asset.kind})`,
+      meta: { assetId, hint, cost: "image-http-1 (≈$0.067 추정)" },
+    });
+  } catch (e) {
+    assetLock.release(asset.id);
+    throw e;
+  }
+
+  void (async () => {
+    const rendered = await renderTranslatedImage(file.data, file.contentType, boxes, { hint });
+    const saved = await saveImageBuffer(rendered.data, rendered.mime, 15 * 1024 * 1024);
+    if (!saved.ok) throw new Error(`후보 저장 실패: ${saved.error}`);
+    if (asset.candidateUrl) await deleteUploadIfUnused(asset.candidateUrl, { exceptAssetId: asset.id });
+    await db.productAsset.update({
+      where: { id: asset.id },
+      data: {
+        translateStatus: TRANSLATE_STATUS.NEEDS_REVIEW,
+        reviewReasons: JSON.stringify([{ code: "MANUAL_EDIT", detail: `개선 지시 재생성: ${hint}` }]),
+        candidateUrl: saved.url,
+        candidateOcr: JSON.stringify(boxes),
+      },
+    });
+    await audit({
+      action: "ASSET_TRANSLATE",
+      target: "product",
+      targetId: asset.productId,
+      summary: `개선 지시 재생성 완료 → 후보 생성 (${asset.kind})`,
+      meta: { assetId, hint },
+    });
+    await demoteIfUnsafe(asset.productId);
+  })()
+    .catch(async (e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[지시 재생성] 백그라운드 실패 ${assetId}: ${msg}`);
+      await db.productAsset
+        .update({
+          where: { id: asset.id },
+          data: {
+            // 문구 기록(candidateOcr)은 남긴다 — 지시를 고쳐 다시 시도할 수 있게
+            translateStatus: TRANSLATE_STATUS.NEEDS_REVIEW,
+            reviewReasons: JSON.stringify([{ code: "RENDER_FAILED", detail: msg.slice(0, 300) }]),
+            candidateOcr: raw,
+          },
+        })
+        .catch(() => {});
+    })
+    .finally(() => assetLock.release(asset.id));
+
+  revalidateProduct(asset.productId);
+  return { ok: true, notice: "다시 만들기 시작 — 보통 1~2분 걸립니다. 이 화면에서 자동으로 갱신됩니다." };
+}
+
 /** 어드민이 고친 문구로 원본에서 다시 렌더한다. 빈 문구 = 그 항목은 번역 안 함 */
 export async function updateAssetTranslation(
   assetId: string,
@@ -540,6 +727,9 @@ export async function regenerateAssetWithHint(
 
   const asset = await db.productAsset.findUnique({ where: { id: assetId } });
   if (!asset) return { error: "이미지를 찾을 수 없습니다." };
+  if (asset.translateStatus === TRANSLATE_STATUS.TRANSLATING) {
+    return { ok: true, notice: "이미 진행 중입니다 — 잠시 후 자동으로 갱신됩니다." };
+  }
 
   const hint = String(formData.get("hint") ?? "").trim().slice(0, 300);
   if (!hint) return { error: "무엇을 고쳐야 하는지 지시를 적어주세요." };

@@ -1,15 +1,15 @@
 "use client";
 
-import { useMemo, useRef, useState, startTransition } from "react";
+import { useEffect, useMemo, useRef, useState, startTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   approveAssetCandidate,
   approveAssetCandidates,
   rejectAssetCandidate,
-  approveAssetRerender,
+  startAssetRerender,
   uploadAssetCandidate,
-  regenerateAssetWithHint,
+  startAssetRegenerateWithHint,
   type TranslateState,
 } from "@/lib/actions/admin-assets";
 import { reviewReasonsSummary, hasSafetyRefusal, TRANSLATE_STATUS } from "@/lib/productPublishGate";
@@ -66,11 +66,46 @@ export function TranslationReviewList({ items }: { items: ReviewItem[] }) {
           router.refresh();
         }
       } catch {
-        setFailed((m) => ({ ...m, [id]: "요청이 끊겼습니다 — 새로고침 후 다시 시도해주세요." }));
+        // 실측(2026-08-31): 연결만 끊기고 서버는 계속 일하는 경우가 대부분이다.
+        // "다시 시도"를 권하면 이중 과금으로 이어진다 — 기다리라고 말해야 한다.
+        setFailed((m) => ({
+          ...m,
+          [id]: "연결이 잠시 끊겼습니다 — 작업은 계속 진행 중일 수 있습니다. 다시 누르지 말고 잠시 후 자동 갱신을 기다려주세요.",
+        }));
       } finally {
         setBusy(null);
       }
     });
+
+  /** 시작형 액션(백그라운드 재생성) — 카드를 접지 않고 새로고침해 '진행 중' 카드로 바꾼다 */
+  const runStart = (id: string, fn: () => Promise<TranslateState>) =>
+    startTransition(async () => {
+      setBusy(id);
+      try {
+        const r = await fn();
+        if (r.error) setFailed((m) => ({ ...m, [id]: r.error! }));
+        else {
+          setFailed(({ [id]: _drop, ...rest }) => rest);
+          router.refresh();
+        }
+      } catch {
+        setFailed((m) => ({
+          ...m,
+          [id]: "연결이 잠시 끊겼습니다 — 작업은 계속 진행 중일 수 있습니다. 다시 누르지 말고 잠시 후 자동 갱신을 기다려주세요.",
+        }));
+      } finally {
+        setBusy(null);
+      }
+    });
+
+  // 진행 중(TRANSLATING) 카드가 있으면 8초마다 다시 그린다 — 재생성은 백그라운드로
+  // 돌기 때문에, 폴링이 없으면 끝나도 화면이 모른다
+  const hasWorking = items.some((i) => i.translateStatus === TRANSLATE_STATUS.TRANSLATING);
+  useEffect(() => {
+    if (!hasWorking) return;
+    const t = setInterval(() => router.refresh(), 8000);
+    return () => clearInterval(t);
+  }, [hasWorking, router]);
 
   const toggle = (id: string) =>
     setChecked((prev) => {
@@ -145,6 +180,7 @@ export function TranslationReviewList({ items }: { items: ReviewItem[] }) {
             checked={checked.has(item.id)}
             onToggle={() => toggle(item.id)}
             run={run}
+            runStart={runStart}
           />
         ))}
       </ul>
@@ -160,6 +196,7 @@ function ReviewCard({
   checked,
   onToggle,
   run,
+  runStart,
 }: {
   item: ReviewItem;
   busy: string | null;
@@ -168,6 +205,7 @@ function ReviewCard({
   checked: boolean;
   onToggle: () => void;
   run: (id: string, label: string, fn: () => Promise<TranslateState>) => void;
+  runStart: (id: string, fn: () => Promise<TranslateState>) => void;
 }) {
   const hintRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -218,6 +256,23 @@ function ReviewCard({
       </button>
     </div>
   );
+
+  // 백그라운드 재생성 진행 중 — 버튼 없이 상태만. 폴링이 끝나면 결과 카드로 바뀐다
+  if (item.translateStatus === TRANSLATE_STATUS.TRANSLATING) {
+    return (
+      <li className="border border-hairline bg-white p-4">
+        <p className="text-[13px] font-bold text-ink-deep">
+          {item.productName}
+          <span className="ml-2 text-[11px] font-semibold text-muted">
+            {item.kind === "MAIN" ? "대표 이미지" : "상세 이미지"}
+          </span>
+        </p>
+        <p className="mt-2 border-l-2 border-ink-deep bg-canvas px-3 py-2 text-[13px] font-bold text-ink-deep">
+          AI가 다시 만드는 중입니다… 보통 1~2분 걸립니다. 이 화면은 자동으로 갱신됩니다.
+        </p>
+      </li>
+    );
+  }
 
   if (doneMsg) {
     return (
@@ -298,7 +353,7 @@ function ReviewCard({
           <button
             type="button"
             disabled={disabled}
-            onClick={() => run(item.id, "다시 만드는 중 — 잠시 후 새로고침해주세요", () => approveAssetRerender(item.id))}
+            onClick={() => runStart(item.id, () => startAssetRerender(item.id))}
             className="border border-hairline px-3 py-1.5 text-[12px] font-semibold text-muted hover:text-ink-deep disabled:opacity-40"
           >
             그래도 AI로 다시 만들어보기 (약 100원 · 거부될 수 있음)
@@ -325,7 +380,7 @@ function ReviewCard({
           <button
             type="button"
             disabled={disabled}
-            onClick={() => run(item.id, "다시 만드는 중 — 잠시 후 새로고침해주세요", () => approveAssetRerender(item.id))}
+            onClick={() => runStart(item.id, () => startAssetRerender(item.id))}
             className="border border-amber-500 px-3 py-2 text-[13px] font-bold text-amber-900 disabled:opacity-40"
           >
             {retryable ? "다시 시도하기" : "다시 만들기"} (약 100원)
@@ -358,9 +413,7 @@ function ReviewCard({
                 onClick={() => {
                   const fd = new FormData();
                   fd.set("hint", hintRef.current?.value ?? "");
-                  run(item.id, "다시 만들었습니다 — 새 번역본을 확인해주세요", () =>
-                    regenerateAssetWithHint(item.id, {}, fd),
-                  );
+                  runStart(item.id, () => startAssetRegenerateWithHint(item.id, {}, fd));
                 }}
                 className="mt-1 border border-amber-500 px-3 py-1.5 font-bold text-amber-900 disabled:opacity-40"
               >

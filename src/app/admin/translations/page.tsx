@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
-import { REVIEWABLE_TRANSLATE_STATUSES } from "@/lib/productPublishGate";
+import { REVIEWABLE_TRANSLATE_STATUSES, TRANSLATE_STATUS } from "@/lib/productPublishGate";
 import { PageHeader, Panel, EmptyState } from "@/components/ui/Panel";
 import { TranslationReviewList } from "@/components/admin/TranslationReviewList";
 
@@ -18,7 +18,9 @@ export default async function AdminTranslationsPage() {
   await requireAdmin();
 
   const rows = await db.productAsset.findMany({
-    where: { translateStatus: { in: REVIEWABLE_TRANSLATE_STATUSES } },
+    // 진행 중(TRANSLATING)도 보여준다 — 백그라운드 재생성을 시작한 카드가
+    // 목록에서 사라지면 운영자는 어디로 갔는지 모른다. 배지 수(REVIEWABLE)와는 별개.
+    where: { translateStatus: { in: [...REVIEWABLE_TRANSLATE_STATUSES, TRANSLATE_STATUS.TRANSLATING] } },
     orderBy: [{ productId: "asc" }, { sortOrder: "asc" }],
     select: {
       id: true,

@@ -63,19 +63,30 @@ vi.mock("@/lib/storage", () => ({
   deleteUploadIfUnused: async () => {},
   readPublicUpload: async () => ({ data: Buffer.from("orig"), contentType: "image/jpeg" }),
 }));
+const renderReject = vi.hoisted(() => ({ value: null as Error | null }));
 vi.mock("@/lib/imageTranslate", () => ({
   renderTranslatedImage: async (_d: Buffer, _m: string, _b: unknown, opts?: { hint?: string }) => {
     renderCalls.push({ hint: opts?.hint });
+    if (renderReject.value) throw renderReject.value;
     return { data: Buffer.from("rendered"), mime: "image/jpeg" };
   },
   parseOcrBoxes: (v: unknown) => v as unknown[],
 }));
 const runResult = vi.hoisted(() => ({ value: { result: "verified" } as { result: string; message?: string } }));
-vi.mock("@/lib/import/translateAssets", () => ({
-  runAssetTranslation: async () => runResult.value,
-  promoteIfReady: async () => false,
-  demoteIfUnsafe: async (id: string) => { demoted.push(id); return false; },
-}));
+const runGate = vi.hoisted(() => ({ open: Promise.resolve(), calls: 0 }));
+vi.mock("@/lib/import/translateAssets", async () => {
+  const { createKeyedLock } = await import("./keyedLock");
+  return {
+    assetLock: createKeyedLock(),
+    runAssetTranslation: async () => {
+      runGate.calls++;
+      await runGate.open;
+      return runResult.value;
+    },
+    promoteIfReady: async () => false,
+    demoteIfUnsafe: async (id: string) => { demoted.push(id); return false; },
+  };
+});
 vi.mock("@/lib/translateCache", () => ({
   sha256Of: () => "sha", saveTranslationCache: async () => {}, markCacheStale: async () => {},
 }));
@@ -83,8 +94,20 @@ vi.mock("@/lib/productAssets", () => ({
   assetKindFor: () => "DETAIL", nextThumbnail: () => null,
 }));
 
-const { uploadAssetCandidate, regenerateAssetWithHint, translateProductAsset, approveAssetRerender, approveAssetCandidates } =
-  await import("./actions/admin-assets");
+const {
+  uploadAssetCandidate,
+  regenerateAssetWithHint,
+  translateProductAsset,
+  approveAssetRerender,
+  approveAssetCandidates,
+  startAssetRerender,
+  startAssetRegenerateWithHint,
+} = await import("./actions/admin-assets");
+
+/** 백그라운드 void 체인이 다 돌 때까지 마이크로태스크·타이머를 비운다 */
+const flush = async () => {
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+};
 
 const BOXES = JSON.stringify([{ box: [1, 2, 3, 4], zh: "强震", ko: "진동", bg: "#fff", fg: "#000" }]);
 
@@ -328,5 +351,98 @@ describe("approveAssetRerender — 원본 유지 자산도 명시적 재시도�
     runResult.value = { result: "review", message: "MANUAL_EDIT" };
     const r = await approveAssetRerender("a1");
     expect(r.error).toBeUndefined();
+  });
+});
+
+
+/**
+ * 백그라운드 재생성 (2026-08-31 실측 대응).
+ *
+ * 재생성은 30초~2분 걸리는데 서버 액션 응답을 그 시간 동안 붙잡으면 프록시가
+ * 연결을 끊는다 — 화면엔 "요청이 끊겼습니다"가 뜨지만 서버는 완주하고 기록해서,
+ * 운영자가 또 눌러 이중 과금될 위험이 있었다. 그래서 시작만 하고 즉시 응답하며,
+ * 진행 표시(TRANSLATING)를 먼저 박아 화면 폴링이 상태를 따라가게 한다.
+ */
+describe("startAssetRerender — 백그라운드 재생성", () => {
+  it("즉시 응답하고 진행 표시(TRANSLATING)를 먼저 박는다", async () => {
+    const a = seed({ translateStatus: "NEEDS_REVIEW" });
+    runResult.value = { result: "review", message: "LEFTOVER" };
+    const r = await startAssetRerender("a1");
+    expect(r.ok).toBe(true);
+    expect(r.notice).toContain("자동으로 갱신");
+    expect(a.translateStatus).toBe("TRANSLATING"); // 응답 시점에 이미 진행 표시
+    await flush();
+  });
+
+  it("겹쳐 누르면 두 번째는 실행하지 않는다 — 이중 과금 차단", async () => {
+    seed({ translateStatus: "FAILED" });
+    runResult.value = { result: "review" };
+    let release!: () => void;
+    runGate.open = new Promise<void>((res) => { release = res; });
+    runGate.calls = 0;
+
+    const first = await startAssetRerender("a1");
+    expect(first.ok).toBe(true);
+    const second = await startAssetRerender("a1");
+    expect(second.error ?? second.notice).toContain("이미 진행");
+
+    release();
+    await flush();
+    expect(runGate.calls).toBe(1);
+    runGate.open = Promise.resolve();
+  });
+
+  it("백그라운드가 던져도 TRANSLATING 에 갇히지 않는다", async () => {
+    const a = seed({ translateStatus: "FAILED" });
+    runGate.open = Promise.reject(new Error("render boom"));
+    await startAssetRerender("a1");
+    await flush();
+    expect(a.translateStatus).toBe("FAILED"); // 실패로 착지, 진행 표시에 안 갇힘
+    expect(a.reviewReasons).toContain("render boom");
+    runGate.open = Promise.resolve();
+    // 잠금도 풀려 다음 시도가 가능하다
+    runResult.value = { result: "review" };
+    const again = await startAssetRerender("a1");
+    expect(again.ok).toBe(true);
+    await flush();
+  });
+
+  it("허용되지 않은 상태(VERIFIED)는 시작하지 않는다", async () => {
+    const a = seed({ translateStatus: "VERIFIED" });
+    const r = await startAssetRerender("a1");
+    expect(r.error).toBeTruthy();
+    expect(a.translateStatus).toBe("VERIFIED");
+  });
+});
+
+describe("startAssetRegenerateWithHint — 지시 재생성도 백그라운드", () => {
+  it("빈 지시는 시작 전에 거른다 (진행 표시도 안 박는다)", async () => {
+    const a = seed();
+    const r = await startAssetRegenerateWithHint("a1", {}, fd({ hint: "  " }));
+    expect(r.error).toBeTruthy();
+    expect(a.translateStatus).toBe("NEEDS_REVIEW");
+  });
+
+  it("즉시 TRANSLATING, 완료 후 후보 생성 + 지시가 사유에 남는다", async () => {
+    const a = seed();
+    const r = await startAssetRegenerateWithHint("a1", {}, fd({ hint: "글자를 더 크게" }));
+    expect(r.ok).toBe(true);
+    expect(a.translateStatus).toBe("TRANSLATING");
+    await flush();
+    expect(a.translateStatus).toBe("NEEDS_REVIEW");
+    expect(a.candidateUrl).toMatch(/^\/uploads\/gen-/);
+    expect(a.reviewReasons).toContain("글자를 더 크게");
+    expect(renderCalls[0].hint).toBe("글자를 더 크게");
+  });
+
+  it("렌더가 실패해도 TRANSLATING 에 갇히지 않고 사유가 남는다", async () => {
+    const a = seed();
+    renderReject.value = new Error("만들기 실패");
+    const r = await startAssetRegenerateWithHint("a1", {}, fd({ hint: "고쳐줘" }));
+    expect(r.ok).toBe(true);
+    await flush();
+    expect(a.translateStatus).toBe("NEEDS_REVIEW");
+    expect(a.reviewReasons).toContain("만들기 실패");
+    renderReject.value = null;
   });
 });

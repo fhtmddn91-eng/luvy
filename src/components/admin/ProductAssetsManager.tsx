@@ -12,9 +12,9 @@ import {
   revertAssetTranslation,
   approveAssetCandidate,
   rejectAssetCandidate,
-  approveAssetRerender,
+  startAssetRerender,
   uploadAssetCandidate,
-  regenerateAssetWithHint,
+  startAssetRegenerateWithHint,
   setAssetTarget,
   type AssetFormState,
   type TranslateState,
@@ -152,7 +152,7 @@ function CandidateReview({ a }: { a: AssetRow }) {
           onClick={() => {
             const fd = new FormData();
             fd.set("hint", hintRef.current?.value ?? "");
-            runForm((f) => regenerateAssetWithHint(a.id, {}, f), fd);
+            runForm((f) => startAssetRegenerateWithHint(a.id, {}, f), fd);
           }}
           className="mt-0.5 border border-amber-500 px-2 py-0.5 font-semibold text-amber-900 disabled:opacity-40"
         >
@@ -214,7 +214,7 @@ function CandidateReview({ a }: { a: AssetRow }) {
         <button
           type="button"
           disabled={busy}
-          onClick={() => run(() => approveAssetRerender(a.id))}
+          onClick={() => run(() => startAssetRerender(a.id))}
           className="border border-amber-500 px-2 py-0.5 font-semibold text-amber-900 disabled:opacity-40"
         >
           {a.translateStatus === "RETRYABLE" ? "재시도 승인" : "재렌더 승인"} (이미지 1회 ≈₩100 추정)
@@ -497,7 +497,8 @@ export function ProductAssetsManager({
         if (r.error) errs.push(`${idx + 1}번: ${r.error}`);
         else if (r.notice) notes.push(`${idx + 1}번: ${r.notice}`);
       } catch {
-        errs.push(`${idx + 1}번: 요청 실패 (네트워크)`);
+        // 실측: 연결만 끊기고 서버는 계속 일하는 경우가 대부분 — 재클릭은 이중 과금
+        errs.push(`${idx + 1}번: 연결이 잠시 끊겼습니다 — 작업은 계속 진행 중일 수 있습니다. 1~2분 후 새로고침해 확인해주세요.`);
       }
       setProgress({ done: i + 1, total: ids.length });
     }

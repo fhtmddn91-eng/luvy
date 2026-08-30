@@ -23,7 +23,7 @@ const CONCURRENCY = 3;
  * 자산 단위 선점 — 겹친 실행이 같은 자산에 유료 호출을 두 번 보내지 못하게 한다.
  * 모듈 최상단에 둬야 실행끼리 공유된다(호출마다 새로 만들면 아무것도 못 막는다).
  */
-const assetLock = createKeyedLock();
+export const assetLock = createKeyedLock();
 
 export interface AssetTranslateReport {
   verified: number;

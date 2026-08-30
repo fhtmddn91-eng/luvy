@@ -155,16 +155,18 @@ export function reviewReasonsSummary(json: string | null | undefined): string {
 }
 
 /**
- * 안전필터 거부인가 — 거부 카드는 유료 재생성이 또 거부될 가능성이 높아
- * 화면이 무료 직접 업로드를 먼저 권해야 한다 (성인용품 특성상 구조적으로 발생).
+ * 진짜 안전필터 거부인가 — 거부 카드만 무료 직접 업로드를 먼저 권한다.
+ *
+ * 실측(2026-08-31, 반복 실험): PROHIBITED 거부는 재시도해도 반복 거부(2/2)지만,
+ * "이미지를 반환하지 않음"(일시 미반환)은 재시도 1회에 뒤집혀 생성에 성공했다
+ * (1/1). 같은 SAFETY_BLOCKED 코드라도 미반환까지 거부로 묶으면 재시도 가치가
+ * 있는 장에 업로드부터 권하게 된다 — detail 문구로 가른다.
  */
 export function hasSafetyRefusal(json: string | null | undefined): boolean {
   if (!json) return false;
   try {
     const arr = JSON.parse(json) as { code: string; detail?: string }[];
-    return arr.some(
-      (r) => r.code === "SAFETY_BLOCKED" || /모델 거부|PROHIBITED/i.test(r.detail ?? ""),
-    );
+    return arr.some((r) => /모델 거부|PROHIBITED/i.test(r.detail ?? ""));
   } catch {
     return false;
   }
