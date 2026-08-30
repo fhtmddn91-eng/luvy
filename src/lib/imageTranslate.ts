@@ -292,17 +292,31 @@ async function callGemini(
         if (RETRYABLE_STATUS.has(res.status)) continue;
         throw new Error(lastNote);
       }
+      type SafetyRating = { category?: string; probability?: string };
       const json = (await res.json()) as {
-        candidates?: { content?: { parts?: GeminiPart[] }; finishReason?: string }[];
-        promptFeedback?: { blockReason?: string };
+        candidates?: { content?: { parts?: GeminiPart[] }; finishReason?: string; safetyRatings?: SafetyRating[] }[];
+        promptFeedback?: { blockReason?: string; safetyRatings?: SafetyRating[] };
       };
       const out = json.candidates?.[0]?.content?.parts ?? [];
       if (out.length === 0) {
         // 안전 필터 차단은 "글자 없음"이 아니다 — 빈 배열로 돌려주면 OCR 이
         // "번역할 텍스트가 없다"로 오판한다 (운영 신고: 중국어가 선명한 이미지
         // 4장이 "찾지 못했습니다"로 반려). 이유를 실어 던져 호출자가 가르게 한다.
-        const reason = json.promptFeedback?.blockReason ?? json.candidates?.[0]?.finishReason;
-        if (reason && reason !== "STOP") throw new Error(`모델 거부(${reason})`);
+        //
+        // blockReason(프롬프트 자체 차단)과 finishReason=SAFETY(생성 중단)는 다른
+        // 신호다 — 뭉뚱그리면 어느 단계에서 걸렸는지 알 수 없어 국소 폴백의
+        // 대상 선정을 튜닝할 수 없다. safetyRatings 도 같이 남긴다.
+        const block = json.promptFeedback?.blockReason;
+        const finish = json.candidates?.[0]?.finishReason;
+        const reason = block ?? finish;
+        if (reason && reason !== "STOP") {
+          const ratings = (json.promptFeedback?.safetyRatings ?? json.candidates?.[0]?.safetyRatings ?? [])
+            .filter((r) => r.probability && r.probability !== "NEGLIGIBLE")
+            .map((r) => `${(r.category ?? "").replace("HARM_CATEGORY_", "")}:${r.probability}`)
+            .join(",");
+          const kind = block ? "block=프롬프트 차단" : "finish=생성 중단";
+          throw new Error(`모델 거부(${reason}) [${kind}${ratings ? ` | ${ratings}` : ""}]`);
+        }
       }
       return out;
     } catch (e) {
@@ -3952,6 +3966,180 @@ async function renderTranslatedImageInner(
   return { data: out.data, mime: out.mime };
 }
 
+/* ── 안전필터 거부 시 국소 편집 폴백 (2026-08-30 실측 기반) ─────────────────
+ *
+ * 전체 이미지를 보내면 거부되는 장도, 글자 띠만 잘라 보내면 통과한다 —
+ * 거부의 원인은 글자가 아니라 프레임에 담긴 신체·사용 장면이기 때문이다.
+ * 실측(라이러 대표, SAFETY_BLOCKED): 상단 제목 띠 국소 재생성은 원본 장식체를
+ * 그대로 모사(오탈자 0)했고, 지우기+로컬 글자는 서체가 밋밋해 열세였다.
+ * 그래서 사다리는 ① 띠 재생성 → ② 띠 지우기+로컬 글자 → ③ 순수 로컬 덮기.
+ *
+ * 원칙:
+ *  - "우회"가 아니라 최소 범위 편집이다: 글자 영역+패딩만 모델에 보낸다.
+ *    잘라 보낸 띠까지 거부되면 그 띠는 재호출 없이 다음 단계로 내려간다.
+ *  - 결과는 어떤 경우에도 후보(NEEDS_REVIEW)까지만 — 띠 밖은 sharp 합성이라
+ *    구조적으로 원본 그대로지만, 띠 안 이음새는 사람 눈이 최종 관문이다.
+ *  - 이 함수는 어드민 승인 재렌더(force)에서만 불린다. 자동 흐름의
+ *    "이미지 HTTP 최대 1회" 원칙은 그대로다.
+ */
+
+export interface BandRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** 띠별 모델 호출 상한 — 전체 1회와 합쳐 장당 6회(운영 상한)를 못 넘게 */
+const MAX_FALLBACK_CALLS = 5;
+/** 박스 주변 패딩(‰) — 딱 맞게 자르면 배경 문맥이 없어 복원이 깨진다 */
+const BAND_PAD_PERMIL = 60;
+
+/**
+ * 번역 대상 박스들을 "패딩 포함 띠"로 묶는다. 패딩 후 겹치는 박스를 한 띠로
+ * 합치는 이유: 같은 배경을 두 번 따로 편집하면 이음새가 두 배로 생긴다.
+ */
+export function clusterBands(
+  boxes: OcrBox[],
+  imgW: number,
+  imgH: number,
+  padPermil = BAND_PAD_PERMIL,
+): BandRect[] {
+  type R = { L: number; T: number; R: number; B: number };
+  let rects: R[] = boxes.map((b) => {
+    const [y1, x1, y2, x2] = b.box;
+    return {
+      L: Math.max(0, Math.round(((x1 - padPermil) / 1000) * imgW)),
+      T: Math.max(0, Math.round(((y1 - padPermil) / 1000) * imgH)),
+      R: Math.min(imgW, Math.round(((x2 + padPermil) / 1000) * imgW)),
+      B: Math.min(imgH, Math.round(((y2 + padPermil) / 1000) * imgH)),
+    };
+  });
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const out: R[] = [];
+    for (const r of rects) {
+      const hit = out.find((o) => !(r.R <= o.L || o.R <= r.L || r.B <= o.T || o.B <= r.T));
+      if (hit) {
+        hit.L = Math.min(hit.L, r.L);
+        hit.T = Math.min(hit.T, r.T);
+        hit.R = Math.max(hit.R, r.R);
+        hit.B = Math.max(hit.B, r.B);
+        changed = true;
+      } else {
+        out.push({ ...r });
+      }
+    }
+    rects = out;
+  }
+  return rects
+    .filter((r) => r.R > r.L && r.B > r.T)
+    .map((r) => ({ left: r.L, top: r.T, width: r.R - r.L, height: r.B - r.T }));
+}
+
+/** 원본 정규화 좌표(0~1000)의 박스를 띠 내부 정규화 좌표로 옮긴다 */
+export function remapBoxToBand(b: OcrBox, band: BandRect, imgW: number, imgH: number): OcrBox {
+  const [y1, x1, y2, x2] = b.box;
+  const px = (v: number, size: number) => (v / 1000) * size;
+  return {
+    ...b,
+    box: [
+      Math.round(((px(y1, imgH) - band.top) / band.height) * 1000),
+      Math.round(((px(x1, imgW) - band.left) / band.width) * 1000),
+      Math.round(((px(y2, imgH) - band.top) / band.height) * 1000),
+      Math.round(((px(x2, imgW) - band.left) / band.width) * 1000),
+    ],
+  };
+}
+
+/** 박스 중심이 띠 안에 있는가 — 띠에 걸친 박스를 어느 띠가 그릴지 정한다 */
+function boxInBand(b: OcrBox, band: BandRect, imgW: number, imgH: number): boolean {
+  const [y1, x1, y2, x2] = b.box;
+  const cy = (((y1 + y2) / 2) / 1000) * imgH;
+  const cx = (((x1 + x2) / 2) / 1000) * imgW;
+  return cy >= band.top && cy < band.top + band.height && cx >= band.left && cx < band.left + band.width;
+}
+
+export async function renderSafetyFallback(
+  data: Buffer,
+  mime: string,
+  boxes: OcrBox[],
+): Promise<{ data: Buffer; mime: string; note: string }> {
+  ensureFonts();
+  const meta = await sharp(data).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (!W || !H) throw new Error("이미지 크기를 읽을 수 없음");
+  const targets = boxes.filter(
+    (b) => ((b.mode ?? "translate") === "translate" && b.ko.trim()) || b.mode === "erase",
+  );
+  if (targets.length === 0) throw new Error("국소 편집 대상 문구 없음");
+  const bands = clusterBands(targets, W, H);
+  if (bands.length === 0) throw new Error("띠를 만들 수 없음");
+
+  // 폴백 전용 예산 스코프 — 바깥(자동 1회) 예산과 분리해 상한을 따로 못 박는다
+  const budget = { left: MAX_FALLBACK_CALLS, used: 0 };
+  const methods = { regen: 0, erase: 0, local: 0 };
+  try {
+    const patches: { input: Buffer; left: number; top: number }[] = [];
+    await imageBudget.run(budget, async () => {
+      for (const band of bands) {
+        const crop = await sharp(data).extract(band).jpeg({ quality: 95 }).toBuffer();
+        const mapped = targets
+          .filter((b) => boxInBand(b, band, W, H))
+          .map((b) => remapBoxToBand(b, band, W, H));
+        if (mapped.length === 0) continue;
+        let patch: Buffer | null = null;
+        // ① 띠 재생성 — 모델이 배경+글자를 함께. 실측상 장식체 모사가 가장 좋다
+        if (budget.left > 0) {
+          try {
+            patch = await callImageEdit(crop, "image/jpeg", regenPrompt(mapped), band.width, band.height);
+            methods.regen++;
+          } catch {
+            /* 띠도 거부·실패 — 재호출 없이 아래 단계로 */
+          }
+        }
+        // ② 모델은 지우기만, 확정 번역문은 로컬 렌더러가 그린다 (오탈자 0)
+        if (!patch && budget.left > 0) {
+          try {
+            const r = await eraseThenDraw(crop, "image/jpeg", eraseTargets(mapped), mapped);
+            patch = await sharp(r.data).png().toBuffer();
+            methods.erase++;
+          } catch {
+            /* 아래 로컬 단계로 */
+          }
+        }
+        // ③ 최후 — 순수 로컬 덮기 (호출 0회). 자국은 육안 관문이 거른다
+        if (!patch) {
+          const r = await renderStill(crop, "image/jpeg", mapped);
+          patch = await sharp(r.data).png().toBuffer();
+          methods.local++;
+        }
+        patches.push({
+          input: await sharp(patch).resize(band.width, band.height, { fit: "fill" }).png().toBuffer(),
+          left: band.left,
+          top: band.top,
+        });
+      }
+    });
+    if (patches.length === 0) throw new Error("띠 패치를 하나도 만들지 못함");
+    const outPng = await sharp(data).composite(patches).png().toBuffer();
+    const out =
+      mime === "image/png"
+        ? { data: outPng, mime: "image/png" }
+        : { data: await sharp(outPng).jpeg({ quality: 92 }).toBuffer(), mime: "image/jpeg" };
+    return {
+      ...out,
+      note: `글자 띠 ${bands.length}곳 국소 편집(재생성 ${methods.regen}·지우기 ${methods.erase}·로컬 ${methods.local}) — 이음새 육안 확인 후 승인`,
+    };
+  } finally {
+    console.log(
+      `[비용] 국소 폴백 이미지 HTTP ${budget.used}회 ≈ $${(budget.used * IMAGE_CALL_COST_USD).toFixed(3)} (1K 출력 단가 기준 추정)`,
+    );
+  }
+}
+
 /**
  * 최종 관문 판정 — 완성본을 다시 읽은 결과(found)에서 "남아 있으면 안 되는
  * 외국어"만 센다.
@@ -4106,8 +4294,17 @@ export interface ResumeInput {
  * 어드민 액션·라우트가 부르는 것은 이 함수뿐이라, 외부에서 넘어온 데이터로
  * 검사 단계를 건너뛰게 만들 방법이 없다 (임의 resume 주입 차단).
  */
-export async function translateImageAuto(data: Buffer, mime: string): Promise<TranslateOutcome> {
-  return runTranslatePipeline(data, mime);
+export async function translateImageAuto(
+  data: Buffer,
+  mime: string,
+  /**
+   * safetyFallback: 안전필터 거부 시 글자 띠 국소 편집 폴백을 허용한다.
+   * **어드민 승인 재렌더(force)에서만** 켠다 — 띠별 추가 호출(상한 5회)이 들어
+   * 자동 흐름의 "이미지 HTTP 최대 1회" 원칙과 함께 둘 수 없다.
+   */
+  opts: { safetyFallback?: boolean } = {},
+): Promise<TranslateOutcome> {
+  return runTranslatePipeline(data, mime, undefined, opts.safetyFallback === true);
 }
 
 /**
@@ -4128,10 +4325,11 @@ async function runTranslatePipeline(
   data: Buffer,
   mime: string,
   resume?: ResumeInput,
+  safetyFallback = false,
 ): Promise<TranslateOutcome> {
   const budget = { left: MAX_IMAGE_CALLS_PER_ASSET, used: 0 };
   try {
-    return await imageBudget.run(budget, () => translateImageAutoInner(data, mime, resume));
+    return await imageBudget.run(budget, () => translateImageAutoInner(data, mime, resume, safetyFallback));
   } finally {
     console.log(`[비용] 이미지 HTTP ${budget.used}회 ≈ $${(budget.used * IMAGE_CALL_COST_USD).toFixed(3)} (1K 출력 단가 기준 추정)`);
   }
@@ -4141,6 +4339,7 @@ async function translateImageAutoInner(
   data: Buffer,
   mime: string,
   resume?: ResumeInput,
+  safetyFallback = false,
 ): Promise<TranslateOutcome> {
   ensureFonts();
 
@@ -4403,6 +4602,29 @@ async function translateImageAutoInner(
     const t = transientReason(msg);
     if (t) return { status: "RETRYABLE", reasons: [t] };
     if (msg.includes("모델 거부") || msg.includes("반환하지 않음")) {
+      // 어드민 승인 재렌더에서만: 글자 띠 국소 편집 폴백 (GIF 는 프레임 문제로 제외).
+      // 성공해도 VERIFIED 는 없다 — 후보로만 떠서 이음새를 사람이 본다.
+      if (safetyFallback && mime !== "image/gif") {
+        try {
+          const fb = await renderSafetyFallback(data, mime, boxes);
+          return {
+            status: "NEEDS_REVIEW",
+            data: fb.data,
+            mime: fb.mime,
+            boxes,
+            reasons: [{ code: "SAFETY_FALLBACK", detail: `${msg} → ${fb.note}` }],
+          };
+        } catch (fe) {
+          const fmsg = fe instanceof Error ? fe.message : String(fe);
+          return {
+            status: "NEEDS_REVIEW",
+            data: null,
+            mime: null,
+            boxes,
+            reasons: [{ code: "SAFETY_BLOCKED", detail: `${msg} (국소 편집 폴백도 실패: ${fmsg.slice(0, 120)})` }],
+          };
+        }
+      }
       return { status: "NEEDS_REVIEW", data: null, mime: null, boxes, reasons: [{ code: "SAFETY_BLOCKED", detail: msg }] };
     }
     if (msg.includes("비율 불일치")) {

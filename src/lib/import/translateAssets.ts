@@ -111,7 +111,8 @@ export async function runAssetTranslation(
 
   let outcome: TranslateOutcome;
   try {
-    outcome = await translateImageAuto(file.data, file.contentType);
+    // 국소 폴백은 운영자 승인 재렌더(force)에서만 — 자동 흐름의 1회 원칙 유지
+    outcome = await translateImageAuto(file.data, file.contentType, { safetyFallback: opts.force === true });
   } catch (e) {
     outcome = { status: "FAILED", reason: e instanceof Error ? e.message : String(e) };
   }

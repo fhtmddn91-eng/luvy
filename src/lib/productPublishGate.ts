@@ -54,6 +54,7 @@ export type ReviewCode =
   | "MEANING_MISMATCH" // 원문 ↔ 최종 이미지 판독문 의미 불일치 (누락·추가·과장·성적 강화)
   | "TEXT_ALTERED" // 확정 번역문 ↔ 최종 판독문 불일치 — 모델이 문구를 임의로 바꿈
   | "SAFETY_BLOCKED" // 안전 필터 거부
+  | "SAFETY_FALLBACK" // 안전 필터 거부 → 글자 띠 국소 편집 폴백 결과 — 이음새 육안 승인 필수
   | "RATIO_MISMATCH" // 재생성 비율 불일치
   | "OUTSIDE_CHANGED" // 허용 패치 영역 밖 픽셀 변화
   | "EXTRA_TEXT" // 번역 박스 안에 기대 문구 외의 추가 문구(환각)
@@ -100,6 +101,7 @@ export const REVIEW_CODE_LABELS: Record<ReviewCode, string> = {
   MEANING_MISMATCH: "번역 의미가 원문과 다를 수 있습니다",
   TEXT_ALTERED: "확정한 번역문과 다르게 그려졌습니다",
   SAFETY_BLOCKED: "모델이 이미지 생성을 거부했습니다",
+  SAFETY_FALLBACK: "거부된 이미지를 글자 영역만 국소 편집했습니다 — 이음새를 확인해주세요",
   RATIO_MISMATCH: "이미지 비율이 원본과 다릅니다",
   OUTSIDE_CHANGED: "글자 밖 영역이 바뀌었습니다",
   EXTRA_TEXT: "번역 외의 글자가 덧붙었습니다",
