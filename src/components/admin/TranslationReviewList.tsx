@@ -212,8 +212,11 @@ function ReviewCard({
   const disabled = busy !== null;
 
   const originalSrc = item.originalUrl ?? item.url;
+  // 지금 손님에게 나가는 그림이 이미 승인된 번역본인가 — 이 경우 후보를 버려도
+  // 원본이 아니라 그 승인본이 유지된다 (rejectAssetCandidate 와 같은 판별식)
+  const liveIsApproved = !!item.originalUrl && item.url !== item.originalUrl;
   // 번역본이 이미 손님에게 나가 있으면 그것, 아니면 검수 대기 후보
-  const resultSrc = item.candidateUrl ?? (item.originalUrl && item.url !== item.originalUrl ? item.url : null);
+  const resultSrc = item.candidateUrl ?? (liveIsApproved ? item.url : null);
   const reasons = reviewReasonsSummary(item.reviewReasons);
   const retryable = item.translateStatus === TRANSLATE_STATUS.RETRYABLE;
   /** 이 카드가 지금 처리 중인가 — 30초~1분 걸리는 작업이라 표시가 없으면 고장으로 읽힌다 */
@@ -426,10 +429,18 @@ function ReviewCard({
             <button
               type="button"
               disabled={disabled}
-              onClick={() => run(item.id, "번역본을 버리고 원본을 유지합니다", () => rejectAssetCandidate(item.id))}
+              onClick={() =>
+                run(
+                  item.id,
+                  liveIsApproved
+                    ? "새 번역본을 버렸습니다 — 지금 나가는 그림은 그대로입니다"
+                    : "번역본을 버리고 원본을 유지합니다",
+                  () => rejectAssetCandidate(item.id),
+                )
+              }
               className="border border-hairline px-3 py-1.5 font-semibold text-muted hover:text-ink-deep disabled:opacity-40"
             >
-              이 번역본 버리기 (원본 유지)
+              {liveIsApproved ? "이 번역본 버리기 (지금 그림 유지)" : "이 번역본 버리기 (원본 유지)"}
             </button>
           )}
         </div>

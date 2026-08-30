@@ -208,7 +208,7 @@ function CandidateReview({ a }: { a: AssetRow }) {
             onClick={() => run(() => rejectAssetCandidate(a.id))}
             className="border border-hairline px-2 py-0.5 font-semibold text-ink-deep disabled:opacity-40"
           >
-            원본 유지
+            {a.originalUrl && a.url !== a.originalUrl ? "후보 버리기 (지금 그림 유지)" : "원본 유지"}
           </button>
         )}
         <button

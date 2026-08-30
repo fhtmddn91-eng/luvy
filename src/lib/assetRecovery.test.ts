@@ -22,6 +22,7 @@ interface AssetRow {
   translateStatus: string | null;
   reviewReasons: string | null;
   bytes: number;
+  originalSha256: string | null;
 }
 const assets = new Map<string, AssetRow>();
 const saved: string[] = [];
@@ -87,8 +88,10 @@ vi.mock("@/lib/import/translateAssets", async () => {
     demoteIfUnsafe: async (id: string) => { demoted.push(id); return false; },
   };
 });
+const staleMarks = vi.hoisted(() => [] as string[]);
 vi.mock("@/lib/translateCache", () => ({
-  sha256Of: () => "sha", saveTranslationCache: async () => {}, markCacheStale: async () => {},
+  sha256Of: () => "sha", saveTranslationCache: async () => {},
+  markCacheStale: async (sha: string) => { staleMarks.push(sha); },
 }));
 vi.mock("@/lib/productAssets", () => ({
   assetKindFor: () => "DETAIL", nextThumbnail: () => null,
@@ -100,6 +103,7 @@ const {
   translateProductAsset,
   approveAssetRerender,
   approveAssetCandidates,
+  rejectAssetCandidate,
   startAssetRerender,
   startAssetRegenerateWithHint,
 } = await import("./actions/admin-assets");
@@ -116,7 +120,8 @@ function seed(over: Partial<AssetRow> = {}): AssetRow {
     id: "a1", productId: "p1", kind: "DETAIL",
     url: "/uploads/translated.jpg", originalUrl: "/uploads/original.jpg",
     ocrData: BOXES, candidateUrl: null, candidateOcr: null,
-    translateStatus: "NEEDS_REVIEW", reviewReasons: null, bytes: 10, ...over,
+    translateStatus: "NEEDS_REVIEW", reviewReasons: null, bytes: 10,
+    originalSha256: null, ...over,
   };
   assets.set(row.id, row);
   return row;
@@ -129,7 +134,7 @@ const fd = (entries: Record<string, string | File>) => {
 const png = (type = "image/png") => new File([new Uint8Array([1, 2, 3])], "fix.png", { type });
 
 beforeEach(() => {
-  assets.clear(); saved.length = 0; audits.length = 0; demoted.length = 0; renderCalls.length = 0;
+  assets.clear(); saved.length = 0; audits.length = 0; demoted.length = 0; renderCalls.length = 0; staleMarks.length = 0;
   process.env.GEMINI_API_KEY = "test";
 });
 
@@ -309,6 +314,7 @@ describe("approveAssetCandidates — 일괄 승인", () => {
       url: `/uploads/tr-${id}.jpg`, originalUrl: `/uploads/orig-${id}.jpg`,
       ocrData: BOXES, candidateUrl: `/uploads/cand-${id}.jpg`, candidateOcr: BOXES,
       translateStatus: "NEEDS_REVIEW", reviewReasons: null, bytes: 10,
+      originalSha256: null,
     };
     assets.set(id, row);
     return row;
@@ -444,5 +450,45 @@ describe("startAssetRegenerateWithHint — 지시 재생성도 백그라운드",
     expect(a.translateStatus).toBe("NEEDS_REVIEW");
     expect(a.reviewReasons).toContain("만들기 실패");
     renderReject.value = null;
+  });
+});
+
+describe("rejectAssetCandidate — 승인본이 걸려 있으면 거부해도 판매가 안 내려간다", () => {
+  // 실사례(2026-08-30): 승인된 번역이 url 에 걸린 장에서 문구 수정 후보를
+  // 거부하면 FAILED → demoteIfUnsafe 로 판매 중 상품이 통째로 숨겨졌다.
+  // 손님용 그림은 멀쩡한 승인본 그대로였는데도.
+  it("url ≠ originalUrl(승인본 노출 중)이면 후보만 버리고 VERIFIED 로 복원한다", async () => {
+    const a = seed({
+      candidateUrl: "/uploads/cand.png", candidateOcr: BOXES,
+      originalSha256: "sha-orig",
+    });
+    const r = await rejectAssetCandidate("a1");
+    expect(r.ok).toBe(true);
+    expect(a.translateStatus).toBe("VERIFIED");
+    expect(a.url).toBe("/uploads/translated.jpg");
+    expect(a.candidateUrl).toBeNull();
+    expect(a.candidateOcr).toBeNull();
+    expect(demoted).toEqual([]);
+    // 승인본 캐시는 유효하다 — 무효화하면 다음 자동 번역이 돈 내고 다시 돈다
+    expect(staleMarks).toEqual([]);
+  });
+
+  it("url = originalUrl(원본 노출 중)이면 기존대로 FAILED + 판매 점검 + 캐시 무효화", async () => {
+    const a = seed({
+      url: "/uploads/original.jpg", candidateUrl: "/uploads/cand.png",
+      candidateOcr: BOXES, originalSha256: "sha-orig",
+    });
+    const r = await rejectAssetCandidate("a1");
+    expect(r.ok).toBe(true);
+    expect(a.translateStatus).toBe("FAILED");
+    expect(a.candidateUrl).toBeNull();
+    expect(demoted).toEqual(["p1"]);
+    expect(staleMarks).toEqual(["sha-orig"]);
+  });
+
+  it("후보가 없으면 오류를 돌려준다", async () => {
+    seed();
+    const r = await rejectAssetCandidate("a1");
+    expect(r.error).toBeTruthy();
   });
 });

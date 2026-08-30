@@ -326,6 +326,36 @@ export async function rejectAssetCandidate(assetId: string): Promise<TranslateSt
   if (!asset?.candidateUrl) return { error: "거부할 후보가 없습니다." };
 
   await deleteUploadIfUnused(asset.candidateUrl, { exceptAssetId: asset.id });
+
+  // url 이 원본과 다르면 이미 승인(또는 검증 통과)된 번역본이 손님에게 나가는
+  // 중이다. 이때 후보 거부는 "후보만 버리기"여야 한다 — 실사례(2026-08-30):
+  // 승인본이 걸린 장의 문구 수정 후보를 거부했더니 FAILED → demoteIfUnsafe 로
+  // 판매 중 상품이 통째로 내려갔다. 손님용 그림은 멀쩡했는데도.
+  const liveIsApprovedTranslation = !!asset.originalUrl && asset.url !== asset.originalUrl;
+  if (liveIsApprovedTranslation) {
+    await db.productAsset.update({
+      where: { id: asset.id },
+      data: {
+        translateStatus: TRANSLATE_STATUS.VERIFIED,
+        reviewReasons: null,
+        candidateUrl: null,
+        candidateOcr: null,
+        reviewedAt: new Date(),
+      },
+    });
+    // 캐시는 건드리지 않는다 — 승인본 재사용은 여전히 유효하고,
+    // 무효화하면 같은 원본의 다음 자동 번역이 돈 내고 다시 돈다.
+    await audit({
+      action: "ASSET_TRANSLATE",
+      target: "product",
+      targetId: asset.productId,
+      summary: `번역 후보 거부 (${asset.kind}) — 승인본 유지`,
+      meta: { assetId },
+    });
+    revalidateProduct(asset.productId);
+    return { ok: true };
+  }
+
   await db.productAsset.update({
     where: { id: asset.id },
     data: {
