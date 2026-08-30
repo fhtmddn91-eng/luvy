@@ -4192,11 +4192,15 @@ export async function renderSafetyFallback(
       mime === "image/png"
         ? { data: outPng, mime: "image/png" }
         : { data: await sharp(outPng).jpeg({ quality: 92 }).toBuffer(), mime: "image/jpeg" };
-    const counts = `재생성 ${methods.regen}·재시도 ${methods.retry}·지우기 ${methods.erase}·로컬 ${methods.local}`;
-    const leftoverNote = unresolvedZh.length > 0 ? ` · 잔존 의심: ${unresolvedZh.join(", ").slice(0, 120)}` : "";
+    // 내부 카운터는 로그에만 — 관리자 화면 사유에는 무엇을 확인하면 되는지만 싣는다
+    console.log(
+      `[국소 폴백] 띠 ${bands.length}곳 — 재생성 ${methods.regen}·재시도 ${methods.retry}·지우기 ${methods.erase}·로컬 ${methods.local}`,
+    );
+    const leftoverNote =
+      unresolvedZh.length > 0 ? ` · 아직 남았을 수 있는 글자: ${unresolvedZh.join(", ").slice(0, 120)}` : "";
     return {
       ...out,
-      note: `글자 띠 ${bands.length}곳 국소 편집(${counts})${leftoverNote} — 이음새 육안 확인 후 승인`,
+      note: `글자 영역 ${bands.length}곳을 자동으로 고쳤습니다${leftoverNote} — 덧댄 자국·이음새가 없는지 확인해주세요`,
     };
   } finally {
     console.log(

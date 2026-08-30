@@ -138,6 +138,14 @@ function reasonLine(code: string, detail?: string): string {
   }
   const label = reasonLabel(code);
   if (!detail) return label;
+  // 안전필터 거부의 기술 표기는 화면에서 숨긴다 (원칙: 관리자 화면 영어 코드 금지).
+  // PROHIBITED_CONTENT 같은 코드·[block=…] 분류 꼬리·폴백 내부 카운터는 DB 에
+  // 그대로 남아 디버깅에 쓰이고, 여기서는 표시만 한국어로 바꾼다.
+  detail = detail
+    .replace(/모델 거부\([A-Z_ ]+\)\s*(\[[^\]]*\]\s*)?/g, "안전 규정에 걸려 거부됨 ")
+    .replace(/\(재생성 \d+·재시도 \d+·지우기 \d+·로컬 \d+\)\s*/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
   if (COORD_DUMP.test(detail)) {
     const spots = detail.split("·").filter((part) => COORD_DUMP.test(part.trim())).length || 1;
     return `${label} (${spots}곳)`;

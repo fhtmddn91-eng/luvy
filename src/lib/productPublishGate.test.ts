@@ -322,6 +322,31 @@ describe("reviewReasonsSummary — 좌표 덤프는 개수로 줄인다", () => 
   });
 });
 
+describe("reviewReasonsSummary — 안전필터 거부의 기술 코드는 화면에 안 보인다", () => {
+  // 원칙(2026-08-31 피드백): 관리자 화면에 영어 코드 금지. 기술 상세는 DB·로그에만.
+  it("PROHIBITED_CONTENT 와 [block=…] 꼬리를 한국어로 바꾼다", () => {
+    const s = reviewReasonsSummary(
+      JSON.stringify([{ code: "SAFETY_BLOCKED", detail: "모델 거부(PROHIBITED_CONTENT) [block=프롬프트 차단]" }]),
+    );
+    expect(s).not.toContain("PROHIBITED");
+    expect(s).not.toContain("[block");
+    expect(s).toContain("안전 규정");
+  });
+
+  it("폴백 사유의 내부 카운터(재생성 n·…)도 숨긴다 — 구 기록 호환", () => {
+    const s = reviewReasonsSummary(
+      JSON.stringify([{
+        code: "SAFETY_FALLBACK",
+        detail: "모델 거부(PROHIBITED_CONTENT) [finish=생성 중단] → 글자 띠 5곳 국소 편집(재생성 3·재시도 0·지우기 1·로컬 2) · 잔존 의심: 咬住舔 — 이음새 육안 확인 후 승인",
+      }]),
+    );
+    expect(s).not.toContain("PROHIBITED");
+    expect(s).not.toContain("[finish");
+    expect(s).not.toContain("재생성 3");
+    expect(s).toContain("咬住舔"); // 남은 글자 단서는 유지
+  });
+});
+
 describe("reasonLine — 월 한도 초과는 한국어로 설명한다", () => {
   it("monthly spending cap 이 감지되면 전용 안내로 바꾼다", () => {
     const s = reviewReasonsSummary(

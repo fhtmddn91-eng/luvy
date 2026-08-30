@@ -349,8 +349,9 @@ function ReviewCard({
       {refused && !item.candidateUrl ? (
         <div className="mt-3 space-y-2 text-[13px]">
           <p className="text-ink-soft">
-            노출 수위가 있는 이미지는 AI가 다시 만들어도 <b>또 거부될 가능성이 높습니다.</b>{" "}
-            직접 고친 이미지를 올리는 것이 확실하고 무료입니다.
+            노출 수위가 있는 이미지는 AI가 전체를 다시 만들지 못할 수 있습니다. 그 경우{" "}
+            <b>글자 부분만 잘라 자동으로 고칩니다</b> (글자 수에 따라 약 100~600원).
+            직접 고친 이미지를 올리면 무료입니다.
           </p>
           {uploadBlock}
           <button
@@ -359,7 +360,7 @@ function ReviewCard({
             onClick={() => runStart(item.id, () => startAssetRerender(item.id))}
             className="border border-hairline px-3 py-1.5 text-[12px] font-semibold text-muted hover:text-ink-deep disabled:opacity-40"
           >
-            그래도 AI로 다시 만들어보기 (약 100원 · 거부될 수 있음)
+            AI로 다시 만들기 (약 100~600원)
           </button>
         </div>
       ) : (

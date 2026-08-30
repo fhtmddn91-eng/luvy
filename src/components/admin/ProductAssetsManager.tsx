@@ -217,7 +217,7 @@ function CandidateReview({ a }: { a: AssetRow }) {
           onClick={() => run(() => startAssetRerender(a.id))}
           className="border border-amber-500 px-2 py-0.5 font-semibold text-amber-900 disabled:opacity-40"
         >
-          {a.translateStatus === "RETRYABLE" ? "재시도 승인" : "재렌더 승인"} (이미지 1회 ≈₩100 추정)
+          {a.translateStatus === "RETRYABLE" ? "재시도 승인" : "재렌더 승인"} (약 100~600원)
         </button>
       </div>
       {msg && <p className="mt-1 text-red-700">{msg}</p>}
