@@ -451,11 +451,13 @@ export function ProductAssetsManager({
   }, [hasTranslating, router]);
 
   // 검수함 딥링크로 들어왔으면 편집기를 화면에 보여준다.
-  // 이미지 30여 장이 로딩되며 레이아웃이 계속 내려가므로 한 번으로는 밀린다 —
-  // 시차를 두고 몇 번 다시 맞춘다 (실측: 150ms 한 번은 상단에 남았다)
+  // behavior 는 반드시 instant — 이 사이트는 scroll-behavior:smooth 라 수천 px
+  // smooth 스크롤이 로딩 중 리플로우에 취소돼 상단으로 되돌아갔다(실측).
+  // 이미지 30여 장이 로딩되며 레이아웃이 계속 내려가므로 시차를 두고 재시도한다.
   useEffect(() => {
     if (!initialEditAssetId) return;
-    const scroll = () => document.getElementById("asset-text-editor")?.scrollIntoView({ block: "start" });
+    const scroll = () =>
+      document.getElementById("asset-text-editor")?.scrollIntoView({ block: "start", behavior: "instant" });
     const timers = [200, 900, 2000].map((ms) => setTimeout(scroll, ms));
     return () => timers.forEach(clearTimeout);
   }, [initialEditAssetId]);
