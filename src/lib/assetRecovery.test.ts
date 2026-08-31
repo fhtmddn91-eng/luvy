@@ -107,6 +107,7 @@ const {
   rejectAssetCandidate,
   startAssetRerender,
   startAssetRegenerateWithHint,
+  startAssetTextEdit,
 } = await import("./actions/admin-assets");
 
 /** 백그라운드 void 체인이 다 돌 때까지 마이크로태스크·타이머를 비운다 */
@@ -451,6 +452,53 @@ describe("startAssetRegenerateWithHint — 지시 재생성도 백그라운드",
     expect(a.translateStatus).toBe("NEEDS_REVIEW");
     expect(a.reviewReasons).toContain("만들기 실패");
     renderReject.value = null;
+  });
+});
+
+describe("startAssetTextEdit — 문구 수정도 백그라운드로", () => {
+  // 동기 90초 대기는 연결 끊김·이중 클릭의 온상이었다(실측) — 재생성과 같은
+  // 패턴: 즉시 TRANSLATING 표시, 결과는 후보로만, 실패해도 안 갇힌다.
+  it("즉시 TRANSLATING, 완료 후 후보가 MANUAL_EDIT 로 생긴다", async () => {
+    const a = seed();
+    const r = await startAssetTextEdit("a1", {}, fd({ "ko-0": "새 문구" }));
+    expect(r.ok).toBe(true);
+    expect(a.translateStatus).toBe("TRANSLATING");
+    await flush();
+    expect(a.translateStatus).toBe("NEEDS_REVIEW");
+    expect(a.candidateUrl).toMatch(/^\/uploads\/gen-/);
+    expect(a.reviewReasons).toContain("MANUAL_EDIT");
+    // 손님용 url·보존 원본은 절대 안 바뀐다
+    expect(a.url).toBe("/uploads/translated.jpg");
+    expect(a.originalUrl).toBe("/uploads/original.jpg");
+  });
+
+  it("겹쳐 누르면 두 번째는 안내만 하고 렌더를 두 번 돌리지 않는다", async () => {
+    const a = seed();
+    const r1 = await startAssetTextEdit("a1", {}, fd({ "ko-0": "첫 수정" }));
+    expect(r1.ok).toBe(true);
+    const r2 = await startAssetTextEdit("a1", {}, fd({ "ko-0": "둘째 수정" }));
+    expect(r2.error).toBeTruthy();
+    await flush();
+    expect(renderCalls.length).toBe(1); // 첫 실행 1회뿐
+    expect(a.translateStatus).toBe("NEEDS_REVIEW");
+  });
+
+  it("렌더 실패 시 TRANSLATING 에 갇히지 않고 사유가 남는다", async () => {
+    const a = seed();
+    renderReject.value = new Error("문구 렌더 실패");
+    const r = await startAssetTextEdit("a1", {}, fd({ "ko-0": "수정" }));
+    expect(r.ok).toBe(true);
+    await flush();
+    expect(a.translateStatus).not.toBe("TRANSLATING");
+    expect(a.reviewReasons).toContain("문구 렌더 실패");
+    renderReject.value = null;
+  });
+
+  it("번역할 것도 지울 것도 없으면 시작 전에 거른다", async () => {
+    const a = seed({ ocrData: JSON.stringify([{ box: [1, 2, 3, 4], zh: "字", ko: "", bg: "#fff", fg: "#000" }]) });
+    const r = await startAssetTextEdit("a1", {}, fd({ "ko-0": "", "mode-0": "keep" }));
+    expect(r.error).toBeTruthy();
+    expect(a.translateStatus).toBe("NEEDS_REVIEW"); // 원래 상태 유지
   });
 });
 

@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState, startTransition } from "react";
 import { useActionState } from "react";
+import { useRouter } from "next/navigation";
 import {
   addProductAssets,
   deleteProductAsset,
   moveProductAsset,
   reorderProductAssets,
   translateProductAsset,
-  updateAssetTranslation,
+  startAssetTextEdit,
   revertAssetTranslation,
   approveAssetCandidate,
   rejectAssetCandidate,
@@ -339,9 +340,9 @@ function UploadButton({ pending }: { pending: boolean }) {
   );
 }
 
-/** 번역된 이미지의 문구별 수정 편집기 — 저장하면 원본에서 다시 렌더된다 */
+/** 번역된 이미지의 문구별 수정 편집기 — 저장하면 백그라운드에서 다시 렌더된다 */
 function TranslationEditor({ asset, onClose }: { asset: AssetRow; onClose: () => void }) {
-  const bound = updateAssetTranslation.bind(null, asset.id);
+  const bound = startAssetTextEdit.bind(null, asset.id);
   const [state, formAction, pending] = useActionState<TranslateState, FormData>(bound, {});
 
   let items: BoxItem[] = [];
@@ -356,7 +357,7 @@ function TranslationEditor({ asset, onClose }: { asset: AssetRow; onClose: () =>
   }, [state.ok, onClose]);
 
   return (
-    <div className="mt-4 border border-ink-deep bg-white p-4">
+    <div id="asset-text-editor" className="mt-4 border border-ink-deep bg-white p-4">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-[13px] font-bold text-ink-deep">번역 문구 수정</p>
@@ -391,8 +392,12 @@ function TranslationEditor({ asset, onClose }: { asset: AssetRow; onClose: () =>
           ))}
           {state.error && <p className={errorCls}>{state.error}</p>}
           <button type="submit" disabled={pending} className={btnPrimary}>
-            {pending ? "다시 만드는 중…" : "저장하고 다시 만들기"}
+            {pending ? "저장하는 중…" : "저장하고 다시 만들기"}
           </button>
+          <p className={helpCls}>
+            저장하면 바로 화면이 닫히고 백그라운드에서 만들어집니다 — 카드가 &lsquo;번역
+            중&rsquo;으로 바뀌고 1~2분 뒤 자동으로 갱신됩니다.
+          </p>
         </form>
       </div>
     </div>
@@ -410,9 +415,12 @@ function TranslationEditor({ asset, onClose }: { asset: AssetRow; onClose: () =>
 export function ProductAssetsManager({
   productId,
   assets,
+  initialEditAssetId,
 }: {
   productId: string;
   assets: AssetRow[];
+  /** 검수함 "문구 수정 열기" 딥링크(?editAsset=…) — 진입하자마자 편집기를 연다 */
+  initialEditAssetId?: string | null;
 }) {
   const bound = addProductAssets.bind(null, productId);
   const [state, formAction, pending] = useActionState<AssetFormState, FormData>(bound, {});
@@ -430,7 +438,27 @@ export function ProductAssetsManager({
   const [trErrors, setTrErrors] = useState<string[]>([]);
   /** 오류가 아닌 판정 안내(외국어 없음·검수 대기) — 빨간 오류와 색으로 구분한다 */
   const [trNotices, setTrNotices] = useState<string[]>([]);
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(initialEditAssetId ?? null);
+  const router = useRouter();
+
+  // 백그라운드 렌더(문구 수정·재생성) 진행 중이면 8초마다 새로고침 —
+  // 검수함과 같은 규칙. 없으면 "눌러도 아무 일 없다"로 읽힌다 (실측 2026-08-31)
+  const hasTranslating = assets.some((a) => a.translateStatus === "TRANSLATING");
+  useEffect(() => {
+    if (!hasTranslating) return;
+    const t = setInterval(() => router.refresh(), 8000);
+    return () => clearInterval(t);
+  }, [hasTranslating, router]);
+
+  // 검수함 딥링크로 들어왔으면 편집기를 화면에 보여준다
+  useEffect(() => {
+    if (!initialEditAssetId) return;
+    const timer = setTimeout(
+      () => document.getElementById("asset-text-editor")?.scrollIntoView({ block: "start" }),
+      150,
+    );
+    return () => clearTimeout(timer);
+  }, [initialEditAssetId]);
 
   // 드래그 순서 변경 — 저장 전까지는 화면에서만 순서를 바꾼다
   const [order, setOrder] = useState<string[] | null>(null);

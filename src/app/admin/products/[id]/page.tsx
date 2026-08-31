@@ -7,9 +7,17 @@ import { PageHeader, Panel } from "@/components/ui/Panel";
 import { getAllCategories } from "@/lib/categories";
 import { ProductAssetsManager } from "@/components/admin/ProductAssetsManager";
 
-export default async function EditProductPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function EditProductPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  /** editAsset: 검수함 "문구 수정 열기" 딥링크 — 해당 이미지의 편집기를 바로 연다 */
+  searchParams: Promise<{ editAsset?: string }>;
+}) {
   await requireAdmin();
   const { id } = await params;
+  const { editAsset } = await searchParams;
   const product = await db.product.findUnique({
     where: { id },
     include: {
@@ -57,6 +65,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
           title={`상품 이미지 (대표 ${product.assets.filter((a) => a.kind === "MAIN").length} · 상세 ${product.assets.filter((a) => a.kind !== "MAIN").length})`}
         >
           <ProductAssetsManager
+            initialEditAssetId={editAsset ?? null}
             productId={product.id}
             assets={product.assets.map((a) => ({
               id: a.id,

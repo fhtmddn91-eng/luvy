@@ -98,6 +98,60 @@ export function asIsDraft(draft: ImportDraft): Translation {
   };
 }
 
+/**
+ * 상품명만 재번역 — 수집 때 번역이 실패(429 등)해 원문이 남은 상품의 복구용.
+ *
+ * 실패하면 null 을 돌려주고 호출부는 원래 이름을 유지한다 — 판매 전환이
+ * 이름 번역 때문에 막히면 안 된다(이름은 좋게 만드는 것이지 게이트가 아니다).
+ * 결과에 한자가 남으면 반쪽 번역이므로 실패로 친다.
+ */
+export async function retranslateName(rawName: string): Promise<string | null> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: SYSTEM }] },
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: `다음 중국어 상품명을 한국 도매몰용 한국어 상품명으로 바꿔주세요.\n\n[원문 상품명]\n${rawName}\n\n다음 형식의 JSON만 출력:\n{"name":"한국어 상품명"}`,
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          maxOutputTokens: 500,
+          responseMimeType: "application/json",
+          thinkingConfig: { thinkingLevel: "minimal" },
+        },
+      }),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    const text = (json.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("");
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    const name = String((JSON.parse(m[0]) as Record<string, unknown>).name ?? "").trim();
+    if (!name || /[一-鿿]/.test(name)) return null;
+    return name.slice(0, 120);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function translateDraft(draft: ImportDraft): Promise<Translation> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return fallback(draft, "GEMINI_API_KEY 미설정");

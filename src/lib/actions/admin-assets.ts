@@ -615,17 +615,12 @@ export async function startAssetRegenerateWithHint(
 }
 
 /** 어드민이 고친 문구로 원본에서 다시 렌더한다. 빈 문구 = 그 항목은 번역 안 함 */
-export async function updateAssetTranslation(
-  assetId: string,
-  _prev: TranslateState,
+/** 문구 수정 폼 → 편집된 박스 배열. 렌더할 게 없으면 error 를 돌려준다 */
+function parseEditedBoxes(
+  ocrData: string,
   formData: FormData,
-): Promise<TranslateState> {
-  await requireAdmin();
-
-  const asset = await db.productAsset.findUnique({ where: { id: assetId } });
-  if (!asset?.originalUrl || !asset.ocrData) return { error: "번역된 이미지가 아닙니다." };
-
-  const boxes = parseOcrBoxes(JSON.parse(asset.ocrData));
+): { edited: OcrBox[] } | { error: string } {
+  const boxes = parseOcrBoxes(JSON.parse(ocrData));
   // 폼에서 항목별 문구·처리방식·위치·크기·굵기를 받아 덮어쓴다.
   // (검증은 renderTranslatedImage 앞에서 parseOcrBoxes 가 다시 한다)
   const numOr = (v: FormDataEntryValue | null, fallback: number): number => {
@@ -646,10 +641,24 @@ export async function updateAssetTranslation(
       ...(weight ? { weight: weight as OcrBox["weight"] } : {}),
     };
   });
-  const willRender = edited.some(
-    (b) => (b.mode === "translate" && b.ko) || b.mode === "erase",
-  );
+  const willRender = edited.some((b) => (b.mode === "translate" && b.ko) || b.mode === "erase");
   if (!willRender) return { error: "번역하거나 지울 문구가 없습니다. 원본 복원을 쓰세요." };
+  return { edited };
+}
+
+export async function updateAssetTranslation(
+  assetId: string,
+  _prev: TranslateState,
+  formData: FormData,
+): Promise<TranslateState> {
+  await requireAdmin();
+
+  const asset = await db.productAsset.findUnique({ where: { id: assetId } });
+  if (!asset?.originalUrl || !asset.ocrData) return { error: "번역된 이미지가 아닙니다." };
+
+  const parsed = parseEditedBoxes(asset.ocrData, formData);
+  if ("error" in parsed) return parsed;
+  const edited = parsed.edited;
 
   const file = await readPublicUpload(path.basename(asset.originalUrl));
   if (!file) return { error: "원본 파일을 읽을 수 없습니다." };
@@ -684,6 +693,101 @@ export async function updateAssetTranslation(
   } catch (e) {
     return { error: `재렌더 실패: ${e instanceof Error ? e.message : String(e)}` };
   }
+}
+
+/**
+ * 문구 수정 재렌더 — 백그라운드 시작형.
+ *
+ * 동기 버전(updateAssetTranslation)은 90초를 붙잡아 연결 끊김·이중 클릭의
+ * 온상이었다(실측 2026-08-31). 재생성(startAssetRerender)과 같은 계약:
+ * 즉시 TRANSLATING 표시 → 결과는 후보(MANUAL_EDIT)로만 → 실패해도 안 갇힌다.
+ */
+export async function startAssetTextEdit(
+  assetId: string,
+  _prev: TranslateState,
+  formData: FormData,
+): Promise<TranslateState> {
+  await requireAdmin();
+
+  const asset = await db.productAsset.findUnique({ where: { id: assetId } });
+  if (!asset?.originalUrl || !asset.ocrData) return { error: "번역된 이미지가 아닙니다." };
+  if (asset.translateStatus === TRANSLATE_STATUS.TRANSLATING) {
+    return { error: "이미 진행 중입니다 — 잠시 후 자동으로 갱신됩니다." };
+  }
+
+  const parsed = parseEditedBoxes(asset.ocrData, formData);
+  if ("error" in parsed) return parsed;
+  const edited = parsed.edited;
+
+  const file = await readPublicUpload(path.basename(asset.originalUrl));
+  if (!file) return { error: "원본 파일을 읽을 수 없습니다." };
+
+  if (!assetLock.tryAcquire(asset.id)) {
+    return { error: "이미 진행 중입니다 — 잠시 후 자동으로 갱신됩니다." };
+  }
+
+  const prevStatus = asset.translateStatus;
+  try {
+    await db.productAsset.update({
+      where: { id: asset.id },
+      data: { translateStatus: TRANSLATE_STATUS.TRANSLATING },
+    });
+    await audit({
+      action: "ASSET_TRANSLATE",
+      target: "product",
+      targetId: asset.productId,
+      summary: `문구 수정 재렌더 시작 (${asset.kind})`,
+      meta: { assetId, cost: "image-http-1 (≈$0.067 추정)" },
+    });
+  } catch (e) {
+    assetLock.release(asset.id);
+    throw e;
+  }
+
+  void (async () => {
+    // 폼 저장이 곧 "이미지 API 1회 승인"이다. 결과는 바로 나가지 않고 후보로
+    // 떠서 운영자가 눈으로 확인한 뒤 승인해야 url 로 승격된다.
+    const rendered = await renderTranslatedImage(file.data, file.contentType, edited);
+    const saved = await saveImageBuffer(rendered.data, rendered.mime, 15 * 1024 * 1024);
+    if (!saved.ok) throw new Error(`후보 저장 실패: ${saved.error}`);
+    if (asset.candidateUrl) await deleteUploadIfUnused(asset.candidateUrl, { exceptAssetId: asset.id });
+    await db.productAsset.update({
+      where: { id: asset.id },
+      data: {
+        translateStatus: TRANSLATE_STATUS.NEEDS_REVIEW,
+        reviewReasons: JSON.stringify([
+          { code: "MANUAL_EDIT", detail: "문구 수정 재렌더 — 육안 확인 후 승인" },
+        ]),
+        candidateUrl: saved.url,
+        candidateOcr: JSON.stringify(edited),
+      },
+    });
+    await audit({
+      action: "ASSET_TRANSLATE",
+      target: "product",
+      targetId: asset.productId,
+      summary: `문구 수정 재렌더 완료 → 후보 생성 (${asset.kind})`,
+      meta: { assetId },
+    });
+  })()
+    .catch(async (e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[문구 수정] 백그라운드 실패 ${assetId}: ${msg}`);
+      await db.productAsset
+        .update({
+          where: { id: asset.id },
+          data: {
+            // 원래 상태로 되돌린다 — 문구 기록은 그대로라 바로 다시 시도할 수 있다
+            translateStatus: prevStatus,
+            reviewReasons: JSON.stringify([{ code: "RENDER_FAILED", detail: msg.slice(0, 300) }]),
+          },
+        })
+        .catch(() => {});
+    })
+    .finally(() => assetLock.release(asset.id));
+
+  revalidateProduct(asset.productId);
+  return { ok: true, notice: "저장했습니다 — 다시 만드는 중입니다. 보통 1~2분 뒤 이 화면에서 자동으로 갱신됩니다." };
 }
 
 /**

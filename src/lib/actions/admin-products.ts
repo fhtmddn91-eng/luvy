@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
-import { translateProductImages, promoteIfReady } from "@/lib/import/translateAssets";
+import { translateProductImages, promoteIfReady, ensureKoreanName } from "@/lib/import/translateAssets";
 import { productPublishGate, productSaveStatusData, gateSummary, isPlaceholderBrand, PLACEHOLDER_BRAND } from "@/lib/productPublishGate";
 import { sourceForUrl } from "@/lib/import/sources";
 import { saveImageUpload, deleteImageUpload, deleteUploadIfUnused } from "@/lib/storage";
@@ -333,6 +333,9 @@ async function translateOnPublish(productId: string): Promise<void> {
  * 예전에는 ACTIVE 를 먼저 반영해 번역 중 중국어 원본이 손님에게 보였다.
  */
 async function requestPublish(id: string): Promise<{ state: "active" | "pending"; why: string }> {
+  // 판매 의사 표시 시점에 이름부터 정리 — 수집 때 번역이 실패해 중국어 원문이
+  // 남은 상품이 그 이름 그대로 손님에게 나가지 않게 (실패해도 판매는 안 막는다)
+  await ensureKoreanName(id).catch(() => {});
   const p = await db.product.findUnique({
     where: { id },
     select: { sourceUrl: true, brand: true },

@@ -2,7 +2,9 @@ import "server-only";
 import path from "node:path";
 import { db } from "@/lib/db";
 import { readPublicUpload, saveImageBuffer, deleteUploadIfUnused } from "@/lib/storage";
-import { translateImageAuto, type TranslateOutcome, type OcrBox } from "@/lib/imageTranslate";
+import { translateImageAuto, hasHanzi, type TranslateOutcome, type OcrBox } from "@/lib/imageTranslate";
+import { retranslateName } from "@/lib/import/translate";
+import { audit } from "@/lib/audit";
 import { sha256Of, lookupTranslationCache, saveTranslationCache } from "@/lib/translateCache";
 import { productPublishGate, TRANSLATE_STATUS, type ReviewReason } from "@/lib/productPublishGate";
 import { sourceForUrl } from "@/lib/import/sources";
@@ -231,6 +233,27 @@ async function storeOutcome(
  * 배포된 컨텍스트(응답 이후 백그라운드)에서 불리므로 revalidatePath 를 부르지
  * 않는다 — 상세·어드민 페이지는 쿠키 확인 때문에 항상 동적 렌더다.
  */
+/**
+ * 이름에 한자가 남았으면 재번역 — 수집 때 429 등으로 번역이 실패해 원문이
+ * 남은 상품의 복구(실사례 2026-08-27: 월 한도로 4건 중 1건이 원문 이름 그대로).
+ * 판매 시점의 최후 방어선이며, 실패해도 판매를 막지 않는다 — 이름은 좋게
+ * 만드는 것이지 게이트가 아니다.
+ */
+export async function ensureKoreanName(productId: string): Promise<void> {
+  const p = await db.product.findUnique({ where: { id: productId }, select: { name: true } });
+  if (!p || !hasHanzi(p.name)) return;
+  const ko = await retranslateName(p.name);
+  if (!ko) return;
+  await db.product.update({ where: { id: productId }, data: { name: ko } });
+  await audit({
+    action: "PRODUCT_UPDATE",
+    target: "product",
+    targetId: productId,
+    summary: `상품명 재번역: ${p.name.slice(0, 40)} → ${ko}`,
+    meta: { before: p.name, after: ko },
+  });
+}
+
 export async function promoteIfReady(productId: string): Promise<boolean> {
   const product = await db.product.findUnique({
     where: { id: productId },
@@ -256,6 +279,8 @@ export async function promoteIfReady(productId: string): Promise<boolean> {
   });
   if (claimed.count !== 1) return false;
   console.log(`[publish] 번역 검증 완료 — ${productId} 판매중으로 자동 승격`);
+  // 승격 = 손님 노출 — 수집 때 번역이 실패한 원문 이름이 남았으면 여기서 복구
+  await ensureKoreanName(productId).catch(() => {});
   return true;
 }
 

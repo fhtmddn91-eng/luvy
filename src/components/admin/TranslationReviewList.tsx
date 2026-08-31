@@ -426,6 +426,19 @@ function ReviewCard({
             </div>
           )}
           {!(refused && !item.candidateUrl) && uploadBlock}
+          {item.hasBoxes && item.originalUrl && (
+            <p>
+              <Link
+                href={`/admin/products/${item.productId}?editAsset=${item.id}`}
+                className="font-bold text-ink-deep underline underline-offset-2 hover:text-muted"
+              >
+                문구 수정 열기 →
+              </Link>
+              <span className="ml-2 text-muted">
+                문구를 하나하나 직접 고쳐서 다시 만들 수 있습니다 (약 100원)
+              </span>
+            </p>
+          )}
           {item.candidateUrl && (
             <button
               type="button"
