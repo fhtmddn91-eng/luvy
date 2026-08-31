@@ -494,6 +494,17 @@ describe("startAssetTextEdit — 문구 수정도 백그라운드로", () => {
     renderReject.value = null;
   });
 
+  it("ocrData 가 없어도 candidateOcr 가 있으면 열린다 — 거부·검수 대기 장", async () => {
+    // 실사례(2026-08-31): 거부 장은 좌표가 candidateOcr 에만 보존돼 문구 수정이
+    // '번역된 이미지가 아닙니다'로 막혔다 — 문구 수정이 가장 필요한 장인데.
+    const a = seed({ ocrData: null, candidateOcr: BOXES });
+    const r = await startAssetTextEdit("a1", {}, fd({ "ko-0": "듀얼 강력진동" }));
+    expect(r.ok).toBe(true);
+    await flush();
+    expect(a.translateStatus).toBe("NEEDS_REVIEW");
+    expect(a.candidateUrl).toMatch(/^\/uploads\/gen-/);
+  });
+
   it("번역할 것도 지울 것도 없으면 시작 전에 거른다", async () => {
     const a = seed({ ocrData: JSON.stringify([{ box: [1, 2, 3, 4], zh: "字", ko: "", bg: "#fff", fg: "#000" }]) });
     const r = await startAssetTextEdit("a1", {}, fd({ "ko-0": "", "mode-0": "keep" }));

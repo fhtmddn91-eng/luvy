@@ -73,7 +73,9 @@ export default async function EditProductPage({
               url: a.url,
               bytes: a.bytes,
               originalUrl: a.originalUrl,
-              ocrData: a.ocrData,
+              // 거부·검수 대기 장은 좌표가 candidateOcr 에 있다 — 문구 수정 편집기가
+              // 그런 장도 열 수 있게 둘 중 있는 쪽을 넘긴다 (서버 액션도 같은 폴백)
+              ocrData: a.ocrData ?? a.candidateOcr,
               translateStatus: a.translateStatus,
               reviewReasons: a.reviewReasons,
               candidateUrl: a.candidateUrl,

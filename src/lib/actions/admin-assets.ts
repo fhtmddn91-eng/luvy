@@ -654,9 +654,10 @@ export async function updateAssetTranslation(
   await requireAdmin();
 
   const asset = await db.productAsset.findUnique({ where: { id: assetId } });
-  if (!asset?.originalUrl || !asset.ocrData) return { error: "번역된 이미지가 아닙니다." };
+  const ocrRaw = asset?.ocrData ?? asset?.candidateOcr;
+  if (!asset?.originalUrl || !ocrRaw) return { error: "번역된 이미지가 아닙니다." };
 
-  const parsed = parseEditedBoxes(asset.ocrData, formData);
+  const parsed = parseEditedBoxes(ocrRaw, formData);
   if ("error" in parsed) return parsed;
   const edited = parsed.edited;
 
@@ -710,12 +711,16 @@ export async function startAssetTextEdit(
   await requireAdmin();
 
   const asset = await db.productAsset.findUnique({ where: { id: assetId } });
-  if (!asset?.originalUrl || !asset.ocrData) return { error: "번역된 이미지가 아닙니다." };
+  // 거부·검수 대기 장은 좌표가 ocrData 가 아니라 candidateOcr 에 보존된다
+  // (storeOutcome — 후보 파일이 없어도 문구 기록은 남긴다). 문구 수정의 가치가
+  // 가장 큰 게 바로 그런 장이라, 둘 중 있는 쪽을 쓴다.
+  const ocrRaw = asset?.ocrData ?? asset?.candidateOcr;
+  if (!asset?.originalUrl || !ocrRaw) return { error: "번역된 이미지가 아닙니다." };
   if (asset.translateStatus === TRANSLATE_STATUS.TRANSLATING) {
     return { error: "이미 진행 중입니다 — 잠시 후 자동으로 갱신됩니다." };
   }
 
-  const parsed = parseEditedBoxes(asset.ocrData, formData);
+  const parsed = parseEditedBoxes(ocrRaw, formData);
   if ("error" in parsed) return parsed;
   const edited = parsed.edited;
 
