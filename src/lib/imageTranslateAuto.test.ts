@@ -102,7 +102,8 @@ interface Mock {
   transcribe: unknown[][];
   /** 제품 무결성 심사(원본·완성본 두 장 비교) — 전체 채택 경로 */
   productCheck: { ok: boolean; issues: string[]; hard?: string[] }[][];
-  image: (Json | { status: number } | "hang")[];
+  /** "echo" = 보낸 이미지와 같은 크기로 응답(국소 편집 띠 검증용) */
+  image: (Json | { status: number } | "hang" | "echo")[];
 }
 let mock: Mock;
 let imageHttp = 0;
@@ -131,6 +132,17 @@ beforeEach(() => {
       imageHttp++;
       imagePrompts.push(prompt);
       const r = mock.image.length > 1 ? mock.image.shift()! : mock.image[0];
+      if (r === "echo") {
+        // 실제 모델처럼 **보낸 이미지와 같은 크기**로 돌려준다 — 국소 편집(띠)은
+        // 원본이 아니라 잘라낸 조각을 보내므로 고정 크기 응답은 비율이 어긋난다
+        const inline = (body as { contents?: { parts?: { inline_data?: { data?: string } }[] }[] })
+          .contents?.[0]?.parts?.find((x) => x.inline_data?.data)?.inline_data?.data ?? "";
+        const meta = await sharp(Buffer.from(inline, "base64")).metadata();
+        const png = await sharp({
+          create: { width: meta.width ?? 8, height: meta.height ?? 8, channels: 3, background: { r: 255, g: 255, b: 255 } },
+        }).png().toBuffer();
+        return { ok: true, status: 200, json: async () => imageResp(png) } as unknown as Response;
+      }
       if (r === "hang") {
         return new Promise((_, reject) => {
           init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
@@ -834,11 +846,12 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
   it("GIF: 패치 밖 보존을 픽셀로 증명 못 하므로 자동 VERIFIED 금지 — NEEDS_REVIEW(GIF_UNVERIFIED)", { timeout: 30_000 }, async () => {
     const gif = await sharp(ORIG_PNG).gif().toBuffer();
     mock = happyMock();
-    // GIF 는 정지 패치 검수(재생성본 1회 + 합성본 1회)가 판독을 두 번 더 쓴다
+    // 국소 편집(2026-08-31): 띠를 잘라 보내므로 응답도 그 크기여야 한다
+    mock.image = ["echo"];
+    // 정지 띠 재생성본의 원문 잔류 검사가 판독을 한 번 더 쓴다
     mock.transcribe = [
       [{ box: BOX, text: "强震深处" }], // 원본 판독
-      [{ box: BOX, text: "강렬한 진동" }], // 재생성본 잔류 검사
-      [{ box: BOX, text: "강렬한 진동" }], // 합성본 검수
+      [{ box: BOX, text: "강렬한 진동" }], // 띠 재생성본 잔류 검사
       [{ box: BOX, text: "강렬한 진동" }], // 완성본 판독
     ];
     const r = await translateImageAuto(gif, "image/gif");

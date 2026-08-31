@@ -47,7 +47,9 @@ const VERIFY_V = 9;
 // 렌더 전략 축 — v2: 자동 정지이미지가 패치 합성 → **전체 채택**으로 전환 (2026-08-24
 // 운영 결정: 픽셀 동일성 대신 상품 정보 보존을 검증). 패치 시절 결과는 자동 재사용 금지.
 // 3: 안전필터 거부 시 글자 띠 국소 편집 폴백 추가 (2026-08-30, 승인 재렌더 전용)
-const RENDER_V = 3;
+// 4: GIF 도 띠 국소 편집으로 전환 (2026-08-31) — 옛 좌표 패치는 재조판과 충돌해
+//    글자가 전부 정지인 GIF 마저 실패시켰다(H007 실측)
+const RENDER_V = 4;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {

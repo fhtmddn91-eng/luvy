@@ -2249,14 +2249,102 @@ const SEAM_MAX = 48;
 const GIF_PATCH_MAX_PAGES = 60;
 
 /**
- * GIF 정지 패치 — 첫 프레임만 모델로 재생성해 글자 영역을 오려 두고,
- * 모든 프레임에 같은 픽셀을 얹는다.
+ * 띠 패치에 대상 원문이 그대로 남았는지 — 텍스트 모델(사실상 공짜)로 확인.
+ * 실패하면 null(잔존 미상) — 채택은 하되 육안 관문이 남아 있다.
+ */
+async function bandLeftoverZh(patch: Buffer, mapped: OcrBox[]): Promise<string[] | null> {
+  try {
+    const lines = await transcribeText(await sharp(patch).png().toBuffer(), "image/png");
+    return findLeftoverZh(lines.map((l) => l.text), mapped);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 정지 띠 고르기 — 글자 박스를 띠로 묶되 **띠 전체가 모든 프레임에서 정지**인
+ * 것만 남긴다.
+ *
+ * 박스 하나하나가 정지여도 띠로 묶으면 그 사이 여백에 애니메이션이 걸릴 수 있다.
+ * 띠를 통째로 얹는 방식이라 띠 안이 움직이면 그 부분이 전 프레임에 얼어붙는다 —
+ * 그래서 박스가 아니라 **띠 단위로** 정지를 확인하고, 띠가 움직이면 붙어 있던
+ * 이웃 때문에 통째로 버리지 않고 박스 하나씩 다시 본다.
+ */
+export function staticBandsOf(
+  boxes: OcrBox[],
+  raws: Uint8Array[],
+  W: number,
+  H: number,
+): { band: BandRect; boxes: OcrBox[] }[] {
+  // **완전 정지만** 허용한다 (maxMovedFrac 0). 기본값 1% 를 쓰면 띠 넓이의
+  // 1%까지 움직여도 통과해 그만큼이 전 프레임에 얼어붙는다 — 실측(gifB):
+  // 좌상 라벨 띠가 통과해 그 영역 움직임이 13.7%→5.4% 로 얼었다.
+  // 색상 팔레트 잡음은 tol 32 가 흡수하므로 진짜 정지 영역은 0 으로도 통과한다.
+  const isStill = (b: BandRect) =>
+    regionIsStatic(raws, W, { x0: b.left, y0: b.top, x1: b.left + b.width, y1: b.top + b.height }, 32, 0);
+  // 여백을 단계적으로 줄여가며 정지 띠를 찾는다. 여백이 넓을수록 모델이 배경
+  // 문맥을 많이 봐서 결과가 좋지만, 그만큼 옆 애니메이션을 물어 탈락한다 —
+  // 실측(gifB): 기본 여백에서는 "智能加温" 이 위쪽 제품 영상을 물어 탈락했다.
+  // 넓은 것부터 시도해 되는 선에서 가장 넉넉한 여백을 쓴다.
+  const PADS = [BAND_PAD_PERMIL, 35, 18];
+  const stillBandFor = (group: OcrBox[]): BandRect | null => {
+    for (const pad of PADS) {
+      const [band] = clusterBands(group, W, H, pad);
+      if (band && isStill(band)) return band;
+    }
+    return null;
+  };
+
+  const out: { band: BandRect; boxes: OcrBox[] }[] = [];
+  for (const band of clusterBands(boxes, W, H)) {
+    const inBand = boxes.filter((b) => boxInBand(b, band, W, H));
+    if (inBand.length === 0) continue;
+    const whole = stillBandFor(inBand);
+    if (whole) {
+      out.push({ band: whole, boxes: inBand });
+      continue;
+    }
+    // 묶음이 안 되면 박스 하나씩 — 붙어 있던 이웃 때문에 통째로 버리지 않는다
+    for (const b of inBand) {
+      const solo = stillBandFor([b]);
+      if (solo) out.push({ band: solo, boxes: [b] });
+    }
+  }
+  if (out.length === 0) return out;
+
+  // 흩어진 정지 띠를 하나로 합칠 수 있으면 합친다 — 자동 흐름은 이미지 호출이
+  // 1회뿐이라, 띠가 둘로 갈리면 한쪽 문구가 통째로 원문에 남는다(실측 gifB).
+  // 합친 사각형까지 완전 정지일 때만 — 아니면 원래대로 나눠 둔다.
+  if (out.length > 1) {
+    const L = Math.min(...out.map((g) => g.band.left));
+    const T = Math.min(...out.map((g) => g.band.top));
+    const R = Math.max(...out.map((g) => g.band.left + g.band.width));
+    const B = Math.max(...out.map((g) => g.band.top + g.band.height));
+    const merged: BandRect = { left: L, top: T, width: R - L, height: B - T };
+    if (isStill(merged)) return [{ band: merged, boxes: out.flatMap((g) => g.boxes) }];
+  }
+  // 글자를 많이 담은 띠부터 — 호출 1회를 가장 값진 띠에 쓴다
+  return out.sort((a, b) => b.boxes.length - a.boxes.length);
+}
+
+type GifPatchResult =
+  | { patch: Image; overlayBoxes: OcrBox[] }
+  | { patch: null; reason: string };
+
+/**
+ * GIF 정지 패치 — 글자가 있는 **정지 띠만** 모델로 다시 그려 모든 프레임에
+ * 같은 픽셀로 얹는다.
  *
  * 프레임마다 모델을 돌리면 그림이 미묘하게 달라져 애니메이션이 떨린다.
- * 같은 패치를 얹으면 떨림이 원천적으로 없다. 글자 자리가 움직이는 문구는
- * 패치가 그 움직임을 얼려버리므로 그 문구만 오버레이로 넘긴다 —
- * 실측에서 "문구는 정지인데 여유 영역이 아래 제품 애니메이션에 걸리는"
- * 경우가 흔해서, 전부-아니면-전무가 아니라 문구 단위로 가른다.
+ * 같은 패치를 얹으면 떨림이 원천적으로 없다.
+ *
+ * 2026-08-31 전환: 예전에는 **프레임 전체**를 재생성한 뒤 원본 좌표대로 박스를
+ * 오려 붙였는데, 정지 이미지에서 이미 폐기된 그 방식이 GIF 에만 남아 있었다 —
+ * 모델이 한국어 길이에 맞춰 판을 다시 흘리므로(reflow) 오려낸 자리가 어긋나
+ * 꼬리가 잘리고(경계 침범), 좌표 검수가 전량 불합격이었다. 실측(H007): 글자
+ * 4개가 전부 완전 정지인데도 "GIF 정지 패치 실패"로 떨어졌다.
+ * 이제 정지 이미지와 같은 국소 편집을 쓴다 — 글자 띠를 잘라 통째로 다시 그리고
+ * 통째로 얹으므로 재조판이 띠 안에서 끝나 잘림이 구조적으로 없다.
  */
 async function tryBuildGifPatch(
   data: Buffer,
@@ -2264,11 +2352,13 @@ async function tryBuildGifPatch(
   W: number,
   H: number,
   pages: number,
-): Promise<{ patch: Image; overlayBoxes: OcrBox[] } | null> {
+): Promise<GifPatchResult> {
   try {
-    if (pages > GIF_PATCH_MAX_PAGES) return null;
+    if (pages > GIF_PATCH_MAX_PAGES) {
+      return { patch: null, reason: `프레임이 너무 많습니다 (${pages}장)` };
+    }
     const targets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
-    if (targets.length === 0) return null;
+    if (targets.length === 0) return { patch: null, reason: "번역할 문구가 없습니다" };
 
     const raws: Uint8Array[] = [];
     for (let i = 0; i < pages; i++) {
@@ -2276,68 +2366,78 @@ async function tryBuildGifPatch(
         new Uint8Array(await sharp(data, { page: i, pages: 1 }).ensureAlpha().raw().toBuffer()),
       );
     }
-    const still = targets.filter((b) => regionIsStatic(raws, W, gifPatchRect(b, W, H)));
-    if (still.length === 0) return null;
-    const moving = targets.filter((b) => !still.includes(b));
+
+    const groups = staticBandsOf(targets, raws, W, H);
+    if (groups.length === 0) {
+      // 글자가 움직이는 영상 위에 얹혀 있는 GIF — 정지 패치로는 손댈 수 없다.
+      // 억지로 얹으면 그 자리의 영상이 전 프레임에 얼어붙는다.
+      return { patch: null, reason: "글자가 움직이는 화면 위에 있어 자동 번역이 안 됩니다" };
+    }
 
     const frame0 = await sharp(data, { page: 0, pages: 1 }).png().toBuffer();
-    const frame0Raw = raws[0];
-    for (let attempt = 1; attempt <= REGEN_ATTEMPTS; attempt++) {
-      const regenPng = await callImageEdit(frame0, "image/png", regenPrompt(still), W, H);
-      if (await leftoverInBoxes(regenPng, "image/png", still)) continue;
-      const regenRaw = new Uint8Array(await sharp(regenPng).ensureAlpha().raw().toBuffer());
+    const patchRgba = Buffer.alloc(W * H * 4); // 알파 0 = 투명
+    const done: OcrBox[] = [];
+    let lastFail = "";
 
-      // 경계 획 침범 — 재생성 한국어가 원문 박스보다 길어지면 패치 사각형이
-      // 꼬리를 잘라 모든 프레임에 박제된다(실측 g15·g19: "자극"→"자ᄀ",
-      // "안심"→"안ᄉ"). 재생성 전체 그림에는 글자가 온전해서 위의 판독 검수는
-      // 통과한다 — 잘림은 "오려 붙인 뒤"에만 생기므로 여기서 픽셀로 가른다.
-      const crossed = still.filter(
-        (b) => edgeCrossing(frame0Raw, regenRaw, W, H, gifPatchRect(b, W, H)) > EDGE_CROSS_MAX,
-      );
-      const usable = still.filter((b) => !crossed.includes(b));
-      if (usable.length === 0) continue; // 전 박스 침범 — 다음 시도
-
-      const overlay = buildPatchOverlay(regenRaw, W, H, usable.map((b) => gifPatchRect(b, W, H)));
-      const png = await sharp(overlay, { raw: { width: W, height: H, channels: 4 } })
-        .png()
-        .toBuffer();
-
-      // 합성본 검수 — 정지 이미지와 같은 기준. 패치를 얹은 "결과물"에서 잘림·
-      // 원문 잔류·위치 밀림을 판독으로 확인한다 (텍스트 호출 한 번, 사실상 공짜).
-      // 걸린 문구만 오버레이로 강등한다 — 전부 버리면 멀쩡한 패치까지 잃는다.
-      const canvas = createCanvas(W, H);
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(await loadImage(frame0), 0, 0, W, H);
-      ctx.drawImage(await loadImage(png), 0, 0);
-      const composite = canvas.toBuffer("image/png");
-      const flagged = await flaggedBoxes(composite, "image/png", usable, true, frame0);
-
-      const good = usable.filter((b) => !flagged.includes(b));
-      if (good.length === 0) continue; // 이 판은 못 쓴다 — 다음 시도
-      const demoted = [...crossed, ...flagged];
-      if (demoted.length > 0) {
-        console.warn(
-          `[imageTranslate] GIF 정지 패치 ${demoted.length}/${still.length}건 불합격 — 그 문구만 오버레이 (경계 ${crossed.length}·검수 ${flagged.length})`,
-        );
+    for (const { band, boxes: inBand } of groups) {
+      // 자동 흐름은 원본당 이미지 HTTP 1회다 — 예산이 끝나면 남은 띠는 원문 유지로
+      // 보고한다(운영자 재렌더에서 이어서 처리). 조용히 삼키지 않는다.
+      const store = imageBudget.getStore();
+      if (store && store.left <= 0) {
+        lastFail = lastFail || "이미지 호출 1회 한도 — 남은 띠는 다음 재렌더에서";
+        break;
       }
-      const finalOverlay =
-        good.length === usable.length
-          ? png
-          : await sharp(buildPatchOverlay(regenRaw, W, H, good.map((b) => gifPatchRect(b, W, H))), {
-              raw: { width: W, height: H, channels: 4 },
-            })
-              .png()
-              .toBuffer();
-      return { patch: await loadImage(finalOverlay), overlayBoxes: [...moving, ...demoted] };
+      const crop = await sharp(frame0).extract(band).png().toBuffer();
+      const mapped = inBand.map((b) => remapBoxToBand(b, band, W, H));
+      let regen: Buffer;
+      try {
+        regen = await callImageEdit(crop, "image/png", regenPrompt(mapped), band.width, band.height);
+      } catch (e) {
+        // 띠가 하나뿐이면 원래 오류를 그대로 올린다 — 호출부 분류기가
+        // 429·타임아웃(RETRYABLE)과 모델 거부를 갈라야 재시도 버튼이 뜬다
+        if (groups.length === 1) throw e;
+        lastFail = e instanceof Error ? e.message : String(e);
+        continue;
+      }
+      const left = await bandLeftoverZh(regen, mapped);
+      if (left && left.length > 0) {
+        lastFail = `원문 잔류: ${left.join(", ").slice(0, 60)}`;
+        continue;
+      }
+      const bandRgba = await sharp(regen)
+        .resize(band.width, band.height, { fit: "fill" })
+        .ensureAlpha()
+        .raw()
+        .toBuffer();
+      // 경계 페더 — 각지게 붙이면 이음선이 보인다. 띠가 정지 영역이라 원본과
+      // 이어 붙는 자리의 픽셀이 모든 프레임에서 같다 (정지 이미지와 같은 규칙)
+      const feather = Math.min(8, Math.floor(Math.min(band.width, band.height) / 4));
+      applyEdgeFeather(bandRgba, band.width, band.height, feather, {
+        left: band.left > 0,
+        top: band.top > 0,
+        right: band.left + band.width < W,
+        bottom: band.top + band.height < H,
+      });
+      for (let y = 0; y < band.height; y++) {
+        const src = y * band.width * 4;
+        bandRgba.copy(patchRgba, ((band.top + y) * W + band.left) * 4, src, src + band.width * 4);
+      }
+      done.push(...inBand);
     }
-    return null;
+
+    if (done.length === 0) {
+      return { patch: null, reason: lastFail || "글자 영역을 다시 그리지 못했습니다" };
+    }
+    const patchPng = await sharp(patchRgba, { raw: { width: W, height: H, channels: 4 } })
+      .png()
+      .toBuffer();
+    const overlayBoxes = targets.filter((b) => !done.includes(b));
+    return { patch: await loadImage(patchPng), overlayBoxes };
   } catch (e) {
     // 삼키지 않는다 (2026-08-31 실측). 예전엔 여기서 null 로 뭉개서 429·타임아웃·
     // 안전필터 거부가 전부 "GIF 정지 패치 실패"(FAILED)로 굳었다 — 월 한도 초과
     // 때 정지 이미지는 RETRYABLE 로 살아나는데 GIF 만 재시도 승인 버튼이 안 떴다.
     // 원래 오류를 그대로 올려야 호출부 분류기(transientReason·모델 거부)가 일한다.
-    // (주석에 있던 "오버레이 폴백"은 이미 제거된 경로다 — null 의 의미는
-    // "판정상 얹을 수 없음"뿐이고, 그 경우들은 위에서 명시적으로 return null 한다)
     throw e;
   }
 }
@@ -2351,13 +2451,15 @@ async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer;
 
   // 글자 자리가 정지해 있으면 모델 재생성 품질을 GIF 에도 쓴다.
   // 수동 조정본은 지시를 지켜야 하므로 프레임별 오버레이 유지.
-  const patched = mustOverlay(boxes)
-    ? null
+  const patched: GifPatchResult = mustOverlay(boxes)
+    ? { patch: null, reason: "위치·크기를 손댄 문구는 GIF 에 얹지 않습니다" }
     : await tryBuildGifPatch(data, boxes, width, height, pages);
-  // 정지 패치가 통째로 안 됐으면(안전 필터 거부 등) 프레임마다 로컬로 덧그리던
-  // 폴백을 없앴다 — 잘림·겹침·네모가 전 프레임에 박제되던 경로였다(2026-08-22 신고).
+  // 정지 패치가 통째로 안 됐으면 프레임마다 로컬로 덧그리던 폴백을 없앴다 —
+  // 잘림·겹침·네모가 전 프레임에 박제되던 경로였다(2026-08-22 신고).
   // 원본 유지가 바닥이고, 호출한 쪽이 실패로 받아 운영자 확인으로 넘긴다.
-  if (!patched) throw new Error("GIF 정지 패치 실패 — 원본 유지 (덧그리기 금지)");
+  // 사유를 실어 보낸다 — "정지 패치 실패"로 뭉뚱그리면 운영자가 무엇을 할 수
+  // 있는지(재시도인지·직접 올리기인지) 판단할 수 없다.
+  if (!patched.patch) throw new Error(`GIF 번역 실패 — ${patched.reason} (원본 유지)`);
   // 움직이는 문구·불합격 문구는 덧그리지 않고 원문 그대로 둔다 (관문이 잡아 재시도)
   if (patched.overlayBoxes.length > 0) {
     console.warn(`[imageTranslate] GIF 문구 ${patched.overlayBoxes.length}개 원문 유지(움직임·불합격) — 덧그리기 금지`);
@@ -2372,7 +2474,7 @@ async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer;
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext("2d");
     ctx.drawImage(img, 0, 0);
-    if (patched) ctx.drawImage(patched.patch, 0, 0); // 모든 프레임에 같은 픽셀 — 떨림 없음
+    ctx.drawImage(patched.patch, 0, 0); // 모든 프레임에 같은 픽셀 — 떨림 없음
     if (overlayBoxes.length > 0) {
       // 프레임마다 그 프레임의 원본 픽셀 기준으로 잔여 획을 판단한다
       paintBoxes(ctx, width, height, overlayBoxes, ctx.getImageData(0, 0, width, height).data.slice());
@@ -4202,15 +4304,6 @@ export async function renderSafetyFallback(
   const unresolvedZh: string[] = [...oversizedZh];
   /** 잔존 검사(OCR)가 실패한 띠 수 — 침묵 채택 금지, 검수 사유로 알린다 */
   let leftoverCheckFailed = 0;
-  /** 띠 패치에 대상 원문이 남았는지 — 텍스트 모델(사실상 무료)로 확인. 실패 시 null(미상) */
-  const bandLeftover = async (patch: Buffer, mapped: OcrBox[]): Promise<string[] | null> => {
-    try {
-      const lines = await transcribeText(await sharp(patch).png().toBuffer(), "image/png");
-      return findLeftoverZh(lines.map((l) => l.text), mapped);
-    } catch {
-      return null; // 검사 실패 = 잔존 미상 — 채택은 하되 육안 관문이 남아 있다
-    }
-  };
   try {
     const patches: { input: Buffer; left: number; top: number }[] = [];
     await imageBudget.run(budget, async () => {
@@ -4227,7 +4320,7 @@ export async function renderSafetyFallback(
           try {
             patch = await callImageEdit(crop, "image/jpeg", regenPrompt(mapped), band.width, band.height);
             methods.regen++;
-            leftover = await bandLeftover(patch, mapped);
+            leftover = await bandLeftoverZh(patch, mapped);
           } catch {
             /* 띠도 거부·실패 — 재호출 없이 아래 단계로 */
           }
@@ -4242,7 +4335,7 @@ export async function renderSafetyFallback(
               .join(", ")}`;
             const retried = await callImageEdit(crop, "image/jpeg", regenPrompt(mapped, hint), band.width, band.height);
             methods.retry++;
-            const retriedLeftover = await bandLeftover(retried, mapped);
+            const retriedLeftover = await bandLeftoverZh(retried, mapped);
             if ((retriedLeftover?.length ?? Infinity) < leftover!.length) {
               patch = retried;
               leftover = retriedLeftover;
