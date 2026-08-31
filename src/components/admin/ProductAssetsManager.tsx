@@ -450,14 +450,14 @@ export function ProductAssetsManager({
     return () => clearInterval(t);
   }, [hasTranslating, router]);
 
-  // 검수함 딥링크로 들어왔으면 편집기를 화면에 보여준다
+  // 검수함 딥링크로 들어왔으면 편집기를 화면에 보여준다.
+  // 이미지 30여 장이 로딩되며 레이아웃이 계속 내려가므로 한 번으로는 밀린다 —
+  // 시차를 두고 몇 번 다시 맞춘다 (실측: 150ms 한 번은 상단에 남았다)
   useEffect(() => {
     if (!initialEditAssetId) return;
-    const timer = setTimeout(
-      () => document.getElementById("asset-text-editor")?.scrollIntoView({ block: "start" }),
-      150,
-    );
-    return () => clearTimeout(timer);
+    const scroll = () => document.getElementById("asset-text-editor")?.scrollIntoView({ block: "start" });
+    const timers = [200, 900, 2000].map((ms) => setTimeout(scroll, ms));
+    return () => timers.forEach(clearTimeout);
   }, [initialEditAssetId]);
 
   // 드래그 순서 변경 — 저장 전까지는 화면에서만 순서를 바꾼다
