@@ -6,7 +6,7 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { bandRegenPrompt, bandRetryHint, bandSeamProblem, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
+import { bandRegenPrompt, bandRetryHint, bandSeamProblem, glyphExtent, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
 
 const W = 200;
 const H = 200;
@@ -253,5 +253,69 @@ describe("bandRetryHint", () => {
   });
   it("모르는 사유는 그대로 전달한다 — 삼키지 않는다", () => {
     expect(bandRetryHint("알 수 없는 사유 XYZ")).toContain("알 수 없는 사유 XYZ");
+  });
+});
+
+/**
+ * 글자 실제 범위 — 판독 박스가 획 끝을 자를 때 그만큼을 찾아낸다.
+ * 실측(2026-09-01): 오버슈트 0~5px. 「쿠션 설계 다채로운 자세 체감」은 4px 이었고,
+ * 여백 4px 짜리 띠에서 실제로 원문 획이 남았다 — 측정이 결함을 재현한다.
+ */
+describe("glyphExtent", () => {
+  const W = 200, H = 80;
+  /** 배경 위에 획을 그려 raw 를 만든다 */
+  const make = (draw: (set: (x: number, y: number, v: number) => void) => void, bgAt = (_x: number, _y: number) => 235) => {
+    const a = new Uint8Array(W * H * 4);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      const v = bgAt(x, y);
+      a[i] = v; a[i + 1] = v; a[i + 2] = v; a[i + 3] = 255;
+    }
+    draw((x, y, v) => {
+      if (x < 0 || y < 0 || x >= W || y >= H) return;
+      const i = (y * W + x) * 4;
+      a[i] = v; a[i + 1] = v; a[i + 2] = v;
+    });
+    return a;
+  };
+
+  it("박스 밖으로 삐져나온 획을 찾아낸다", () => {
+    // 박스 40~60. 세로획(4px 두께) + 오른쪽으로 뻗은 가로획이 x 65 까지 (오버슈트 5px)
+    const raw = make((set) => {
+      for (let y = 30; y < 50; y++) for (let x = 44; x < 48; x++) set(x, y, 20);
+      for (let y = 38; y < 42; y++) for (let x = 48; x <= 65; x++) set(x, y, 20);
+    });
+    const g = glyphExtent(raw, W, H, { x0: 40, y0: 28, x1: 60, y1: 52 });
+    expect(g.x1).toBeGreaterThanOrEqual(65);
+    expect(g.x1 - 60).toBeGreaterThanOrEqual(4); // 오버슈트를 잡았다
+  });
+
+  it("이어지지 않은 구조물(카드 테두리)은 딸려오지 않는다", () => {
+    const raw = make((set) => {
+      for (let y = 30; y < 50; y++) for (let x = 44; x < 48; x++) set(x, y, 20); // 글자 획
+      for (let y = 0; y < H; y++) { set(100, y, 30); set(101, y, 30); } // 멀리 떨어진 테두리
+    });
+    const g = glyphExtent(raw, W, H, { x0: 40, y0: 28, x1: 60, y1: 52 });
+    expect(g.x1).toBeLessThan(70); // 테두리(x=100)까지 번지지 않았다
+  });
+
+  it("그라데이션 배경에서 확장이 폭주하지 않는다", () => {
+    // 앞선 두 시도(전역 배경 추정)가 무너진 조건 — 국소 배경이라 튀지 않는다
+    const raw = make(
+      (set) => { for (let y = 30; y < 50; y++) for (let x = 44; x < 48; x++) set(x, y, 20); },
+      (x) => 180 + Math.round(x * 0.3),
+    );
+    const g = glyphExtent(raw, W, H, { x0: 40, y0: 28, x1: 60, y1: 52 });
+    expect(g.x1 - 60).toBeLessThanOrEqual(8);
+    expect(g.y1 - 52).toBeLessThanOrEqual(8);
+  });
+
+  it("글자가 박스 안에 딱 맞으면 박스 그대로", () => {
+    const raw = make((set) => {
+      for (let y = 32; y < 48; y++) for (let x = 46; x < 50; x++) set(x, y, 20);
+    });
+    const g = glyphExtent(raw, W, H, { x0: 40, y0: 28, x1: 60, y1: 52 });
+    expect(g.x0).toBeGreaterThanOrEqual(40 - 1);
+    expect(g.x1).toBeLessThanOrEqual(60 + 1);
   });
 });

@@ -2383,9 +2383,35 @@ export function staticBandsOf(
   const isStill = (b: BandRect) =>
     regionIsStatic(raws, W, { x0: b.left, y0: b.top, x1: b.left + b.width, y1: b.top + b.height }, 32, 0);
 
-  // **하한 8px**. 더 좁히면 판독 박스를 넘어선 획(폰트 오버슈트, 실측 1~5px)이
-  // 패치 밖에 남아 원문 조각이 그대로 보인다 — 실측(M18, 여백 4px): "자세 체감"
-  // 뒤에 원문 획이 남았다. 8px 미만으로만 정지인 문구는 안전하게 못 바꾼다.
+  // 문구마다 **실제 글자 범위**를 재둔다. 판독 박스는 획 끝을 자주 자르고
+  // (실측 오버슈트 0~5px), 그만큼이 패치 밖에 남으면 원문 조각이 그대로 보인다
+  // — M18 「쿠션 설계 다채로운 자세 체감」의 오버슈트가 정확히 4px 이었고,
+  // 여백 4px 짜리 띠에서 실제로 획이 남았다(2026-09-01 실측으로 재현).
+  const glyphOf = new Map<OcrBox, { x0: number; y0: number; x1: number; y1: number }>();
+  const glyph = (b: OcrBox) => {
+    const cached = glyphOf.get(b);
+    if (cached) return cached;
+    const [y1, x1, y2, x2] = b.box;
+    const v = glyphExtent(raws[0], W, H, {
+      x0: (x1 / 1000) * W, y0: (y1 / 1000) * H, x1: (x2 / 1000) * W, y1: (y2 / 1000) * H,
+    });
+    glyphOf.set(b, v);
+    return v;
+  };
+  /** 이 문구를 안전하게 덮으려면 최소 몇 px 여백이 필요한가 (오버슈트 + 여유 1px) */
+  const needPad = (b: OcrBox) => {
+    const [y1, x1, y2, x2] = b.box;
+    const g = glyph(b);
+    return Math.ceil(Math.max(
+      (x1 / 1000) * W - g.x0, (y1 / 1000) * H - g.y0,
+      g.x1 - (x2 / 1000) * W, g.y1 - (y2 / 1000) * H, 0,
+    )) + 1;
+  };
+
+  // 여백 사다리 — 넓은 것부터. **하한은 문구가 요구하는 값**(오버슈트+1px)이다.
+  // 고정 하한(8px)을 두면 오버슈트가 작은 문구까지 싸잡아 버린다 — 실측:
+  // 「360° 밀착핏」은 오버슈트 4px 인데 정지 여백이 6px 이라, 5px 만 있으면
+  // 안전하게 덮이는데도 8px 하한 때문에 원문으로 남았다.
   const PADS_PX = [45, 32, 24, 18, 14, 11, 8];
   // 그룹 전체를 **하나로 담는** 사각형이어야 한다. clusterBands 는 여백이 좁아지면
   // 그룹을 여러 조각으로 쪼개는데, 예전엔 그중 **첫 조각만** 띠로 쓰면서 나머지
@@ -2393,7 +2419,11 @@ export function staticBandsOf(
   // 띠가 담은 글자까지의 여백이 L-105·B-90(음수), 즉 글자 절반이 패치 밖이라
   // 그 자리에 중국어 원문이 그대로 드러났다. 조각들의 합집합을 쓴다.
   const stillBandFor = (group: OcrBox[]): BandRect | null => {
-    for (const pad of PADS_PX) {
+    const need = Math.max(...group.map(needPad));
+    // need 보다 좁은 여백은 시도하지 않는다(획이 남는다). 사다리에 need 가
+    // 없으면 마지막 단으로 붙여 "딱 필요한 만큼"이라도 시도한다.
+    const ladder = [...PADS_PX.filter((p) => p >= need), need];
+    for (const pad of ladder) {
       const parts = clusterBands(group, W, H, BAND_PAD_PERMIL, pad);
       if (parts.length === 0) continue;
       const band: BandRect = {
@@ -2441,16 +2471,12 @@ export function staticBandsOf(
   // 획이 원문 그대로 드러난다(무결 원칙 위반). 못 덮는 문구는 그 띠에서 빼서
   // 원문 유지로 돌린다 — 번역했다고 잘못 세는 것이 더 나쁘다.
   // 띠는 담은 글자를 **전부** 덮어야 한다 — 반쪽만 덮으면 덮이지 않은 획이
-  // 원문 그대로 드러난다. 여유 2px 은 판독 박스가 획 끝을 아슬아슬하게 자를 때를
-  // 위한 것이고, 그보다 큰 오버슈트는 여백 하한(PADS_PX 최소 8px)이 흡수한다.
-  const STROKE_MARGIN = 2;
+  // 원문 그대로 드러난다. 판독 박스가 아니라 **실제 글자 범위**로 본다.
   const fits = (b: OcrBox, band: BandRect): boolean => {
-    const [y1, x1, y2, x2] = b.box;
+    const g = glyph(b);
     return (
-      (x1 / 1000) * W - STROKE_MARGIN >= band.left - 0.5 &&
-      (y1 / 1000) * H - STROKE_MARGIN >= band.top - 0.5 &&
-      (x2 / 1000) * W + STROKE_MARGIN <= band.left + band.width + 0.5 &&
-      (y2 / 1000) * H + STROKE_MARGIN <= band.top + band.height + 0.5
+      g.x0 - 1 >= band.left - 0.5 && g.y0 - 1 >= band.top - 0.5 &&
+      g.x1 + 1 <= band.left + band.width + 0.5 && g.y1 + 1 <= band.top + band.height + 0.5
     );
   };
 
@@ -2473,11 +2499,12 @@ export function staticBandsOf(
   // 이웃 글자 코어를 피해 **여백만** 잘라낸다 — 자기 글자는 절대 줄이지 않는다.
   // 정지 이미지 경로의 clipRectAgainst 와 같은 발상을 띠에 적용한 것.
   const clipped = resolved.map((g) => {
-    const own = coreOf(g.boxes, W, H);
-    const avoid = boxes
-      .filter((b) => !g.boxes.includes(b))
-      .map((b) => coreOf([b], W, H))
-      .map((c) => ({ x0: c.x0, y0: c.y0, x1: c.x1, y1: c.y1 }));
+    const gs = g.boxes.map(glyph);
+    const own = {
+      x0: Math.min(...gs.map((k) => k.x0)), y0: Math.min(...gs.map((k) => k.y0)),
+      x1: Math.max(...gs.map((k) => k.x1)), y1: Math.max(...gs.map((k) => k.y1)),
+    };
+    const avoid = boxes.filter((b) => !g.boxes.includes(b)).map(glyph);
     const r = clipRectAgainst(
       { x0: g.band.left, y0: g.band.top, x1: g.band.left + g.band.width, y1: g.band.top + g.band.height, feather: 0 },
       { x0: own.x0, y0: own.y0, x1: own.x1, y1: own.y1 },
@@ -2520,6 +2547,82 @@ export function seamSidesOf(
       if (Math.abs(band.top - oB) <= tol) out.top = true;
       if (Math.abs(B - o.top) <= tol) out.bottom = true;
     }
+  }
+  return out;
+}
+
+/**
+ * 원문 글자의 **실제 범위** — 판독 박스는 획 끝을 자주 자른다(실측 오버슈트 1~5px).
+ *
+ * 앞선 두 시도가 실패한 이유는 배경을 **전역으로** 추정했기 때문이다:
+ *  - 잉크 범위 확장: 그라데이션 위에서 확장이 멈추지 않아 상한까지 번졌다
+ *  - 경계 절단 검사: 카드 테두리·그림자를 글자로 오인해 멀쩡한 띠를 전부 거부했다
+ *
+ * 그래서 두 가지를 바꿨다.
+ *  ① **국소 배경**(주변 13px 창의 중앙값)과 비교한다. 획은 창보다 얇아 중앙값이
+ *     배경으로 잡히고, 그라데이션은 부드러워 애초에 튀지 않는다.
+ *  ② 판독 박스 **안쪽의 확실한 획에서 시작해 이어진 것만** 따라간다. 카드
+ *     테두리는 글자와 이어져 있지 않으므로 딸려오지 않는다.
+ * 원본 픽셀만 보므로 호출 0회다.
+ */
+export function glyphExtent(
+  raw: Uint8Array,
+  W: number,
+  H: number,
+  core: { x0: number; y0: number; x1: number; y1: number },
+  maxGrow = 8,
+  radius = 6,
+  tol = 30,
+): { x0: number; y0: number; x1: number; y1: number } {
+  const rx0 = Math.max(0, Math.floor(core.x0) - maxGrow);
+  const ry0 = Math.max(0, Math.floor(core.y0) - maxGrow);
+  const rx1 = Math.min(W, Math.ceil(core.x1) + maxGrow);
+  const ry1 = Math.min(H, Math.ceil(core.y1) + maxGrow);
+  const rw = rx1 - rx0, rh = ry1 - ry0;
+  if (rw <= 2 || rh <= 2) return core;
+
+  const lum = (x: number, y: number) => {
+    const i = (y * W + x) * 4;
+    return 0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2];
+  };
+  // 국소 배경과의 차이 — 창(2*radius+1)보다 얇은 획만 튄다
+  const outlier = new Uint8Array(rw * rh);
+  const win: number[] = [];
+  for (let y = ry0; y < ry1; y++) {
+    for (let x = rx0; x < rx1; x++) {
+      win.length = 0;
+      for (let dy = -radius; dy <= radius; dy += 2) {
+        const yy = Math.max(0, Math.min(H - 1, y + dy));
+        for (let dx = -radius; dx <= radius; dx += 2) {
+          win.push(lum(Math.max(0, Math.min(W - 1, x + dx)), yy));
+        }
+      }
+      win.sort((a, b) => a - b);
+      const med = win[win.length >> 1];
+      if (Math.abs(lum(x, y) - med) > tol) outlier[(y - ry0) * rw + (x - rx0)] = 1;
+    }
+  }
+
+  // 박스 안쪽(1px 침식)의 획을 씨앗으로, 이어진 것만 따라간다
+  const seen = new Uint8Array(rw * rh);
+  const stack: number[] = [];
+  const push = (x: number, y: number) => {
+    const i = (y - ry0) * rw + (x - rx0);
+    if (x < rx0 || y < ry0 || x >= rx1 || y >= ry1 || seen[i] || !outlier[i]) return;
+    seen[i] = 1;
+    stack.push(x, y);
+  };
+  for (let y = Math.ceil(core.y0) + 1; y < Math.floor(core.y1) - 1; y++) {
+    for (let x = Math.ceil(core.x0) + 1; x < Math.floor(core.x1) - 1; x++) push(x, y);
+  }
+  const out = { x0: core.x0, y0: core.y0, x1: core.x1, y1: core.y1 };
+  while (stack.length) {
+    const y = stack.pop()!, x = stack.pop()!;
+    if (x < out.x0) out.x0 = x;
+    if (y < out.y0) out.y0 = y;
+    if (x + 1 > out.x1) out.x1 = x + 1;
+    if (y + 1 > out.y1) out.y1 = y + 1;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) push(x + dx, y + dy);
   }
   return out;
 }

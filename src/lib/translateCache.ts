@@ -70,7 +70,10 @@ const VERIFY_V = 9;
 //     permil 3단계(45/26/13px)는 성겨서 8~13px 로만 정지인 문구를 놓쳤다.
 //     하한 8px 은 폰트 오버슈트 실측(1~5px)에서 나온 값 — 더 좁히면 판독 박스를
 //     넘어선 획이 패치 밖에 남는다(M18 여백 4px 실측: "자세 체감" 뒤 원문 잔존).
-const RENDER_V = 10;
+// 11: 여백 하한을 문구마다 계산한다 — 판독 박스가 자른 획(오버슈트)을 국소
+//     배경 + 연결 성분으로 실제 측정(glyphExtent). 고정 하한 8px 은 오버슈트가
+//     작은 문구까지 싸잡아 버렸고, 3px 은 큰 문구에서 획을 남겼다.
+const RENDER_V = 11;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {
