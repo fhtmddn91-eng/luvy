@@ -123,6 +123,25 @@ describe("renderTranslatedImage — GIF", () => {
     expect(imageCalls).toBe(2); // 첫 시도 + 재시도 1회 — 그 이상 쓰지 않는다
   }, 60_000);
 
+  it("'원문 그대로(keep)' 문구가 있어도 나머지는 띠 편집으로 번역된다 — keep 은 오버레이 강제 사유가 아니다", async () => {
+    // 실측(2026-09-01 마리아 GIF): 깨지는 제목만 keep 으로 두고 나머지를 번역하려
+    // 했는데 mustOverlay 가 keep 을 수동 지시로 취급해 통째로 거부됐다
+    stubGemini("ok");
+    const gif = await makeGif(false);
+    const keepBox: OcrBox = { box: [820, 100, 960, 900], zh: "防水", ko: "", bg: "#ffffff", fg: "#000000", solid_bg: true, mode: "keep" };
+    const out = await renderTranslatedImage(gif, "image/gif", [topBox, keepBox]);
+    expect(out.mime).toBe("image/gif");
+    expect(imageCalls).toBe(1); // keep 박스는 대상에서 빠진다 — 원본 픽셀 그대로
+  }, 60_000);
+
+  it("위치를 옮긴 문구는 GIF 에서 지킬 수 없어 원본 유지로 거부한다", async () => {
+    stubGemini("ok");
+    const gif = await makeGif(false);
+    const moved: OcrBox = { ...topBox, dx: 12 };
+    await expect(renderTranslatedImage(gif, "image/gif", [moved])).rejects.toThrow(/지킬 수 없습니다/);
+    expect(imageCalls).toBe(0);
+  }, 60_000);
+
   it("모델이 거부하면 거부 사유가 그대로 올라온다 — 재시도 분류가 가능하게", async () => {
     stubGemini("refuse");
     const gif = await makeGif(false);

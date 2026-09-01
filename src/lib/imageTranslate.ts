@@ -2536,10 +2536,24 @@ async function renderGif(
   if (!width || !height) throw new Error("GIF 크기를 읽을 수 없습니다.");
 
   // 글자 자리가 정지해 있으면 모델 재생성 품질을 GIF 에도 쓴다.
-  // 수동 조정본은 지시를 지켜야 하므로 프레임별 오버레이 유지.
-  const patched: GifPatchResult = mustOverlay(boxes)
-    ? { patch: null, reason: "위치·크기를 손댄 문구는 GIF 에 얹지 않습니다" }
-    : await tryBuildGifPatch(data, boxes, width, height, pages, opts.adminApproved === true);
+  // 위치·크기 이동, 굵기 지정, 지우기 지시는 픽셀을 직접 만져야 지켜진다 —
+  // 띠 편집으로는 보장할 수 없어 거부한다(원본 유지). 단 "원문 그대로(keep)"는
+  // 예외다: keep 박스는 재생성 대상에서 빠져 원본 픽셀이 그대로 남으므로 띠
+  // 편집이 지시를 정확히 지킨다. mustOverlay 처럼 keep 까지 거부하면 "깨지는
+  // 문구만 원문으로 두고 나머지를 번역"하는 운영 동선이 GIF 에서 막힌다
+  // (2026-09-01 마리아 GIF 실측: keep 2개 지정이 통째로 거부됐다).
+  const gifUnservable = (b: OcrBox) =>
+    (b.dx !== undefined && b.dx !== 0) ||
+    (b.dy !== undefined && b.dy !== 0) ||
+    (b.scale !== undefined && b.scale !== 1) ||
+    b.weight !== undefined ||
+    (b.mode === "erase" && !b.wm);
+  const translatable = boxes.some((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
+  const patched: GifPatchResult = boxes.some(gifUnservable)
+    ? { patch: null, reason: "위치·크기·굵기·지우기 지시는 GIF 에서 지킬 수 없습니다" }
+    : !translatable
+      ? { patch: null, reason: "번역할 문구가 없습니다" }
+      : await tryBuildGifPatch(data, boxes, width, height, pages, opts.adminApproved === true);
   // 정지 패치가 통째로 안 됐으면 프레임마다 로컬로 덧그리던 폴백을 없앴다 —
   // 잘림·겹침·네모가 전 프레임에 박제되던 경로였다(2026-08-22 신고).
   // 원본 유지가 바닥이고, 호출한 쪽이 실패로 받아 운영자 확인으로 넘긴다.
