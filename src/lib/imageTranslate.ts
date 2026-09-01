@@ -2266,6 +2266,12 @@ const MAX_GIF_BAND_CALLS = 6;
 const BAND_ATTEMPTS = 2;
 
 /**
+ * 모델이 글자를 또렷하게 그리는 최소 글자 높이 — 이보다 작으면 띠를 확대해 보낸다.
+ * 실측(2026-09-01): 1회 시도에 성공한 띠 9개는 글자 41~94px, 실패한 띠는 22px 이었다.
+ */
+const TARGET_GLYPH_PX = 44;
+
+/**
  * 띠 패치에 대상 원문이 그대로 남았는지 — 텍스트 모델(사실상 공짜)로 확인.
  * 실패하면 null(잔존 미상) — 채택은 하되 육안 관문이 남아 있다.
  */
@@ -2470,6 +2476,28 @@ export function staticBandsOf(
   // 띠는 자기가 담은 글자를 **전부** 덮어야 한다 — 반쪽만 덮으면 덮이지 않은
   // 획이 원문 그대로 드러난다(무결 원칙 위반). 못 덮는 문구는 그 띠에서 빼서
   // 원문 유지로 돌린다 — 번역했다고 잘못 세는 것이 더 나쁘다.
+  // 납작한 띠(가로세로비가 큰 띠)는 세로로 넓혀 준다.
+  //
+  // 실측(2026-09-01 M18/M19): 1회 시도에 성공한 띠 9개는 전부 가로세로비 1.4~3.6·
+  // 글자 41~94px 이었고, 실패한 띠는 비 7.9·글자 22px 하나뿐이었다. 모델은
+  // 납작한 조각 안에서 작은 글자를 그리다 획을 뭉갠다. 정지가 유지되는 한
+  // 세로 여백을 더 줘서 그릴 공간을 만든다 — 호출 수는 그대로다.
+  const FLAT_RATIO = 4;
+  const growFlat = (band: BandRect): BandRect => {
+    if (band.width / band.height < FLAT_RATIO) return band;
+    let b = band;
+    for (let i = 0; i < 24; i++) {
+      const top = Math.max(0, b.top - 1);
+      const bottom = Math.min(H, b.top + b.height + 1);
+      const next: BandRect = { left: b.left, top, width: b.width, height: bottom - top };
+      if (next.height === b.height || !isStill(next)) break;
+      b = next;
+      if (b.width / b.height < FLAT_RATIO) break; // 충분히 두꺼워졌다
+    }
+    return b;
+  };
+  for (let i = 0; i < out.length; i++) out[i] = { ...out[i], band: growFlat(out[i].band) };
+
   // 띠는 담은 글자를 **전부** 덮어야 한다 — 반쪽만 덮으면 덮이지 않은 획이
   // 원문 그대로 드러난다. 판독 박스가 아니라 **실제 글자 범위**로 본다.
   const fits = (b: OcrBox, band: BandRect): boolean => {
@@ -2883,6 +2911,14 @@ async function tryBuildGifPatch(
       }
       const crop = await sharp(frame0).extract(band).png().toBuffer();
       const mapped = inBand.map((b) => remapBoxToBand(b, band, W, H));
+      // 작은 글자는 **확대해서** 보낸다. 모델은 22px 짜리 글자를 그리다 획을
+      // 뭉갠다(실측: 1회 성공한 띠는 전부 글자 41~94px, 실패한 띠는 22px).
+      // 받은 그림을 다시 줄이면 모델의 미세 오차가 평균되어 오히려 또렷해진다.
+      // 호출 수는 그대로다 — 규칙 1: 통과할 그림을 그리게 하는 쪽이 싸다.
+      const minGlyphPx = Math.min(
+        ...inBand.map((b) => ((b.box[2] - b.box[0]) / 1000) * H),
+      );
+      const baseScale = Math.max(1, Math.min(3, Math.ceil(TARGET_GLYPH_PX / Math.max(1, minGlyphPx))));
 
       // 관문을 통과할 때까지 최대 2회 — 겹침·뭉갬은 같은 프롬프트로도 다음
       // 시도에서 곧잘 사라지는 비결정 실패다(실측 2026-09-01). 2회로 못 만들면
@@ -2893,13 +2929,21 @@ async function tryBuildGifPatch(
         const b2 = imageBudget.getStore();
         if (attempt > 1 && b2 && b2.left <= 0) break; // 예산 소진 — 직전 사유로 남긴다
         let out: Buffer;
+        // 재시도는 **조건을 바꿔서** 한다 — 같은 조건 반복은 확률 재구매일 뿐이다.
+        // 1차보다 한 단계 더 확대해 글자 그릴 공간을 넓힌다.
+        const scale = Math.min(4, baseScale + (attempt - 1));
+        const sendW = Math.round(band.width * scale);
+        const sendH = Math.round(band.height * scale);
         try {
+          const sendCrop =
+            scale === 1 ? crop : await sharp(crop).resize(sendW, sendH, { kernel: "lanczos3" }).png().toBuffer();
           out = await callImageEdit(
-            crop,
+            sendCrop,
             "image/png",
-            bandRegenPrompt(mapped, band) + (attempt === 1 || !problem ? "" : bandRetryHint(problem)),
-            band.width,
-            band.height,
+            bandRegenPrompt(mapped, { width: sendW, height: sendH }) +
+              (attempt === 1 || !problem ? "" : bandRetryHint(problem)),
+            sendW,
+            sendH,
           );
         } catch (e) {
           const m = e instanceof Error ? e.message : String(e);

@@ -73,7 +73,10 @@ const VERIFY_V = 9;
 // 11: 여백 하한을 문구마다 계산한다 — 판독 박스가 자른 획(오버슈트)을 국소
 //     배경 + 연결 성분으로 실제 측정(glyphExtent). 고정 하한 8px 은 오버슈트가
 //     작은 문구까지 싸잡아 버렸고, 3px 은 큰 문구에서 획을 남겼다.
-const RENDER_V = 11;
+// 12: 작은 글자는 띠를 확대해 보낸다(목표 44px) + 납작한 띠는 세로 확장 +
+//     재시도는 배율을 바꿔 조건을 달리한다. 실측: 1회에 성공한 띠 9개는 전부
+//     글자 41~94px, 실패한 띠는 22px 였다.
+const RENDER_V = 12;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {
