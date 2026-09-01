@@ -2265,11 +2265,6 @@ const MAX_GIF_BAND_CALLS = 6;
 /** 띠 하나에 허용하는 재생성 시도 — 관문 불합격 시 재시도 (예산 안에서만) */
 const BAND_ATTEMPTS = 2;
 
-/** 재시도 프롬프트 꼬리표 — 직전에 무엇이 잘못됐는지 알려야 다르게 그린다 */
-const BAND_RETRY_HINT =
-  "\n\n직전 결과에 문제가 있었다: 글자가 겹쳐 찍히거나, 획이 뭉개지거나, 지시에 없는 글자가 섞였다. " +
-  "각 문구를 정확히 한 번만, 겹침 없이 또렷한 획으로 써라.";
-
 /**
  * 띠 패치에 대상 원문이 그대로 남았는지 — 텍스트 모델(사실상 공짜)로 확인.
  * 실패하면 null(잔존 미상) — 채택은 하되 육안 관문이 남아 있다.
@@ -2468,7 +2463,35 @@ export function staticBandsOf(
   // 겹쳤고, 겹친 자리에 패치를 두 번 얹어 부제 패치가 그린 제목 꼬리가 제목
   // 패치 위에 덧찍혔다. 육안 판정기는 띠 하나만 보므로 이걸 잡을 수 없다 —
   // 겹침은 애초에 만들지 않는 것이 답이다.
-  return resolveBandOverlaps(out, W, H, isStill).sort((a, b) => b.boxes.length - a.boxes.length);
+  const resolved = resolveBandOverlaps(out, W, H, isStill);
+
+  // 띠 여백에 **이웃 글자**가 들어오면 모델이 그것까지 손대 헛글자를 만든다 —
+  // 실측(2026-09-01 M18): 「쿠션 설계」 띠의 여백에 위쪽 「360°贴合」이 걸쳤고,
+  // 모델이 그걸 "360새름"으로 깨뜨려 띠 전체가 버려졌다(관문은 제대로 잡았다).
+  // 이웃 글자 코어를 피해 **여백만** 잘라낸다 — 자기 글자는 절대 줄이지 않는다.
+  // 정지 이미지 경로의 clipRectAgainst 와 같은 발상을 띠에 적용한 것.
+  const clipped = resolved.map((g) => {
+    const own = coreOf(g.boxes, W, H);
+    const avoid = boxes
+      .filter((b) => !g.boxes.includes(b))
+      .map((b) => coreOf([b], W, H))
+      .map((c) => ({ x0: c.x0, y0: c.y0, x1: c.x1, y1: c.y1 }));
+    const r = clipRectAgainst(
+      { x0: g.band.left, y0: g.band.top, x1: g.band.left + g.band.width, y1: g.band.top + g.band.height, feather: 0 },
+      { x0: own.x0, y0: own.y0, x1: own.x1, y1: own.y1 },
+      avoid,
+    );
+    const band: BandRect = { left: r.x0, top: r.y0, width: r.x1 - r.x0, height: r.y1 - r.y0 };
+    return band.width > 0 && band.height > 0 ? { band, boxes: g.boxes } : g;
+  });
+
+  // 자르고 나서 글자를 못 덮게 된 문구는 빼낸다(원문 유지) — 반쪽 패치 금지
+  const final = clipped
+    .map((g) => ({ band: g.band, boxes: g.boxes.filter((b) => fits(b, g.band)) }))
+    .filter((g) => g.boxes.length > 0);
+
+  // 글자를 많이 담은 띠부터 — 호출을 가장 값진 띠에 먼저 쓴다
+  return final.sort((a, b) => b.boxes.length - a.boxes.length);
 }
 
 /**
@@ -2750,7 +2773,7 @@ async function tryBuildGifPatch(
           out = await callImageEdit(
             crop,
             "image/png",
-            attempt === 1 ? regenPrompt(mapped) : regenPrompt(mapped) + BAND_RETRY_HINT,
+            bandRegenPrompt(mapped, band) + (attempt === 1 || !problem ? "" : bandRetryHint(problem)),
             band.width,
             band.height,
           );
@@ -2794,7 +2817,10 @@ async function tryBuildGifPatch(
       }
       if (!accepted) {
         lastFail = problem ?? "글자 영역을 다시 그리지 못했습니다";
-        keptOriginal.push(...inBand.map((b) => b.zh));
+        // 왜 원문으로 남았는지 함께 남긴다 — 사유 없이 목록만 보면 운영자가
+        // 무엇을 해야 할지(재시도인지·직접 올리기인지) 판단할 수 없다
+        const why = lastFail.split("(")[0].trim().slice(0, 30);
+        keptOriginal.push(...inBand.map((b) => `${b.zh} — ${why}`));
         continue;
       }
       const bandRgba = accepted;
@@ -2827,7 +2853,9 @@ async function tryBuildGifPatch(
       .toBuffer();
     const overlayBoxes = targets.filter((b) => !done.includes(b));
     // 띠에 못 들어간 문구(움직이는 화면 위)도 원문 유지로 함께 보고한다
-    const missed = overlayBoxes.map((b) => b.zh).filter((zh) => !keptOriginal.includes(zh));
+    const missed = overlayBoxes
+      .filter((b) => !keptOriginal.some((k) => k.startsWith(b.zh)))
+      .map((b) => `${b.zh} — 움직이는 화면 위`);
     return { patch: await loadImage(patchPng), overlayBoxes, keptOriginal: [...keptOriginal, ...missed] };
   } catch (e) {
     // 삼키지 않는다 (2026-08-31 실측). 예전엔 여기서 null 로 뭉개서 429·타임아웃·
@@ -2972,6 +3000,69 @@ ${elist}
 - 위 목록에 없는 글자는 다시 그리지 말고 원본 그대로 둘 것
 - 목록에 없는 문구를 새로 만들어 넣지 말 것
 - 띠·배지·버튼의 위치와 모양을 옮기거나 바꾸지 말 것${hintBlock(hint)}`;
+}
+
+/**
+ * GIF 글자 띠 전용 프롬프트 — **관문이 재는 것을 그대로 지시한다.**
+ *
+ * 예전에는 띠 crop 에도 전체 이미지용 프롬프트(regenPrompt)를 그대로 썼다.
+ * 거기엔 "제품 사진·모델·레이아웃을 지켜라" 같은, 40×200 픽셀 띠에는 뜻이 없는
+ * 규칙만 있고 정작 관문이 떨어뜨리는 세 가지 — ① 네 변의 배경색이 원본과 같을 것
+ * (이음매 관문) ② 같은 문구를 두 번 찍지 말 것(육안 관문) ③ 띠 밖으로 넘치지
+ * 말 것(커버 검사) — 은 한마디도 없었다. 실측(2026-09-01 M18): 정지 띠 3개 중
+ * 1개가 재시도 뒤에도 관문에 걸려 원문으로 남았다.
+ *
+ * 규칙 1(싼 단계에서 막는다)의 응용이다 — 관문에 걸려 버리는 호출($0.067)보다,
+ * 애초에 통과할 그림을 그리게 지시하는 쪽이 싸다.
+ */
+export function bandRegenPrompt(boxes: OcrBox[], band: { width: number; height: number }): string {
+  const list = boxes
+    .filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim())
+    .map((b) => `- "${b.zh}" → "${sanitizeSymbols(b.ko)}"`)
+    .join("\n");
+  return `이 그림은 상품 상세 이미지에서 **글자 부분만 잘라낸 ${band.width}×${band.height} 픽셀 띠**입니다.
+같은 크기 그대로, 글자만 한국어로 바꾼 띠를 그려 주세요. 결과는 원본 이미지의 그 자리에 그대로 다시 끼워 넣습니다.
+
+바꿀 문구 (이 번역 그대로, 각각 정확히 한 번씩):
+${list}
+
+가장 중요한 규칙:
+- 원문 글자는 지우고 그 자리에 한국어만 남긴다. 원문 위에 한국어를 겹쳐 쓰지 않는다.
+- **같은 문구를 두 번 그리면 실패다.** 한 번 쓴 글자를 조금 옮겨 다시 쓰거나, 흐린 잔상을 남기지 말 것.
+- 결과에 중국어·일본어가 한 글자라도 남으면 실패다.
+- 위 목록에 없는 글자를 새로 만들어 넣지 말 것.
+
+이어 붙이기 규칙 (이게 지켜지지 않으면 네모 자국이 보여 통째로 버려집니다):
+- 배경(색·밝기·그라데이션·무늬·질감)은 원본과 **완전히 같게** 그린다.
+- 특히 **네 변의 가장자리 픽셀 색**이 원본과 조금이라도 달라지면 이어 붙인 자국이 그대로 보인다. 가장자리는 손대지 말 것.
+- 띠 전체를 확대·축소·이동하지 말고, 여백이나 테두리·모서리 둥글림을 새로 만들지 말 것.
+- 가장자리에서 잘린 채 걸쳐 있는 글자·도형은 잘린 그대로 둔다.
+
+글자 규칙:
+- 원문과 같은 서체 느낌·크기·굵기·색·정렬로. 그림자·외곽선·밑줄·형광펜 강조 같은 장식도 그대로.
+- 한국어가 원문보다 길면 **글자 크기를 조금 줄여** 띠 안에 넣는다. 띠 밖으로 넘치거나 잘리면 실패다.
+- 라틴 문자 브랜드명·모델명·숫자·단위(mm, MIN, MAH, dB 등)는 그대로 둔다.`;
+}
+
+/**
+ * 띠 재시도 프롬프트 꼬리표 — **직전에 무엇이 틀렸는지**를 그대로 말해 준다.
+ * 뭉뚱그린 "다시 그려라"로는 같은 실패를 반복했다(실측). 관문 사유별로 다르게 붙인다.
+ */
+export function bandRetryHint(problem: string): string {
+  const head = "\n\n직전 시도는 아래 이유로 버려졌습니다. 이번에는 반드시 고쳐 주세요:\n";
+  if (problem.includes("이음매")) {
+    return `${head}- 배경 밝기·색이 원본과 달라 이어 붙인 자국(네모)이 보였습니다. 배경을 원본과 똑같이, 특히 네 변 가장자리 픽셀은 원본 그대로 두세요.`;
+  }
+  if (problem.includes("원문 잔류")) {
+    return `${head}- 중국어 원문이 그대로 남아 있었습니다. 원문 획을 완전히 지우고 그 자리에 한국어만 쓰세요.`;
+  }
+  if (problem.includes("문구 밖 글자")) {
+    return `${head}- 지시에 없는 글자가 섞였습니다. 위 목록의 문구만, 각각 정확히 한 번씩 쓰세요.`;
+  }
+  if (problem.includes("글자 품질")) {
+    return `${head}- 글자가 겹쳐 찍히거나 획이 뭉개졌습니다. 각 문구를 정확히 한 번만, 겹침 없이 또렷한 획으로 쓰세요.`;
+  }
+  return `${head}- ${problem.slice(0, 120)}`;
 }
 
 /**
@@ -4437,7 +4528,7 @@ export async function renderTranslatedImage(
    * 자국이 아예 생기지 않는다(실상품 이미지로 확인).
    */
   opts: { regenerate?: boolean; hint?: string } = {},
-): Promise<{ data: Buffer; mime: string }> {
+): Promise<{ data: Buffer; mime: string; keptOriginal?: string[] }> {
   // 수동 경로(어드민 문구 수정 재렌더)도 예산 스코프 안에서 돈다 — 지금은 어느
   // 갈래든 호출 1회지만, 그건 REGEN_ATTEMPTS=1 이라는 우연한 상수에 기대는 것이라
   // 루프가 하나만 늘어도 상한이 뚫린다. "장당 이미지 HTTP 1회"를 구조로 못 박는다.
@@ -4450,7 +4541,7 @@ async function renderTranslatedImageInner(
   mime: string,
   boxes: OcrBox[],
   opts: { regenerate?: boolean; hint?: string },
-): Promise<{ data: Buffer; mime: string }> {
+): Promise<{ data: Buffer; mime: string; keptOriginal?: string[] }> {
   ensureFonts();
   // GIF 는 워터마크 지우기를 하지 않는다 — 프레임마다 로컬 지우개를 돌리면
   // 사진 배경에 얼룩이 프레임 단위로 어른거린다. 정지 이미지부터 확실히.

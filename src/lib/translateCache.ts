@@ -16,7 +16,9 @@ import { IMAGE_MODEL } from "@/lib/imageTranslate";
  * 여기 숫자를 올린다. 키가 달라져 구버전 결과가 새 파이프라인에 자동 재사용되지 않는다.
  * (구버전 VERIFIED 행은 보존된다 — 재사용 여부는 운영자가 장별로 결정)
  */
-const PROMPT_V = 5; // regenPrompt 에 그림자·외곽선·장식 유지 추가 (2026-08-24)
+const PROMPT_V = 6; // v6: GIF 글자 띠 전용 프롬프트 분리 (2026-09-01) — 띠 crop 에도
+// 전체 이미지용 프롬프트를 쓰느라, 관문이 떨어뜨리는 세 가지(가장자리 배경색·
+// 겹침 금지·띠 안에 넣기)를 모델에게 한마디도 지시하지 않고 있었다.
 // v5: 링 분리 성분 판정을 글자 크기 정규화(0.18·h²) + 길쭉함 + 잉크 방향으로 교체
 // v6: 국소 이음매 게이트(seamLocalOk — p99·연속 run) 추가. 평균 seamGap 만으로
 //     채택된 구버전 결과(live3 A 패치처럼 경계가 끊긴 것)는 자동 재사용되지 않는다 (2026-08-24)
@@ -61,7 +63,10 @@ const VERIFY_V = 9;
 // 8: 띠 채택에 이음매 관문(페더 전 픽셀 검사) + 글자 여유 2px + 이웃 문구 오탐
 //    수정 (2026-09-01). 구버전은 배경이 어긋난 패치를 그대로 얹었고, 반대로
 //    이웃 문구가 읽히면 멀쩡한 결과를 거부했다 — 두 판정 모두 재사용 금지.
-const RENDER_V = 8;
+// 9: 띠를 이웃 글자 코어를 피해 자른다 (2026-09-01). 여백에 걸친 이웃 원문을
+//    모델이 손대 헛글자를 만들어 띠 전체가 버려졌다(M18 실측: 「360°贴合」이
+//    "360새름"으로 깨져 「쿠션 설계」가 원문으로 남았다).
+const RENDER_V = 9;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {

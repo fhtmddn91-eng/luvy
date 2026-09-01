@@ -6,7 +6,7 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { bandSeamProblem, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
+import { bandRegenPrompt, bandRetryHint, bandSeamProblem, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
 
 const W = 200;
 const H = 200;
@@ -195,5 +195,63 @@ describe("bandSeamProblem", () => {
 
   it("몇 단계 밝기 차이(압축 노이즈 수준)는 통과시킨다 — 과잉 거부 금지", () => {
     expect(bandSeamProblem(orig, patchOf(196), band, W, H)).toBeNull();
+  });
+});
+
+/**
+ * 띠 전용 프롬프트 — 관문이 재는 것을 그대로 지시하는가.
+ * 예전엔 전체 이미지용 프롬프트를 그대로 써서, 관문이 떨어뜨리는 세 가지를
+ * 모델에게 한마디도 말하지 않았다 (실측 M18: 띠 3개 중 1개가 재시도 뒤에도 탈락).
+ */
+describe("bandRegenPrompt", () => {
+  const boxes: OcrBox[] = [
+    { box: [100, 100, 200, 900], zh: "强劲伸缩", ko: "강력한 신축", bg: "#fff", fg: "#000" },
+    { box: [210, 100, 280, 900], zh: "如炮机般地冲撞", ko: "대포처럼 격렬한 찌르기", bg: "#fff", fg: "#000" },
+  ];
+  const p = bandRegenPrompt(boxes, { width: 219, height: 45 });
+
+  it("띠 크기를 알려 준다 — 확대·축소·여백 추가를 막는다", () => {
+    expect(p).toContain("219×45");
+  });
+
+  it("이음매 관문이 재는 '네 변 가장자리 색'을 지시한다", () => {
+    expect(p).toMatch(/가장자리 픽셀 색/);
+  });
+
+  it("육안 관문이 재는 '같은 문구 두 번 그리기 금지'를 지시한다", () => {
+    expect(p).toMatch(/같은 문구를 두 번 그리면 실패/);
+  });
+
+  it("커버 검사가 재는 '띠 밖으로 넘치지 말 것'과 축소 허용을 지시한다", () => {
+    expect(p).toMatch(/글자 크기를 조금 줄여/);
+    expect(p).toMatch(/띠 밖으로 넘치거나 잘리면 실패/);
+  });
+
+  it("확정 번역문을 그대로 싣는다 — 모델 임의 번역 금지", () => {
+    expect(p).toContain('"强劲伸缩" → "강력한 신축"');
+    expect(p).toContain('"如炮机般地冲撞" → "대포처럼 격렬한 찌르기"');
+  });
+
+  it("유지(keep) 문구는 목록에 넣지 않는다 — 모델이 건드리면 안 된다", () => {
+    const withKeep = bandRegenPrompt(
+      [...boxes, { box: [300, 100, 360, 900], zh: "防水", ko: "", bg: "#fff", fg: "#000", mode: "keep" }],
+      { width: 219, height: 90 },
+    );
+    expect(withKeep).not.toContain("防水");
+  });
+});
+
+describe("bandRetryHint", () => {
+  it("이음매 실패에는 배경·가장자리를 고치라고 말한다", () => {
+    expect(bandRetryHint("이음매가 보입니다 (경계 색차 60)")).toMatch(/가장자리 픽셀은 원본 그대로/);
+  });
+  it("겹침 실패에는 한 번만 쓰라고 말한다", () => {
+    expect(bandRetryHint("글자 품질 불합격: 제목이 겹쳐 찍힘")).toMatch(/정확히 한 번만/);
+  });
+  it("잔류 실패에는 원문을 지우라고 말한다", () => {
+    expect(bandRetryHint("원문 잔류: 强劲伸缩")).toMatch(/원문 획을 완전히 지우고/);
+  });
+  it("모르는 사유는 그대로 전달한다 — 삼키지 않는다", () => {
+    expect(bandRetryHint("알 수 없는 사유 XYZ")).toContain("알 수 없는 사유 XYZ");
   });
 });
