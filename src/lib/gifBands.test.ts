@@ -6,7 +6,7 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { staticBandsOf, type OcrBox } from "./imageTranslate";
+import { resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
 
 const W = 200;
 const H = 200;
@@ -94,5 +94,72 @@ describe("staticBandsOf", () => {
       raws, W, H,
     );
     expect(groups[0].boxes.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/**
+ * 겹치는 띠 정리 — "글자가 두 겹으로 찍힘"의 진짜 원인 (2026-09-01 마리아 0019 실측).
+ * 제목 띠(y159~207)와 부제 띠(y187~247)가 겹쳐, 겹친 자리에 패치를 두 번 얹으면서
+ * 부제 패치가 그린 제목 꼬리가 제목 위에 덧찍혔다.
+ */
+describe("resolveBandOverlaps", () => {
+  const W = 750, H = 534;
+  /** 세로로 떨어진 두 문구 (제목 y300~370‰, 부제 y380~440‰) */
+  const title: OcrBox = { box: [300, 60, 370, 250], zh: "强劲伸缩", ko: "강력한 신축", bg: "#fff", fg: "#000" };
+  const sub: OcrBox = { box: [380, 40, 440, 330], zh: "如炮机般地冲撞", ko: "대포처럼 격렬한 찌르기", bg: "#fff", fg: "#000" };
+
+  it("합집합이 정지면 하나로 합친다 — 호출도 한 번으로 준다", () => {
+    const groups = [
+      { band: { left: 43, top: 159, width: 139, height: 48 }, boxes: [title] },
+      { band: { left: 30, top: 187, width: 219, height: 60 }, boxes: [sub] },
+    ];
+    const out = resolveBandOverlaps(groups, W, H, () => true);
+    expect(out).toHaveLength(1);
+    expect(out[0].boxes).toHaveLength(2);
+  });
+
+  it("합칠 수 없으면 글자 사이에서 잘라 나눈다 — 어느 문구도 잃지 않는다", () => {
+    const groups = [
+      { band: { left: 43, top: 159, width: 139, height: 48 }, boxes: [title] },
+      { band: { left: 30, top: 187, width: 219, height: 60 }, boxes: [sub] },
+    ];
+    const out = resolveBandOverlaps(groups, W, H, () => false);
+    expect(out).toHaveLength(2);
+    const [a, b] = out;
+    // 더 이상 겹치지 않는다
+    const overlap =
+      a.band.left < b.band.left + b.band.width && b.band.left < a.band.left + a.band.width &&
+      a.band.top < b.band.top + b.band.height && b.band.top < a.band.top + a.band.height;
+    expect(overlap).toBe(false);
+    // 각 띠는 자기 글자를 여전히 담는다
+    expect(a.band.top + a.band.height).toBeGreaterThan((370 / 1000) * H);
+    expect(b.band.top).toBeLessThan((380 / 1000) * H);
+  });
+
+  it("글자 자리까지 겹치면(겹쳐 인쇄된 원본) 하나만 남긴다 — 반쪽만 덮으면 원문이 비친다", () => {
+    const over: OcrBox = { ...sub, box: [305, 60, 365, 250] }; // 제목과 같은 자리
+    const groups = [
+      { band: { left: 40, top: 155, width: 150, height: 50 }, boxes: [title, over] },
+      { band: { left: 45, top: 158, width: 140, height: 45 }, boxes: [over] },
+    ];
+    const out = resolveBandOverlaps(groups, W, H, () => false);
+    expect(out).toHaveLength(1);
+    expect(out[0].boxes.length).toBe(2); // 글자를 더 많이 담은 쪽이 남는다
+  });
+});
+
+describe("seamSidesOf", () => {
+  it("맞닿은 변을 이음매로 표시한다 — 그 변을 페더하면 원문이 비쳐 나온다", () => {
+    const upper = { left: 30, top: 159, width: 219, height: 43 };
+    const lower = { left: 30, top: 202, width: 219, height: 45 };
+    expect(seamSidesOf(upper, [upper, lower]).bottom).toBe(true);
+    expect(seamSidesOf(lower, [upper, lower]).top).toBe(true);
+    expect(seamSidesOf(upper, [upper, lower]).left).toBe(false);
+  });
+
+  it("떨어져 있는 띠는 이음매가 아니다", () => {
+    const a = { left: 30, top: 100, width: 100, height: 40 };
+    const b = { left: 30, top: 300, width: 100, height: 40 };
+    expect(seamSidesOf(a, [a, b])).toEqual({ left: false, top: false, right: false, bottom: false });
   });
 });

@@ -52,7 +52,10 @@ const VERIFY_V = 9;
 // 5: GIF 띠 채택에 육안 심사(겹침·뭉갬·잘림) 관문 + 불합격 재시도 추가 (2026-09-01)
 //    — 판독만 보던 구버전은 두 겹으로 찍힌 제목을 통과시켰다(마리아 GIF 실측).
 //    그 판정으로 만든 결과는 자동 재사용하지 않는다.
-const RENDER_V = 5;
+// 6: 겹치는 정지 띠를 합치거나 글자 사이에서 잘라 나눈다 + 페더를 여백 안쪽·
+//    비이음매로 제한 (2026-09-01). 겹친 띠에 패치를 두 번 얹어 글자가 두 겹으로
+//    찍히고, 반투명 가장자리로 중국어 원문이 비쳐 나오던 결과는 재사용 금지.
+const RENDER_V = 6;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {

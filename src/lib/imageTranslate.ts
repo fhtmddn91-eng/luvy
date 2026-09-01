@@ -2415,8 +2415,134 @@ export function staticBandsOf(
     const merged: BandRect = { left: L, top: T, width: R - L, height: B - T };
     if (isStill(merged)) return [{ band: merged, boxes: out.flatMap((g) => g.boxes) }];
   }
-  // 글자를 많이 담은 띠부터 — 호출 1회를 가장 값진 띠에 쓴다
-  return out.sort((a, b) => b.boxes.length - a.boxes.length);
+  // 겹치는 띠를 없앤다 — 이게 "글자가 두 겹으로 찍힘"의 진짜 원인이었다.
+  // 실측(2026-09-01 마리아 0019): 제목 띠(y159~207)와 부제 띠(y187~247)가 세로로
+  // 겹쳤고, 겹친 자리에 패치를 두 번 얹어 부제 패치가 그린 제목 꼬리가 제목
+  // 패치 위에 덧찍혔다. 육안 판정기는 띠 하나만 보므로 이걸 잡을 수 없다 —
+  // 겹침은 애초에 만들지 않는 것이 답이다.
+  return resolveBandOverlaps(out, W, H, isStill).sort((a, b) => b.boxes.length - a.boxes.length);
+}
+
+/**
+ * 이 띠의 어느 변이 **다른 띠와 맞닿아 있나**(이음매).
+ * 맞닿은 변을 페더하면 양쪽 패치가 그 줄에서 반투명해져 아래 원문이 드러난다.
+ */
+export function seamSidesOf(
+  band: BandRect,
+  others: BandRect[],
+  tol = 1,
+): { left: boolean; top: boolean; right: boolean; bottom: boolean } {
+  const out = { left: false, top: false, right: false, bottom: false };
+  const R = band.left + band.width, B = band.top + band.height;
+  for (const o of others) {
+    if (o === band) continue;
+    const oR = o.left + o.width, oB = o.top + o.height;
+    const xOverlap = band.left < oR && o.left < R;
+    const yOverlap = band.top < oB && o.top < B;
+    if (yOverlap) {
+      if (Math.abs(band.left - oR) <= tol) out.left = true;
+      if (Math.abs(R - o.left) <= tol) out.right = true;
+    }
+    if (xOverlap) {
+      if (Math.abs(band.top - oB) <= tol) out.top = true;
+      if (Math.abs(B - o.top) <= tol) out.bottom = true;
+    }
+  }
+  return out;
+}
+
+/** 띠 두 개가 픽셀로 겹치나 */
+function bandsOverlap(a: BandRect, b: BandRect): boolean {
+  return (
+    a.left < b.left + b.width && b.left < a.left + a.width &&
+    a.top < b.top + b.height && b.top < a.top + a.height
+  );
+}
+
+/** 그 띠가 담은 글자들의 실제 자리(여백 없는 코어) */
+function coreOf(boxes: OcrBox[], W: number, H: number): { x0: number; y0: number; x1: number; y1: number } {
+  const xs0: number[] = [], ys0: number[] = [], xs1: number[] = [], ys1: number[] = [];
+  for (const b of boxes) {
+    const [y1, x1, y2, x2] = b.box;
+    xs0.push((x1 / 1000) * W); ys0.push((y1 / 1000) * H);
+    xs1.push((x2 / 1000) * W); ys1.push((y2 / 1000) * H);
+  }
+  return { x0: Math.min(...xs0), y0: Math.min(...ys0), x1: Math.max(...xs1), y1: Math.max(...ys1) };
+}
+
+/**
+ * 겹치는 정지 띠 정리 — 같은 픽셀에 패치를 두 번 얹지 않게 만든다.
+ *
+ * 순서: ① 하나로 합칠 수 있으면 합친다(합집합도 완전 정지일 때만)
+ *       ② 글자 자리가 세로/가로로 떨어져 있으면 그 사이에서 **잘라 나눈다**
+ *          (자른 조각은 정지 띠의 부분집합이라 여전히 정지다 — 다시 확인할 필요 없음)
+ *       ③ 글자 자리까지 겹치면(겹쳐 인쇄된 원본) 나눌 수 없다 — 글자를 더 많이
+ *          담은 띠만 남기고 나머지는 원문 유지. 반쪽만 덮으면 원문이 비쳐 나온다.
+ */
+export function resolveBandOverlaps(
+  groups: { band: BandRect; boxes: OcrBox[] }[],
+  W: number,
+  H: number,
+  isStill: (b: BandRect) => boolean,
+): { band: BandRect; boxes: OcrBox[] }[] {
+  const out = groups.map((g) => ({ ...g }));
+  for (let i = 0; i < out.length; i++) {
+    for (let j = i + 1; j < out.length; j++) {
+      const a = out[i], b = out[j];
+      if (!a || !b || !bandsOverlap(a.band, b.band)) continue;
+
+      // ① 합치기
+      const L = Math.min(a.band.left, b.band.left);
+      const T = Math.min(a.band.top, b.band.top);
+      const R = Math.max(a.band.left + a.band.width, b.band.left + b.band.width);
+      const B = Math.max(a.band.top + a.band.height, b.band.top + b.band.height);
+      const merged: BandRect = { left: L, top: T, width: R - L, height: B - T };
+      if (isStill(merged)) {
+        out[i] = { band: merged, boxes: [...a.boxes, ...b.boxes] };
+        out.splice(j, 1);
+        j = i; // 합쳐진 띠로 나머지와 다시 견준다
+        continue;
+      }
+
+      // ② 글자 자리 사이에서 잘라 나누기
+      const ca = coreOf(a.boxes, W, H), cb = coreOf(b.boxes, W, H);
+      const MARGIN = 2; // 코어를 스치지 않게 최소 여백
+      const cut = (
+        up: { band: BandRect; boxes: OcrBox[] },
+        low: { band: BandRect; boxes: OcrBox[] },
+        mid: number,
+        axis: "y" | "x",
+      ): boolean => {
+        if (axis === "y") {
+          const upB = Math.min(up.band.top + up.band.height, mid);
+          const lowT = Math.max(low.band.top, mid);
+          if (upB - up.band.top < 4 || low.band.top + low.band.height - lowT < 4) return false;
+          up.band = { ...up.band, height: upB - up.band.top };
+          low.band = { ...low.band, top: lowT, height: low.band.top + low.band.height - lowT };
+        } else {
+          const upR = Math.min(up.band.left + up.band.width, mid);
+          const lowL = Math.max(low.band.left, mid);
+          if (upR - up.band.left < 4 || low.band.left + low.band.width - lowL < 4) return false;
+          up.band = { ...up.band, width: upR - up.band.left };
+          low.band = { ...low.band, left: lowL, width: low.band.left + low.band.width - lowL };
+        }
+        return true;
+      };
+      let split = false;
+      if (ca.y1 + MARGIN <= cb.y0 - MARGIN) split = cut(a, b, Math.round((ca.y1 + cb.y0) / 2), "y");
+      else if (cb.y1 + MARGIN <= ca.y0 - MARGIN) split = cut(b, a, Math.round((cb.y1 + ca.y0) / 2), "y");
+      else if (ca.x1 + MARGIN <= cb.x0 - MARGIN) split = cut(a, b, Math.round((ca.x1 + cb.x0) / 2), "x");
+      else if (cb.x1 + MARGIN <= ca.x0 - MARGIN) split = cut(b, a, Math.round((cb.x1 + ca.x0) / 2), "x");
+      if (split) continue;
+
+      // ③ 나눌 수 없으면 하나만 남긴다
+      const dropJ = a.boxes.length >= b.boxes.length;
+      out.splice(dropJ ? j : i, 1);
+      if (dropJ) j--;
+      else { i--; break; }
+    }
+  }
+  return out;
 }
 
 type GifPatchResult =
@@ -2528,14 +2654,41 @@ async function tryBuildGifPatch(
         .raw()
         .toBuffer();
       // 경계 페더 — 각지게 붙이면 이음선이 보인다. 띠가 정지 영역이라 원본과
-      // 이어 붙는 자리의 픽셀이 모든 프레임에서 같다 (정지 이미지와 같은 규칙)
-      const feather = Math.min(8, Math.floor(Math.min(band.width, band.height) / 4));
-      applyEdgeFeather(bandRgba, band.width, band.height, feather, {
-        left: band.left > 0,
-        top: band.top > 0,
-        right: band.left + band.width < W,
-        bottom: band.top + band.height < H,
-      });
+      // 이어 붙는 자리의 픽셀이 모든 프레임에서 같다 (정지 이미지와 같은 규칙).
+      //
+      // **페더는 글자 없는 여백에서만 한다.** 반투명 가장자리가 글자 위에 걸리면
+      // 그 아래 원문이 비쳐 나온다 — 실측(2026-09-01 마리아 0019): 제목·부제
+      // 띠의 맞닿은 변과, 여백이 좁은 띠의 위아래에서 중국어 원문의 획이 유령처럼
+      // 떠올랐다. 변마다 글자 코어까지의 거리를 재서 그 안쪽으로만 페더를 넣고,
+      // 다른 띠와 맞닿은 변(이음매)은 아예 페더하지 않는다(양쪽이 반투명해져
+      // 원문이 그대로 드러난다).
+      const core = coreOf(inBand, W, H);
+      const gaps = {
+        left: core.x0 - band.left,
+        top: core.y0 - band.top,
+        right: band.left + band.width - core.x1,
+        bottom: band.top + band.height - core.y1,
+      };
+      const seam = seamSidesOf(band, groups.map((g) => g.band));
+      const sides = {
+        left: band.left > 0 && !seam.left && gaps.left >= 3,
+        top: band.top > 0 && !seam.top && gaps.top >= 3,
+        right: band.left + band.width < W && !seam.right && gaps.right >= 3,
+        bottom: band.top + band.height < H && !seam.bottom && gaps.bottom >= 3,
+      };
+      const room = Math.min(
+        ...([
+          sides.left ? gaps.left : Infinity,
+          sides.top ? gaps.top : Infinity,
+          sides.right ? gaps.right : Infinity,
+          sides.bottom ? gaps.bottom : Infinity,
+        ] as number[]),
+      );
+      const feather = Math.max(
+        0,
+        Math.min(8, Math.floor(Math.min(band.width, band.height) / 4), Math.floor(room) - 1),
+      );
+      applyEdgeFeather(bandRgba, band.width, band.height, feather, sides);
       for (let y = 0; y < band.height; y++) {
         const src = y * band.width * 4;
         bandRgba.copy(patchRgba, ((band.top + y) * W + band.left) * 4, src, src + band.width * 4);
