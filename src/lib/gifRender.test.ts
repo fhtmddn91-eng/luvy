@@ -39,7 +39,7 @@ const topBox: OcrBox = {
 let imageCalls = 0;
 
 /** 요청한 crop 과 같은 크기의 흰 PNG 를 돌려주는 가짜 이미지 모델 */
-function stubGemini(mode: "ok" | "refuse") {
+function stubGemini(mode: "ok" | "refuse", transcribed: string[] = ["강력 진동"]) {
   imageCalls = 0;
   vi.stubGlobal("fetch", async (_u: unknown, init?: { body?: string }) => {
     const body = JSON.parse(init?.body ?? "{}") as {
@@ -64,9 +64,9 @@ function stubGemini(mode: "ok" | "refuse") {
         { status: 200 },
       );
     }
-    // 판독(텍스트) 호출 — 한국어만 읽혔다고 답한다 (원문 잔류 없음)
+    // 판독(텍스트) 호출 — 띠 채택 전 검사가 읽는 내용
     return new Response(
-      JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify([{ box: [80, 100, 200, 900], text: "강력 진동" }]) }] } }] }),
+      JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(transcribed.map((t) => ({ box: [80, 100, 200, 900], text: t }))) }] } }] }),
       { status: 200 },
     );
   });
@@ -91,6 +91,36 @@ describe("renderTranslatedImage — GIF", () => {
     const gif = await makeGif(true); // 위쪽이 움직임 = 글자 자리가 움직인다
     await expect(renderTranslatedImage(gif, "image/gif", [topBox])).rejects.toThrow(/움직이는 화면 위/);
     expect(imageCalls).toBe(0); // 못 할 일에 돈을 쓰지 않는다
+  }, 60_000);
+
+  it("정지 띠가 둘로 갈리면(사이가 애니메이션) 승인 재렌더는 띠마다 호출한다 — 둘 다 번역", async () => {
+    // 위·아래는 정지, 가운데 1/3 만 프레임마다 달라지는 GIF
+    stubGemini("ok");
+    const frames: Buffer[] = [];
+    for (let i = 0; i < 3; i++) {
+      const raw = Buffer.alloc(W * H * 3);
+      for (let y = 0; y < H; y++) {
+        const v = y < H / 3 ? 230 : y < (2 * H) / 3 ? 40 + i * 60 : 230;
+        raw.fill(v, y * W * 3, (y + 1) * W * 3);
+      }
+      frames.push(await sharp(raw, { raw: { width: W, height: H, channels: 3 } }).png().toBuffer());
+    }
+    const gif = await sharp(frames, { join: { animated: true } }).gif({ delay: [100, 100, 100] }).toBuffer();
+    const boxA: OcrBox = { box: [60, 100, 200, 900], zh: "强震", ko: "강력 진동", bg: "#ffffff", fg: "#000000", solid_bg: true };
+    const boxB: OcrBox = { box: [800, 100, 940, 900], zh: "温热", ko: "강력 진동", bg: "#ffffff", fg: "#000000", solid_bg: true };
+    const out = await renderTranslatedImage(gif, "image/gif", [boxA, boxB]);
+    expect(out.mime).toBe("image/gif");
+    // 합치면 가운데 애니메이션을 물어 못 합친다 — 띠 2개 = 호출 2회.
+    // 예전에는 예산 1회에 걸려 두 번째 띠가 영영 원문으로 남았다 (2026-09-01 실측)
+    expect(imageCalls).toBe(2);
+  }, 60_000);
+
+  it("재생성본에 기대 문구 밖 한글(겹침 인쇄)이 읽히면 1회 재시도 후 원본 유지로 실패한다", async () => {
+    // 실측(2026-09-01 마리아 GIF): "인체용"이 두 번 겹쳐 "인체용 단계"로 읽혔다
+    stubGemini("ok", ["강력 진동", "인체용 단계"]);
+    const gif = await makeGif(false);
+    await expect(renderTranslatedImage(gif, "image/gif", [topBox])).rejects.toThrow(/문구 밖 글자/);
+    expect(imageCalls).toBe(2); // 첫 시도 + 재시도 1회 — 그 이상 쓰지 않는다
   }, 60_000);
 
   it("모델이 거부하면 거부 사유가 그대로 올라온다 — 재시도 분류가 가능하게", async () => {

@@ -2249,6 +2249,18 @@ const SEAM_MAX = 48;
 const GIF_PATCH_MAX_PAGES = 60;
 
 /**
+ * 어드민 승인 재렌더에서 GIF 정지 띠에 쓸 수 있는 이미지 호출 상한.
+ *
+ * 자동 흐름은 원본당 1회라 정지 띠가 둘 이상으로 갈리면(사이에 애니메이션이
+ * 있어 못 합치는 경우) 첫 띠만 그려지고 나머지는 원문으로 남는다. 문제는
+ * 재렌더를 눌러도 예산이 또 1회라 **매번 같은 첫 띠만 다시 그렸다** — 돈은
+ * 나가는데 남은 띠는 영영 번역이 안 됐다(2026-09-01 마리아 GIF 실측: 정지
+ * 라벨 2개 중 1개만 번역된 후보가 반복 생산됨). 안전 폴백(MAX_FALLBACK_CALLS)과
+ * 같은 구조로, 운영자가 명시로 승인한 재렌더에서만 띠별 호출을 허용한다.
+ */
+const MAX_GIF_BAND_CALLS = 4;
+
+/**
  * 띠 패치에 대상 원문이 그대로 남았는지 — 텍스트 모델(사실상 공짜)로 확인.
  * 실패하면 null(잔존 미상) — 채택은 하되 육안 관문이 남아 있다.
  */
@@ -2259,6 +2271,36 @@ async function bandLeftoverZh(patch: Buffer, mapped: OcrBox[]): Promise<string[]
   } catch {
     return null;
   }
+}
+
+/**
+ * GIF 띠 재생성본 채택 전 검사 — 텍스트 모델(사실상 공짜)로 두 가지를 본다.
+ *  1) 대상 원문(한자)이 그대로 남았는가
+ *  2) 기대 문구에 없는 한글 덩어리가 읽히는가 — 겹침 인쇄·헛글자.
+ *     실측(2026-09-01 마리아 GIF): 제목 띠 재생성본이 "인체용"을 두 번 겹쳐
+ *     그려 "인체용 단계" 같은 헛글자로 읽혔는데 잔존 검사(한자만 봄)는
+ *     통과했다. 무결 원칙: 깨끗하지 않으면 원본 유지가 바닥이다.
+ * 판독 실패는 null(문제 미확인) — 채택하되 육안 관문이 남아 있다.
+ */
+async function bandPatchProblem(patch: Buffer, mapped: OcrBox[]): Promise<string | null> {
+  let lines: { text: string }[];
+  try {
+    lines = await transcribeText(await sharp(patch).png().toBuffer(), "image/png");
+  } catch {
+    return null;
+  }
+  const left = findLeftoverZh(lines.map((l) => l.text), mapped);
+  if (left.length > 0) return `원문 잔류: ${left.join(", ").slice(0, 60)}`;
+  const norm = (s: string) => s.replace(/[^0-9A-Za-z가-힣]/g, "");
+  const joined = norm(mapped.map((b) => b.ko).join(""));
+  const extras = lines
+    .map((l) => norm(l.text))
+    .filter((t) => t.length >= 2 && /[가-힣]/.test(t))
+    // 줄이 문구 경계를 걸치거나(이어 읽음) 문구 일부만 읽혀도 정상 — 이어 붙인
+    // 전체나 개별 문구의 부분 문자열이면 통과. 어디에도 없는 한글만 헛글자다.
+    .filter((t) => !joined.includes(t) && !mapped.some((b) => norm(b.ko).includes(t)));
+  if (extras.length > 0) return `문구 밖 글자: ${extras.join(", ").slice(0, 60)}`;
+  return null;
 }
 
 /**
@@ -2352,6 +2394,8 @@ async function tryBuildGifPatch(
   W: number,
   H: number,
   pages: number,
+  /** 운영자 승인 재렌더 — 정지 띠가 여럿이면 띠별 호출 허용 (상한 MAX_GIF_BAND_CALLS) */
+  adminApproved: boolean,
 ): Promise<GifPatchResult> {
   try {
     if (pages > GIF_PATCH_MAX_PAGES) {
@@ -2379,12 +2423,13 @@ async function tryBuildGifPatch(
     const done: OcrBox[] = [];
     let lastFail = "";
 
+    const renderBands = async () => {
     for (const { band, boxes: inBand } of groups) {
       // 자동 흐름은 원본당 이미지 HTTP 1회다 — 예산이 끝나면 남은 띠는 원문 유지로
       // 보고한다(운영자 재렌더에서 이어서 처리). 조용히 삼키지 않는다.
       const store = imageBudget.getStore();
       if (store && store.left <= 0) {
-        lastFail = lastFail || "이미지 호출 1회 한도 — 남은 띠는 다음 재렌더에서";
+        lastFail = lastFail || "이미지 호출 한도 — 남은 띠는 원문 유지";
         break;
       }
       const crop = await sharp(frame0).extract(band).png().toBuffer();
@@ -2399,9 +2444,32 @@ async function tryBuildGifPatch(
         lastFail = e instanceof Error ? e.message : String(e);
         continue;
       }
-      const left = await bandLeftoverZh(regen, mapped);
-      if (left && left.length > 0) {
-        lastFail = `원문 잔류: ${left.join(", ").slice(0, 60)}`;
+      let problem = await bandPatchProblem(regen, mapped);
+      if (problem) {
+        // 재시도 1회 — 예산이 남을 때만. 실측(2026-09-01): 겹침 인쇄는 같은
+        // 프롬프트로도 다음 시도에서 곧잘 사라지는 비결정 실패였다.
+        const s2 = imageBudget.getStore();
+        if (!s2 || s2.left > 0) {
+          try {
+            const retried = await callImageEdit(
+              crop,
+              "image/png",
+              regenPrompt(mapped) +
+                "\n\n직전 결과에 겹쳐 인쇄되거나 지시에 없는 글자가 있었다 — 각 문구를 정확히 한 번만, 겹침 없이 또렷하게 써라.",
+              band.width,
+              band.height,
+            );
+            if ((await bandPatchProblem(retried, mapped)) === null) {
+              regen = retried;
+              problem = null;
+            }
+          } catch {
+            /* 재시도 실패 — 아래에서 원본 유지 */
+          }
+        }
+      }
+      if (problem) {
+        lastFail = problem;
         continue;
       }
       const bandRgba = await sharp(regen)
@@ -2424,6 +2492,20 @@ async function tryBuildGifPatch(
       }
       done.push(...inBand);
     }
+    };
+
+    if (adminApproved) {
+      // 운영자 승인 재렌더 — 안전 폴백과 같은 별도 예산 스코프. 자동 흐름의
+      // "원본당 1회"는 그대로 두고, 명시 승인에서만 띠별 호출을 허용한다.
+      const bandBudget = { left: MAX_GIF_BAND_CALLS, used: 0 };
+      try {
+        await imageBudget.run(bandBudget, renderBands);
+      } finally {
+        console.log(`[비용] GIF 띠 편집 ${bandBudget.used}회 ≈ $${(bandBudget.used * IMAGE_CALL_COST_USD).toFixed(3)}`);
+      }
+    } else {
+      await renderBands();
+    }
 
     if (done.length === 0) {
       return { patch: null, reason: lastFail || "글자 영역을 다시 그리지 못했습니다" };
@@ -2442,7 +2524,11 @@ async function tryBuildGifPatch(
   }
 }
 
-async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer; mime: string }> {
+async function renderGif(
+  data: Buffer,
+  boxes: OcrBox[],
+  opts: { adminApproved?: boolean } = {},
+): Promise<{ data: Buffer; mime: string }> {
   const meta = await sharp(data, { animated: true }).metadata();
   const pages = meta.pages ?? 1;
   const width = meta.width ?? 0;
@@ -2453,7 +2539,7 @@ async function renderGif(data: Buffer, boxes: OcrBox[]): Promise<{ data: Buffer;
   // 수동 조정본은 지시를 지켜야 하므로 프레임별 오버레이 유지.
   const patched: GifPatchResult = mustOverlay(boxes)
     ? { patch: null, reason: "위치·크기를 손댄 문구는 GIF 에 얹지 않습니다" }
-    : await tryBuildGifPatch(data, boxes, width, height, pages);
+    : await tryBuildGifPatch(data, boxes, width, height, pages, opts.adminApproved === true);
   // 정지 패치가 통째로 안 됐으면 프레임마다 로컬로 덧그리던 폴백을 없앴다 —
   // 잘림·겹침·네모가 전 프레임에 박제되던 경로였다(2026-08-22 신고).
   // 원본 유지가 바닥이고, 호출한 쪽이 실패로 받아 운영자 확인으로 넘긴다.
@@ -4040,7 +4126,8 @@ async function renderTranslatedImageInner(
   ensureFonts();
   // GIF 는 워터마크 지우기를 하지 않는다 — 프레임마다 로컬 지우개를 돌리면
   // 사진 배경에 얼룩이 프레임 단위로 어른거린다. 정지 이미지부터 확실히.
-  if (mime === "image/gif") return renderGif(data, boxes.filter((b) => !b.wm));
+  // 이 경로(문구 수정·수동 재렌더)는 운영자가 버튼으로 승인한 실행이다 — 띠별 호출 허용.
+  if (mime === "image/gif") return renderGif(data, boxes.filter((b) => !b.wm), { adminApproved: true });
   // 다른 문구와 겹치는 워터마크는 지움 대상에서 제외 (이웃 글자 훼손 방지)
   boxes = dropRiskyWm(boxes);
   if (opts.regenerate === false) return renderStill(data, mime, boxes);
@@ -4873,7 +4960,8 @@ async function translateImageAutoInner(
       rendered = resume.rendered;
       fullAdopt = true;
     } else if (mime === "image/gif") {
-      rendered = await renderGif(data, boxes.filter((b) => !b.wm));
+      // safetyFallback=true 는 운영자 승인 재렌더(force)에서만 온다 — 그때만 띠별 호출
+      rendered = await renderGif(data, boxes.filter((b) => !b.wm), { adminApproved: safetyFallback });
     } else {
       // dropRiskyWm 이 빼는 것 = 이웃 글자와 겹쳐 **지움을 포기한** 워터마크.
       // 최종 관문은 이것만 면책한다 — 지우라고 시킨 워터마크가 남으면 실패다.

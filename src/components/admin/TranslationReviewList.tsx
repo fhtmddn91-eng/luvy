@@ -212,6 +212,8 @@ function ReviewCard({
   const disabled = busy !== null;
 
   const originalSrc = item.originalUrl ?? item.url;
+  // GIF 는 정지 글자 띠가 여러 곳이면 띠마다 호출한다 (상한 4회) — 단가를 정직하게
+  const rerenderCost = /\.gif($|\?)/i.test(originalSrc) ? "약 100~400원" : "약 100원";
   // 지금 손님에게 나가는 그림이 이미 승인된 번역본인가 — 이 경우 후보를 버려도
   // 원본이 아니라 그 승인본이 유지된다 (rejectAssetCandidate 와 같은 판별식)
   const liveIsApproved = !!item.originalUrl && item.url !== item.originalUrl;
@@ -387,7 +389,7 @@ function ReviewCard({
             onClick={() => runStart(item.id, () => startAssetRerender(item.id))}
             className="border border-amber-500 px-3 py-2 text-[13px] font-bold text-amber-900 disabled:opacity-40"
           >
-            {retryable ? "다시 시도하기" : "다시 만들기"} (약 100원)
+            {retryable ? "다시 시도하기" : "다시 만들기"} ({rerenderCost})
           </button>
         </div>
       )}
@@ -401,7 +403,7 @@ function ReviewCard({
           {item.hasBoxes && (
             <div>
               <label className="mb-1 block font-bold text-ink-deep" htmlFor={`rv-hint-${item.id}`}>
-                무엇이 잘못됐는지 적고 다시 만들기 (약 100원)
+                무엇이 잘못됐는지 적고 다시 만들기 ({rerenderCost})
               </label>
               <textarea
                 id={`rv-hint-${item.id}`}
@@ -435,7 +437,7 @@ function ReviewCard({
                 문구 수정 열기 →
               </Link>
               <span className="ml-2 text-muted">
-                문구를 하나하나 직접 고쳐서 다시 만들 수 있습니다 (약 100원)
+                문구를 하나하나 직접 고쳐서 다시 만들 수 있습니다 ({rerenderCost})
               </span>
             </p>
           )}
