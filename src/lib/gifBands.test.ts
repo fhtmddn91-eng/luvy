@@ -6,7 +6,7 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
+import { bandSeamProblem, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
 
 const W = 200;
 const H = 200;
@@ -161,5 +161,39 @@ describe("seamSidesOf", () => {
     const a = { left: 30, top: 100, width: 100, height: 40 };
     const b = { left: 30, top: 300, width: 100, height: 40 };
     expect(seamSidesOf(a, [a, b])).toEqual({ left: false, top: false, right: false, bottom: false });
+  });
+});
+
+/**
+ * 이음매 관문 — "얹으면 네모 자국이 보이는가"를 픽셀로 본다.
+ * 실측(2026-09-01 운영 4장·띠 10개): 정상 결과는 seamGap 0.4~9.6 · p99 1~18 로
+ * 한계(48)에 한참 못 미쳐 전부 통과했다. 잡아야 하는 것은 배경이 어긋난 패치다.
+ */
+describe("bandSeamProblem", () => {
+  const W = 200, H = 120;
+  const band = { left: 40, top: 30, width: 100, height: 50 };
+  /** 균일한 회색 원본 */
+  const orig = (() => {
+    const a = new Uint8Array(W * H * 4);
+    for (let i = 0; i < W * H; i++) { a[i * 4] = 200; a[i * 4 + 1] = 200; a[i * 4 + 2] = 200; a[i * 4 + 3] = 255; }
+    return a;
+  })();
+  const patchOf = (v: number) => {
+    const b = Buffer.alloc(band.width * band.height * 4);
+    for (let i = 0; i < band.width * band.height; i++) { b[i * 4] = v; b[i * 4 + 1] = v; b[i * 4 + 2] = v; b[i * 4 + 3] = 255; }
+    return b;
+  };
+
+  it("배경이 원본과 같으면 통과한다", () => {
+    expect(bandSeamProblem(orig, patchOf(200), band, W, H)).toBeNull();
+  });
+
+  it("배경 밝기가 어긋난 패치는 잡는다 — 네모 자국이 보이는 상태", () => {
+    const p = bandSeamProblem(orig, patchOf(120), band, W, H);
+    expect(p).toMatch(/이음매가 보입니다/);
+  });
+
+  it("몇 단계 밝기 차이(압축 노이즈 수준)는 통과시킨다 — 과잉 거부 금지", () => {
+    expect(bandSeamProblem(orig, patchOf(196), band, W, H)).toBeNull();
   });
 });

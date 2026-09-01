@@ -206,6 +206,57 @@ describe("renderTranslatedImage — GIF", () => {
     expect(imageCalls).toBe(1);
   }, 60_000);
 
+  it("띠 배경이 원본과 어긋나면 원문을 유지한다 — 네모 자국을 손님에게 내보내지 않는다", async () => {
+    imageCalls = 0;
+    vi.stubGlobal("fetch", async (_u: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as {
+        contents?: { parts?: { inline_data?: { data?: string } }[] }[];
+        generationConfig?: { responseModalities?: string[] };
+      };
+      if (body.generationConfig?.responseModalities?.includes("IMAGE")) {
+        imageCalls++;
+        const b64 = body.contents?.[0]?.parts?.find((p) => p.inline_data?.data)?.inline_data?.data ?? "";
+        const m = await sharp(Buffer.from(b64, "base64")).metadata();
+        // 원본(230 회색)과 크게 다른 배경으로 그린다 = 얹으면 네모가 보인다
+        const png = await sharp({
+          create: { width: m.width ?? 8, height: m.height ?? 8, channels: 3, background: { r: 90, g: 90, b: 90 } },
+        }).png().toBuffer();
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: png.toString("base64") } }] } }] }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify([{ box: [80, 100, 200, 900], text: "강력 진동" }]) }] } }] }),
+        { status: 200 },
+      );
+    });
+    const gif = await makeGif(false);
+    await expect(renderTranslatedImage(gif, "image/gif", [topBox])).rejects.toThrow(/이음매가 보입니다/);
+    expect(imageCalls).toBe(2); // 재시도 1회까지만
+  }, 60_000);
+
+  it("띠 여백에 이웃 문구가 걸쳐 읽혀도 거부하지 않는다 — 헛글자와 구분한다", async () => {
+    // 실측(2026-09-01 재생 감사): 운영 결과물 4장 중 3장이 이웃 문구를 헛글자로
+    // 세는 바람에 통째로 거부됐다. 띠는 글자 주위 여백까지 자르므로 이웃이 들어온다.
+    stubGemini("ok", ["강력 진동", "스마트 온열"]);
+    const frames: Buffer[] = [];
+    for (let i = 0; i < 3; i++) {
+      const raw = Buffer.alloc(W * H * 3);
+      for (let y = 0; y < H; y++) {
+        const v = y < H / 3 ? 230 : y < (2 * H) / 3 ? 40 + i * 60 : 230;
+        raw.fill(v, y * W * 3, (y + 1) * W * 3);
+      }
+      frames.push(await sharp(raw, { raw: { width: W, height: H, channels: 3 } }).png().toBuffer());
+    }
+    const gif = await sharp(frames, { join: { animated: true } }).gif({ delay: [100, 100, 100] }).toBuffer();
+    const a: OcrBox = { box: [60, 100, 200, 900], zh: "强震", ko: "강력 진동", bg: "#fff", fg: "#000", solid_bg: true };
+    const b: OcrBox = { box: [800, 100, 940, 900], zh: "温热", ko: "스마트 온열", bg: "#fff", fg: "#000", solid_bg: true };
+    const out = await renderTranslatedImage(gif, "image/gif", [a, b]);
+    expect(out.mime).toBe("image/gif");
+    expect(imageCalls).toBe(2); // 재시도 없이 띠 2개 = 2회
+  }, 60_000);
+
   it("모델이 거부하면 거부 사유가 그대로 올라온다 — 재시도 분류가 가능하게", async () => {
     stubGemini("refuse");
     const gif = await makeGif(false);

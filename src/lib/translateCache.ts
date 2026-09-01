@@ -58,7 +58,10 @@ const VERIFY_V = 9;
 // 7: 띠가 담은 글자를 전부 덮게 보장 (조각 합집합 + 커버 검증). 구버전은 띠
 //    조각 하나만 쓰면서 글자 절반이 패치 밖에 남아 원문이 드러났다(M18 실측:
 //    여백 L-105·B-90). 그 판정으로 만든 결과는 재사용하지 않는다.
-const RENDER_V = 7;
+// 8: 띠 채택에 이음매 관문(페더 전 픽셀 검사) + 글자 여유 2px + 이웃 문구 오탐
+//    수정 (2026-09-01). 구버전은 배경이 어긋난 패치를 그대로 얹었고, 반대로
+//    이웃 문구가 읽히면 멀쩡한 결과를 거부했다 — 두 판정 모두 재사용 금지.
+const RENDER_V = 8;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {

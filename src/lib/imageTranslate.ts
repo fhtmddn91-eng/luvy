@@ -2292,7 +2292,12 @@ async function bandLeftoverZh(patch: Buffer, mapped: OcrBox[]): Promise<string[]
  *     통과했다. 무결 원칙: 깨끗하지 않으면 원본 유지가 바닥이다.
  * 판독 실패는 null(문제 미확인) — 채택하되 육안 관문이 남아 있다.
  */
-async function bandPatchProblem(patch: Buffer, mapped: OcrBox[]): Promise<string | null> {
+async function bandPatchProblem(
+  patch: Buffer,
+  mapped: OcrBox[],
+  /** 이 그림의 **다른** 확정 문구 — 띠 여백에 이웃 글자가 걸쳐 읽혀도 헛글자가 아니다 */
+  neighborKo: string[] = [],
+): Promise<string | null> {
   let lines: { text: string }[];
   try {
     lines = await transcribeText(await sharp(patch).png().toBuffer(), "image/png");
@@ -2302,13 +2307,17 @@ async function bandPatchProblem(patch: Buffer, mapped: OcrBox[]): Promise<string
   const left = findLeftoverZh(lines.map((l) => l.text), mapped);
   if (left.length > 0) return `원문 잔류: ${left.join(", ").slice(0, 60)}`;
   const norm = (s: string) => s.replace(/[^0-9A-Za-z가-힣]/g, "");
-  const joined = norm(mapped.map((b) => b.ko).join(""));
+  // 띠는 글자 주위 여백까지 잘라내므로 crop 에 **이웃 문구의 일부**가 들어온다.
+  // 그걸 헛글자로 세면 멀쩡한 결과가 거부된다 — 실측(2026-09-01 재생 감사):
+  // 운영 결과물 4장 중 3장이 이웃 문구 때문에 통째로 거부됐다.
+  const allowed = [...mapped.map((b) => b.ko), ...neighborKo];
+  const joined = norm(allowed.join(""));
   const extras = lines
     .map((l) => norm(l.text))
     .filter((t) => t.length >= 2 && /[가-힣]/.test(t))
     // 줄이 문구 경계를 걸치거나(이어 읽음) 문구 일부만 읽혀도 정상 — 이어 붙인
     // 전체나 개별 문구의 부분 문자열이면 통과. 어디에도 없는 한글만 헛글자다.
-    .filter((t) => !joined.includes(t) && !mapped.some((b) => norm(b.ko).includes(t)));
+    .filter((t) => !joined.includes(t) && !allowed.some((k) => norm(k).includes(t)));
   if (extras.length > 0) return `문구 밖 글자: ${extras.join(", ").slice(0, 60)}`;
   return null;
 }
@@ -2349,8 +2358,12 @@ async function bandVisualProblem(patch: Buffer, mapped: OcrBox[]): Promise<strin
 }
 
 /** 띠 채택 관문 — 글자 내용(공짜) → 모양(공짜 시각 심사) 순서로 본다 */
-async function bandProblem(patch: Buffer, mapped: OcrBox[]): Promise<string | null> {
-  return (await bandPatchProblem(patch, mapped)) ?? (await bandVisualProblem(patch, mapped));
+async function bandProblem(
+  patch: Buffer,
+  mapped: OcrBox[],
+  neighborKo: string[] = [],
+): Promise<string | null> {
+  return (await bandPatchProblem(patch, mapped, neighborKo)) ?? (await bandVisualProblem(patch, mapped));
 }
 
 /**
@@ -2432,13 +2445,16 @@ export function staticBandsOf(
   // 띠는 자기가 담은 글자를 **전부** 덮어야 한다 — 반쪽만 덮으면 덮이지 않은
   // 획이 원문 그대로 드러난다(무결 원칙 위반). 못 덮는 문구는 그 띠에서 빼서
   // 원문 유지로 돌린다 — 번역했다고 잘못 세는 것이 더 나쁘다.
+  // 여유 2px — 판독 박스는 획 끝을 아슬아슬하게 자를 때가 있어, 딱 맞게만
+  // 덮으면 삐침·받침 끝이 패치 밖에 남는다(원문 획이 그대로 보인다).
+  const STROKE_MARGIN = 2;
   const fits = (b: OcrBox, band: BandRect): boolean => {
     const [y1, x1, y2, x2] = b.box;
     return (
-      (x1 / 1000) * W >= band.left - 0.5 &&
-      (y1 / 1000) * H >= band.top - 0.5 &&
-      (x2 / 1000) * W <= band.left + band.width + 0.5 &&
-      (y2 / 1000) * H <= band.top + band.height + 0.5
+      (x1 / 1000) * W - STROKE_MARGIN >= band.left - 0.5 &&
+      (y1 / 1000) * H - STROKE_MARGIN >= band.top - 0.5 &&
+      (x2 / 1000) * W + STROKE_MARGIN <= band.left + band.width + 0.5 &&
+      (y2 / 1000) * H + STROKE_MARGIN <= band.top + band.height + 0.5
     );
   };
   const covered = out
@@ -2577,6 +2593,82 @@ export function resolveBandOverlaps(
   return out;
 }
 
+/**
+ * 모델이 그린 띠를 얹을 수 있는 RGBA 로 만든다 — 크기 맞춤 + 경계 페더.
+ *
+ * **페더는 글자 없는 여백에서만 한다.** 반투명 가장자리가 글자 위에 걸리면 그
+ * 아래 원문이 비쳐 나온다 — 실측(2026-09-01 마리아 0019): 제목·부제 띠의 맞닿은
+ * 변과, 여백이 좁은 띠의 위아래에서 중국어 원문의 획이 유령처럼 떠올랐다.
+ * 변마다 글자까지의 거리를 재서 그 안쪽으로만 넣고, 다른 띠와 맞닿은 변(이음매)은
+ * 아예 페더하지 않는다(양쪽이 반투명해지면 원문이 그대로 드러난다).
+ */
+function featherBand(
+  rgba: Buffer,
+  band: BandRect,
+  inBand: OcrBox[],
+  W: number,
+  H: number,
+  allBands: BandRect[],
+): Buffer {
+  const core = coreOf(inBand, W, H);
+  const gaps = {
+    left: core.x0 - band.left,
+    top: core.y0 - band.top,
+    right: band.left + band.width - core.x1,
+    bottom: band.top + band.height - core.y1,
+  };
+  const seam = seamSidesOf(band, allBands);
+  const sides = {
+    left: band.left > 0 && !seam.left && gaps.left >= 3,
+    top: band.top > 0 && !seam.top && gaps.top >= 3,
+    right: band.left + band.width < W && !seam.right && gaps.right >= 3,
+    bottom: band.top + band.height < H && !seam.bottom && gaps.bottom >= 3,
+  };
+  const room = Math.min(
+    ...([
+      sides.left ? gaps.left : Infinity,
+      sides.top ? gaps.top : Infinity,
+      sides.right ? gaps.right : Infinity,
+      sides.bottom ? gaps.bottom : Infinity,
+    ] as number[]),
+  );
+  const feather = Math.max(
+    0,
+    Math.min(8, Math.floor(Math.min(band.width, band.height) / 4), Math.floor(room) - 1),
+  );
+  return applyEdgeFeather(rgba, band.width, band.height, feather, sides);
+}
+
+/**
+ * 띠를 얹었을 때 경계에 네모 자국이 보이는가 — 정지 이미지 경로와 같은 기준.
+ * 원본 프레임0 위에 이 띠만 합성해 경계 색차를 잰다(픽셀 계산, 호출 0회).
+ * 불합격이면 재시도하거나 원문을 유지한다 — 덧그린 자국은 무결 원칙 위반이다.
+ */
+export function bandSeamProblem(
+  origRaw: Uint8Array,
+  bandRgba: Buffer,
+  band: BandRect,
+  W: number,
+  H: number,
+): string | null {
+  const comp = Uint8Array.from(origRaw);
+  for (let y = 0; y < band.height; y++) {
+    for (let x = 0; x < band.width; x++) {
+      const si = (y * band.width + x) * 4;
+      const a = bandRgba[si + 3] / 255;
+      if (a <= 0) continue;
+      const di = ((band.top + y) * W + band.left + x) * 4;
+      for (let c = 0; c < 3; c++) comp[di + c] = Math.round(bandRgba[si + c] * a + comp[di + c] * (1 - a));
+    }
+  }
+  const r = { x0: band.left, y0: band.top, x1: band.left + band.width, y1: band.top + band.height };
+  const gap = seamGap(origRaw, comp, W, H, r);
+  if (gap > SEAM_MAX) return `이음매가 보입니다 (경계 색차 ${gap.toFixed(0)})`;
+  const s = seamLocalOk(origRaw, comp, W, H, r);
+  if (!s.ok) return `이음매가 보입니다 (경계 p99 ${s.p99}, 연속 ${Math.max(s.runHigh, s.runMid)}px)`;
+  return null;
+}
+
 type GifPatchResult =
   /** keptOriginal: 정지가 아니거나 관문에 걸려 **원문을 그대로 둔** 문구(원문 한자) */
   | { patch: Image; overlayBoxes: OcrBox[]; keptOriginal: string[] }
@@ -2648,7 +2740,7 @@ async function tryBuildGifPatch(
       // 관문을 통과할 때까지 최대 2회 — 겹침·뭉갬은 같은 프롬프트로도 다음
       // 시도에서 곧잘 사라지는 비결정 실패다(실측 2026-09-01). 2회로 못 만들면
       // 이 띠는 원문을 유지한다 — 깨진 그림을 채택하느니 원문이 낫다(무결 원칙).
-      let regen: Buffer | null = null;
+      let accepted: Buffer | null = null; // 검사를 전부 통과한 띠(RGBA raw)
       let problem: string | null = null;
       for (let attempt = 1; attempt <= BAND_ATTEMPTS; attempt++) {
         const b2 = imageBudget.getStore();
@@ -2674,58 +2766,38 @@ async function tryBuildGifPatch(
           problem = m;
           continue;
         }
-        problem = await bandProblem(out, mapped);
-        if (!problem) {
-          regen = out;
-          break;
+        problem = await bandProblem(
+          out,
+          mapped,
+          targets.filter((t) => !inBand.includes(t)).map((t) => t.ko),
+        );
+        if (problem) continue;
+        const rgba = await sharp(out)
+          .resize(band.width, band.height, { fit: "fill" })
+          .ensureAlpha()
+          .raw()
+          .toBuffer();
+        // 이음매 검사 — 정지 이미지 경로와 같은 기준으로 "얹으면 네모가 보이는가"를
+        // 픽셀로 본다(공짜). 모델이 띠 배경을 원본과 다른 밝기로 그리면 사각 자국이
+        // 남는데, 글자 판독·육안 심사는 배경 밝기를 보지 않는다.
+        // **페더를 넣기 전에** 본다 — 페더는 경계 1px 을 원본 쪽으로 섞어 증거를
+        // 가린다. 실측: 배경이 90/230 으로 완전히 어긋난 패치도 페더 뒤에는 통과했다.
+        // 실측(2026-09-01 운영 4장): seamGap 0.4~9.6 · p99 1~18 · run 0 — 정상
+        // 결과는 한계(48)에 한참 못 미친다. 이 관문은 나쁜 패치만 잡는다.
+        const seamProblem = bandSeamProblem(raws[0], rgba, band, W, H);
+        if (seamProblem) {
+          problem = seamProblem;
+          continue;
         }
+        accepted = featherBand(rgba, band, inBand, W, H, groups.map((g) => g.band));
+        break;
       }
-      if (!regen) {
+      if (!accepted) {
         lastFail = problem ?? "글자 영역을 다시 그리지 못했습니다";
         keptOriginal.push(...inBand.map((b) => b.zh));
         continue;
       }
-      const bandRgba = await sharp(regen)
-        .resize(band.width, band.height, { fit: "fill" })
-        .ensureAlpha()
-        .raw()
-        .toBuffer();
-      // 경계 페더 — 각지게 붙이면 이음선이 보인다. 띠가 정지 영역이라 원본과
-      // 이어 붙는 자리의 픽셀이 모든 프레임에서 같다 (정지 이미지와 같은 규칙).
-      //
-      // **페더는 글자 없는 여백에서만 한다.** 반투명 가장자리가 글자 위에 걸리면
-      // 그 아래 원문이 비쳐 나온다 — 실측(2026-09-01 마리아 0019): 제목·부제
-      // 띠의 맞닿은 변과, 여백이 좁은 띠의 위아래에서 중국어 원문의 획이 유령처럼
-      // 떠올랐다. 변마다 글자 코어까지의 거리를 재서 그 안쪽으로만 페더를 넣고,
-      // 다른 띠와 맞닿은 변(이음매)은 아예 페더하지 않는다(양쪽이 반투명해져
-      // 원문이 그대로 드러난다).
-      const core = coreOf(inBand, W, H);
-      const gaps = {
-        left: core.x0 - band.left,
-        top: core.y0 - band.top,
-        right: band.left + band.width - core.x1,
-        bottom: band.top + band.height - core.y1,
-      };
-      const seam = seamSidesOf(band, groups.map((g) => g.band));
-      const sides = {
-        left: band.left > 0 && !seam.left && gaps.left >= 3,
-        top: band.top > 0 && !seam.top && gaps.top >= 3,
-        right: band.left + band.width < W && !seam.right && gaps.right >= 3,
-        bottom: band.top + band.height < H && !seam.bottom && gaps.bottom >= 3,
-      };
-      const room = Math.min(
-        ...([
-          sides.left ? gaps.left : Infinity,
-          sides.top ? gaps.top : Infinity,
-          sides.right ? gaps.right : Infinity,
-          sides.bottom ? gaps.bottom : Infinity,
-        ] as number[]),
-      );
-      const feather = Math.max(
-        0,
-        Math.min(8, Math.floor(Math.min(band.width, band.height) / 4), Math.floor(room) - 1),
-      );
-      applyEdgeFeather(bandRgba, band.width, band.height, feather, sides);
+      const bandRgba = accepted;
       for (let y = 0; y < band.height; y++) {
         const src = y * band.width * 4;
         bandRgba.copy(patchRgba, ((band.top + y) * W + band.left) * 4, src, src + band.width * 4);
