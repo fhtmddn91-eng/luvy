@@ -39,7 +39,12 @@ const topBox: OcrBox = {
 let imageCalls = 0;
 
 /** 요청한 crop 과 같은 크기의 흰 PNG 를 돌려주는 가짜 이미지 모델 */
-function stubGemini(mode: "ok" | "refuse", transcribed: string[] = ["강력 진동"]) {
+function stubGemini(
+  mode: "ok" | "refuse",
+  transcribed: string[] = ["강력 진동"],
+  /** 띠 육안 심사(그림 품질) 판정을 호출 순서대로 — 없으면 항상 합격 */
+  visual: { ok: boolean; issues: string[]; hard: string[] }[] = [],
+) {
   imageCalls = 0;
   vi.stubGlobal("fetch", async (_u: unknown, init?: { body?: string }) => {
     const body = JSON.parse(init?.body ?? "{}") as {
@@ -61,6 +66,15 @@ function stubGemini(mode: "ok" | "refuse", transcribed: string[] = ["강력 진�
       }).png().toBuffer();
       return new Response(
         JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: png.toString("base64") } }] } }] }),
+        { status: 200 },
+      );
+    }
+    // 띠 육안 심사 — 프롬프트로 구분한다 (그림 품질 판정 JSON 하나)
+    const asked = JSON.stringify(body.contents ?? "");
+    if (asked.includes("글자 부분만 잘라낸 띠")) {
+      const v = visual.shift() ?? { ok: true, issues: [], hard: [] };
+      return new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(v) }] } }] }),
         { status: 200 },
       );
     }
@@ -140,6 +154,25 @@ describe("renderTranslatedImage — GIF", () => {
     const moved: OcrBox = { ...topBox, dx: 12 };
     await expect(renderTranslatedImage(gif, "image/gif", [moved])).rejects.toThrow(/지킬 수 없습니다/);
     expect(imageCalls).toBe(0);
+  }, 60_000);
+
+  it("겹쳐 찍힌 띠는 육안 심사가 잡고 재시도해 통과시킨다 — 판독은 정상으로 읽어 못 잡는다", async () => {
+    // 실측(2026-09-01 마리아 GIF): 제목이 두 겹으로 찍혔는데 판독 모델은 정상
+    // 문자열로 읽어 그대로 채택됐다. 모양은 그림을 보는 눈이 잡아야 한다.
+    stubGemini("ok", ["강력 진동"], [{ ok: false, issues: ["제목이 겹쳐 찍힘"], hard: ["제목이 겹쳐 찍힘"] }]);
+    const gif = await makeGif(false);
+    const out = await renderTranslatedImage(gif, "image/gif", [topBox]);
+    expect(out.mime).toBe("image/gif");
+    expect(imageCalls).toBe(2); // 1차 불합격 → 재시도 1회로 합격
+  }, 60_000);
+
+  it("두 번 다 겹쳐 찍히면 그 띠는 원문을 유지한다 — 깨진 그림을 채택하지 않는다", async () => {
+    const bad = { ok: false, issues: ["겹쳐 찍힘"], hard: ["겹쳐 찍힘"] };
+    stubGemini("ok", ["강력 진동"], [bad, bad]);
+    const gif = await makeGif(false);
+    // 유일한 띠가 불합격 → 얹을 패치가 없으므로 원본 유지(실패)로 올라온다
+    await expect(renderTranslatedImage(gif, "image/gif", [topBox])).rejects.toThrow(/글자 품질 불합격/);
+    expect(imageCalls).toBe(2); // 시도 상한 2회를 넘지 않는다
   }, 60_000);
 
   it("모델이 거부하면 거부 사유가 그대로 올라온다 — 재시도 분류가 가능하게", async () => {

@@ -49,7 +49,10 @@ const VERIFY_V = 9;
 // 3: 안전필터 거부 시 글자 띠 국소 편집 폴백 추가 (2026-08-30, 승인 재렌더 전용)
 // 4: GIF 도 띠 국소 편집으로 전환 (2026-08-31) — 옛 좌표 패치는 재조판과 충돌해
 //    글자가 전부 정지인 GIF 마저 실패시켰다(H007 실측)
-const RENDER_V = 4;
+// 5: GIF 띠 채택에 육안 심사(겹침·뭉갬·잘림) 관문 + 불합격 재시도 추가 (2026-09-01)
+//    — 판독만 보던 구버전은 두 겹으로 찍힌 제목을 통과시켰다(마리아 GIF 실측).
+//    그 판정으로 만든 결과는 자동 재사용하지 않는다.
+const RENDER_V = 5;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {
