@@ -2382,19 +2382,19 @@ export function staticBandsOf(
   // 색상 팔레트 잡음은 tol 32 가 흡수하므로 진짜 정지 영역은 0 으로도 통과한다.
   const isStill = (b: BandRect) =>
     regionIsStatic(raws, W, { x0: b.left, y0: b.top, x1: b.left + b.width, y1: b.top + b.height }, 32, 0);
-  // 여백을 단계적으로 줄여가며 정지 띠를 찾는다. 여백이 넓을수록 모델이 배경
-  // 문맥을 많이 봐서 결과가 좋지만, 그만큼 옆 애니메이션을 물어 탈락한다 —
-  // 실측(gifB): 기본 여백에서는 "智能加温" 이 위쪽 제품 영상을 물어 탈락했다.
-  // 넓은 것부터 시도해 되는 선에서 가장 넉넉한 여백을 쓴다.
-  const PADS = [BAND_PAD_PERMIL, 35, 18];
+
+  // **하한 8px**. 더 좁히면 판독 박스를 넘어선 획(폰트 오버슈트, 실측 1~5px)이
+  // 패치 밖에 남아 원문 조각이 그대로 보인다 — 실측(M18, 여백 4px): "자세 체감"
+  // 뒤에 원문 획이 남았다. 8px 미만으로만 정지인 문구는 안전하게 못 바꾼다.
+  const PADS_PX = [45, 32, 24, 18, 14, 11, 8];
   // 그룹 전체를 **하나로 담는** 사각형이어야 한다. clusterBands 는 여백이 좁아지면
   // 그룹을 여러 조각으로 쪼개는데, 예전엔 그중 **첫 조각만** 띠로 쓰면서 나머지
   // 문구는 띠 밖에 남겨둔 채 "이 띠가 번역했다"고 취급했다 — 실측(2026-09-01 M18):
   // 띠가 담은 글자까지의 여백이 L-105·B-90(음수), 즉 글자 절반이 패치 밖이라
   // 그 자리에 중국어 원문이 그대로 드러났다. 조각들의 합집합을 쓴다.
   const stillBandFor = (group: OcrBox[]): BandRect | null => {
-    for (const pad of PADS) {
-      const parts = clusterBands(group, W, H, pad);
+    for (const pad of PADS_PX) {
+      const parts = clusterBands(group, W, H, BAND_PAD_PERMIL, pad);
       if (parts.length === 0) continue;
       const band: BandRect = {
         left: Math.min(...parts.map((p) => p.left)),
@@ -2440,8 +2440,9 @@ export function staticBandsOf(
   // 띠는 자기가 담은 글자를 **전부** 덮어야 한다 — 반쪽만 덮으면 덮이지 않은
   // 획이 원문 그대로 드러난다(무결 원칙 위반). 못 덮는 문구는 그 띠에서 빼서
   // 원문 유지로 돌린다 — 번역했다고 잘못 세는 것이 더 나쁘다.
-  // 여유 2px — 판독 박스는 획 끝을 아슬아슬하게 자를 때가 있어, 딱 맞게만
-  // 덮으면 삐침·받침 끝이 패치 밖에 남는다(원문 획이 그대로 보인다).
+  // 띠는 담은 글자를 **전부** 덮어야 한다 — 반쪽만 덮으면 덮이지 않은 획이
+  // 원문 그대로 드러난다. 여유 2px 은 판독 박스가 획 끝을 아슬아슬하게 자를 때를
+  // 위한 것이고, 그보다 큰 오버슈트는 여백 하한(PADS_PX 최소 8px)이 흡수한다.
   const STROKE_MARGIN = 2;
   const fits = (b: OcrBox, band: BandRect): boolean => {
     const [y1, x1, y2, x2] = b.box;
@@ -2452,6 +2453,7 @@ export function staticBandsOf(
       (y2 / 1000) * H + STROKE_MARGIN <= band.top + band.height + 0.5
     );
   };
+
   const covered = out
     .map((g) => ({ band: g.band, boxes: g.boxes.filter((b) => fits(b, g.band)) }))
     .filter((g) => g.boxes.length > 0);
@@ -2522,6 +2524,18 @@ export function seamSidesOf(
   return out;
 }
 
+/**
+ * 띠 두 개가 **가까운가** — 이 거리 안이면 합치기를 시도한다.
+ * 가까운 띠를 따로 두면 서로를 피해 깎여 여백이 사라지고, 글자 획이 패치 밖에
+ * 남는다(실측 M18: 위아래로 붙은 두 줄이 서로 깎여 획이 잘렸다).
+ */
+const BAND_NEAR_PX = 14;
+function bandsNear(a: BandRect, b: BandRect, gap = BAND_NEAR_PX): boolean {
+  const dx = Math.max(0, Math.max(a.left - (b.left + b.width), b.left - (a.left + a.width)));
+  const dy = Math.max(0, Math.max(a.top - (b.top + b.height), b.top - (a.top + a.height)));
+  return dx <= gap && dy <= gap;
+}
+
 /** 띠 두 개가 픽셀로 겹치나 */
 function bandsOverlap(a: BandRect, b: BandRect): boolean {
   return (
@@ -2560,7 +2574,12 @@ export function resolveBandOverlaps(
   for (let i = 0; i < out.length; i++) {
     for (let j = i + 1; j < out.length; j++) {
       const a = out[i], b = out[j];
-      if (!a || !b || !bandsOverlap(a.band, b.band)) continue;
+      if (!a || !b) continue;
+      // 겹치거나 **가까우면** 합치기를 먼저 시도한다. 가까운 띠를 그대로 두면
+      // 서로를 피해 깎이고(이웃 회피 클립), 그만큼 여백이 사라져 글자 획이
+      // 패치 밖에 남는다 — 실측(M18): 「360°贴合」 바로 아래 「回弹设计」가
+      // 서로 깎여 획이 잘렸다. 하나로 묶으면 여백도 넉넉하고 이음매도 없다.
+      if (!bandsOverlap(a.band, b.band) && !bandsNear(a.band, b.band)) continue;
 
       // ① 합치기
       const L = Math.min(a.band.left, b.band.left);
@@ -2574,6 +2593,8 @@ export function resolveBandOverlaps(
         j = i; // 합쳐진 띠로 나머지와 다시 견준다
         continue;
       }
+      // 가깝기만 하고 못 합치면 그대로 둔다 — 겹치지 않으니 두 겹 인쇄는 없다
+      if (!bandsOverlap(a.band, b.band)) continue;
 
       // ② 글자 자리 사이에서 잘라 나누기
       const ca = coreOf(a.boxes, W, H), cb = coreOf(b.boxes, W, H);
@@ -4635,15 +4656,27 @@ export function clusterBands(
   imgW: number,
   imgH: number,
   padPermil = BAND_PAD_PERMIL,
+  /**
+   * 픽셀 여백 — 주면 permil 대신 이걸 쓴다(가로·세로 같은 픽셀).
+   *
+   * permil 은 가로·세로에서 서로 다른 픽셀이 되고(750×534 에서 60‰ = 45px/32px),
+   * 단계도 성겨서 "정지를 유지할 수 있는 여백이 4~6px" 인 문구를 통째로 놓쳤다 —
+   * 실측(2026-09-01): 「360°贴合」(6px)·「强悍震感看得见」(4px)이 세 단계 모두
+   * 탈락해 "움직이는 화면 위"로 보고됐지만, 글자 자리는 완전 정지였다.
+   * GIF 띠 선택만 이 인자를 쓴다(정지 이미지 경로는 기존 permil 그대로).
+   */
+  padPx?: number,
 ): BandRect[] {
   type R = { L: number; T: number; R: number; B: number };
+  const px = (v: number, size: number, sign: 1 | -1) =>
+    padPx === undefined ? ((v + sign * padPermil) / 1000) * size : (v / 1000) * size + sign * padPx;
   let rects: R[] = boxes.map((b) => {
     const [y1, x1, y2, x2] = b.box;
     return {
-      L: Math.max(0, Math.round(((x1 - padPermil) / 1000) * imgW)),
-      T: Math.max(0, Math.round(((y1 - padPermil) / 1000) * imgH)),
-      R: Math.min(imgW, Math.round(((x2 + padPermil) / 1000) * imgW)),
-      B: Math.min(imgH, Math.round(((y2 + padPermil) / 1000) * imgH)),
+      L: Math.max(0, Math.round(px(x1, imgW, -1))),
+      T: Math.max(0, Math.round(px(y1, imgH, -1))),
+      R: Math.min(imgW, Math.round(px(x2, imgW, 1))),
+      B: Math.min(imgH, Math.round(px(y2, imgH, 1))),
     };
   });
   let changed = true;

@@ -66,7 +66,11 @@ const VERIFY_V = 9;
 // 9: 띠를 이웃 글자 코어를 피해 자른다 (2026-09-01). 여백에 걸친 이웃 원문을
 //    모델이 손대 헛글자를 만들어 띠 전체가 버려졌다(M18 실측: 「360°贴合」이
 //    "360새름"으로 깨져 「쿠션 설계」가 원문으로 남았다).
-const RENDER_V = 9;
+// 10: 여백 사다리를 픽셀 단위로 세분화(45/32/24/18/14/11/8) + 가까운 띠 합치기.
+//     permil 3단계(45/26/13px)는 성겨서 8~13px 로만 정지인 문구를 놓쳤다.
+//     하한 8px 은 폰트 오버슈트 실측(1~5px)에서 나온 값 — 더 좁히면 판독 박스를
+//     넘어선 획이 패치 밖에 남는다(M18 여백 4px 실측: "자세 체감" 뒤 원문 잔존).
+const RENDER_V = 10;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {
