@@ -175,6 +175,37 @@ describe("renderTranslatedImage — GIF", () => {
     expect(imageCalls).toBe(2); // 시도 상한 2회를 넘지 않는다
   }, 60_000);
 
+  it("429(월 한도)면 첫 띠에서 즉시 멈춘다 — 남은 띠를 헛되이 두드리지 않는다", async () => {
+    // 실측(2026-09-01): 월 지출 상한 초과 상태에서 띠 3개 × 시도 2회 = 6번을 두드렸다
+    imageCalls = 0;
+    vi.stubGlobal("fetch", async (_u: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as { generationConfig?: { responseModalities?: string[] } };
+      if (body.generationConfig?.responseModalities?.includes("IMAGE")) {
+        imageCalls++;
+        return new Response(JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED" } }), { status: 429 });
+      }
+      return new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: "[]" }] } }] }),
+        { status: 200 },
+      );
+    });
+    // 위·아래 정지, 가운데만 움직이는 GIF → 띠 2개
+    const frames: Buffer[] = [];
+    for (let i = 0; i < 3; i++) {
+      const raw = Buffer.alloc(W * H * 3);
+      for (let y = 0; y < H; y++) {
+        const v = y < H / 3 ? 230 : y < (2 * H) / 3 ? 40 + i * 60 : 230;
+        raw.fill(v, y * W * 3, (y + 1) * W * 3);
+      }
+      frames.push(await sharp(raw, { raw: { width: W, height: H, channels: 3 } }).png().toBuffer());
+    }
+    const gif = await sharp(frames, { join: { animated: true } }).gif({ delay: [100, 100, 100] }).toBuffer();
+    const a: OcrBox = { box: [60, 100, 200, 900], zh: "强震", ko: "강력 진동", bg: "#fff", fg: "#000", solid_bg: true };
+    const b: OcrBox = { box: [800, 100, 940, 900], zh: "温热", ko: "스마트 온열", bg: "#fff", fg: "#000", solid_bg: true };
+    await expect(renderTranslatedImage(gif, "image/gif", [a, b])).rejects.toThrow(/429/);
+    expect(imageCalls).toBe(1);
+  }, 60_000);
+
   it("모델이 거부하면 거부 사유가 그대로 올라온다 — 재시도 분류가 가능하게", async () => {
     stubGemini("refuse");
     const gif = await makeGif(false);

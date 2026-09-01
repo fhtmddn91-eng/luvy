@@ -55,7 +55,10 @@ const VERIFY_V = 9;
 // 6: 겹치는 정지 띠를 합치거나 글자 사이에서 잘라 나눈다 + 페더를 여백 안쪽·
 //    비이음매로 제한 (2026-09-01). 겹친 띠에 패치를 두 번 얹어 글자가 두 겹으로
 //    찍히고, 반투명 가장자리로 중국어 원문이 비쳐 나오던 결과는 재사용 금지.
-const RENDER_V = 6;
+// 7: 띠가 담은 글자를 전부 덮게 보장 (조각 합집합 + 커버 검증). 구버전은 띠
+//    조각 하나만 쓰면서 글자 절반이 패치 밖에 남아 원문이 드러났다(M18 실측:
+//    여백 L-105·B-90). 그 판정으로 만든 결과는 재사용하지 않는다.
+const RENDER_V = 7;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {

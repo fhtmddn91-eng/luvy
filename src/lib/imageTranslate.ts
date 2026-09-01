@@ -2379,10 +2379,24 @@ export function staticBandsOf(
   // 실측(gifB): 기본 여백에서는 "智能加温" 이 위쪽 제품 영상을 물어 탈락했다.
   // 넓은 것부터 시도해 되는 선에서 가장 넉넉한 여백을 쓴다.
   const PADS = [BAND_PAD_PERMIL, 35, 18];
+  // 그룹 전체를 **하나로 담는** 사각형이어야 한다. clusterBands 는 여백이 좁아지면
+  // 그룹을 여러 조각으로 쪼개는데, 예전엔 그중 **첫 조각만** 띠로 쓰면서 나머지
+  // 문구는 띠 밖에 남겨둔 채 "이 띠가 번역했다"고 취급했다 — 실측(2026-09-01 M18):
+  // 띠가 담은 글자까지의 여백이 L-105·B-90(음수), 즉 글자 절반이 패치 밖이라
+  // 그 자리에 중국어 원문이 그대로 드러났다. 조각들의 합집합을 쓴다.
   const stillBandFor = (group: OcrBox[]): BandRect | null => {
     for (const pad of PADS) {
-      const [band] = clusterBands(group, W, H, pad);
-      if (band && isStill(band)) return band;
+      const parts = clusterBands(group, W, H, pad);
+      if (parts.length === 0) continue;
+      const band: BandRect = {
+        left: Math.min(...parts.map((p) => p.left)),
+        top: Math.min(...parts.map((p) => p.top)),
+        width: 0,
+        height: 0,
+      };
+      band.width = Math.max(...parts.map((p) => p.left + p.width)) - band.left;
+      band.height = Math.max(...parts.map((p) => p.top + p.height)) - band.top;
+      if (isStill(band)) return band;
     }
     return null;
   };
@@ -2415,6 +2429,24 @@ export function staticBandsOf(
     const merged: BandRect = { left: L, top: T, width: R - L, height: B - T };
     if (isStill(merged)) return [{ band: merged, boxes: out.flatMap((g) => g.boxes) }];
   }
+  // 띠는 자기가 담은 글자를 **전부** 덮어야 한다 — 반쪽만 덮으면 덮이지 않은
+  // 획이 원문 그대로 드러난다(무결 원칙 위반). 못 덮는 문구는 그 띠에서 빼서
+  // 원문 유지로 돌린다 — 번역했다고 잘못 세는 것이 더 나쁘다.
+  const fits = (b: OcrBox, band: BandRect): boolean => {
+    const [y1, x1, y2, x2] = b.box;
+    return (
+      (x1 / 1000) * W >= band.left - 0.5 &&
+      (y1 / 1000) * H >= band.top - 0.5 &&
+      (x2 / 1000) * W <= band.left + band.width + 0.5 &&
+      (y2 / 1000) * H <= band.top + band.height + 0.5
+    );
+  };
+  const covered = out
+    .map((g) => ({ band: g.band, boxes: g.boxes.filter((b) => fits(b, g.band)) }))
+    .filter((g) => g.boxes.length > 0);
+  out.length = 0;
+  out.push(...covered);
+
   // 겹치는 띠를 없앤다 — 이게 "글자가 두 겹으로 찍힘"의 진짜 원인이었다.
   // 실측(2026-09-01 마리아 0019): 제목 띠(y159~207)와 부제 띠(y187~247)가 세로로
   // 겹쳤고, 겹친 자리에 패치를 두 번 얹어 부제 패치가 그린 제목 꼬리가 제목
@@ -2631,10 +2663,15 @@ async function tryBuildGifPatch(
             band.height,
           );
         } catch (e) {
-          // 첫 시도이고 띠가 하나뿐이면 원래 오류를 그대로 올린다 — 호출부
-          // 분류기가 429·타임아웃(RETRYABLE)과 모델 거부를 갈라야 재시도 버튼이 뜬다
-          if (attempt === 1 && groups.length === 1) throw e;
-          problem = e instanceof Error ? e.message : String(e);
+          const m = e instanceof Error ? e.message : String(e);
+          // 429·5xx·타임아웃은 이 그림의 문제가 아니다 — 남은 띠도 똑같이 막히고,
+          // "상태 코드와 무관하게 자동 재요청 금지" 규율에도 어긋난다. 즉시 올려
+          // RETRYABLE 로 분류시킨다. 실측(2026-09-01): 월 지출 상한 초과 상태에서
+          // 띠 3개 × 시도 2회 = 6번을 헛되이 두드렸다.
+          // 띠가 하나뿐인 첫 시도도 원래 오류를 그대로 올린다 — 호출부 분류기가
+          // 429·타임아웃(RETRYABLE)과 모델 거부를 갈라야 재시도 버튼이 뜬다.
+          if (transientReason(m) || (attempt === 1 && groups.length === 1)) throw e;
+          problem = m;
           continue;
         }
         problem = await bandProblem(out, mapped);
