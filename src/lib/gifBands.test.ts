@@ -6,7 +6,7 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { bandRegenPrompt, bandRetryHint, bandSeamProblem, glyphExtent, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
+import { bandRegenPrompt, bandRetryHint, bandSeamProblem, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
 
 const W = 200;
 const H = 200;
@@ -317,5 +317,59 @@ describe("glyphExtent", () => {
     const g = glyphExtent(raw, W, H, { x0: 40, y0: 28, x1: 60, y1: 52 });
     expect(g.x0).toBeGreaterThanOrEqual(40 - 1);
     expect(g.x1).toBeLessThanOrEqual(60 + 1);
+  });
+});
+
+/**
+ * 정지 판정 — **비율이 아니라 절대 크기**로 본다.
+ *
+ * 실측(2026-09-01): "움직인 픽셀 0개" 규칙 때문에 M18 의 「全面覆盖」·「大头爆震」이
+ * 통째로 버려졌는데, 그 영역은 글자도 배경도 99.8~100% 정지였고 움직인 것은
+ * 잡티 9픽셀뿐이었다. 얼려도 애니메이션 손실은 11픽셀(0.11%)로 눈에 안 보인다.
+ * 반대로 진짜 애니메이션은 수백~수천 픽셀이 덩어리로 움직인다.
+ */
+describe("regionStaticEnough", () => {
+  const W = 60, H = 40;
+  const frames = (paint: (f: number, set: (x: number, y: number) => void) => void, n = 4) => {
+    const out: Uint8Array[] = [];
+    for (let f = 0; f < n; f++) {
+      const a = new Uint8Array(W * H * 4).fill(200);
+      for (let i = 3; i < a.length; i += 4) a[i] = 255;
+      paint(f, (x, y) => {
+        const i = (y * W + x) * 4;
+        a[i] = 10; a[i + 1] = 10; a[i + 2] = 10;
+      });
+      out.push(a);
+    }
+    return out;
+  };
+  const rect = { x0: 0, y0: 0, x1: W, y1: H };
+
+  it("완전 정지는 통과", () => {
+    expect(regionStaticEnough(frames(() => {}), W, rect)).toBe(true);
+  });
+
+  it("흩어진 잡티 몇 픽셀은 통과 — 얼려도 보이지 않는다", () => {
+    const fs2 = frames((f, set) => {
+      if (f === 0) return;
+      set(3, 3); set(20, 8); set(40, 30); set(55, 12); // 서로 떨어진 4점
+    });
+    expect(regionStaticEnough(fs2, W, rect)).toBe(true);
+  });
+
+  it("작아도 덩어리로 움직이면 막는다 — 얼면 자국이 보인다", () => {
+    const fs2 = frames((f, set) => {
+      if (f === 0) return;
+      for (let y = 10; y < 14; y++) for (let x = 10; x < 14; x++) set(x, y); // 4x4 = 16px 덩어리
+    });
+    expect(regionStaticEnough(fs2, W, rect)).toBe(false);
+  });
+
+  it("총량이 크면 막는다 — 진짜 애니메이션", () => {
+    const fs2 = frames((f, set) => {
+      if (f === 0) return;
+      for (let x = 0; x < W; x += 2) set(x, 20); // 30px, 흩어져 있지만 총량 초과
+    });
+    expect(regionStaticEnough(fs2, W, rect)).toBe(false);
   });
 });

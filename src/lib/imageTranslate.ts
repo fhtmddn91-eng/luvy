@@ -2031,6 +2031,80 @@ export function regionIsStatic(
 }
 
 /**
+ * 이 영역을 정지로 볼 수 있는가 — **비율이 아니라 절대 크기**로 판단한다.
+ *
+ * 왜 바꿨나: 예전 기준은 "움직인 픽셀 0개"였다. 그건 "1% 허용했더니 그만큼이
+ * 얼어붙었다"는 사고(띠 넓이의 1% = 수백~수천 픽셀)에서 나온 반작용인데,
+ * 실측(2026-09-01)에서 그 반작용이 과했다는 것이 드러났다 — M18 의
+ * 「全面覆盖」·「大头爆震」은 글자도 배경도 **99.8~100% 정지**인데 잡티 9픽셀
+ * 때문에 통째로 버려졌다. 눈에 띄는지는 "몇 %"가 아니라 "몇 픽셀이 뭉쳐
+ * 있는가"로 정해진다. 9픽셀이 흩어져 얼어붙는 건 보이지 않고, 500픽셀 덩어리는
+ * 보인다.
+ *
+ * 그래서 두 조건을 함께 본다: 움직인 픽셀 총수 ≤ maxPx **그리고** 가장 큰
+ * 연결 덩어리 ≤ maxBlob. 압축·디더링 잡티는 흩어진 점이라 통과하고, 진짜
+ * 애니메이션은 덩어리라 걸린다.
+ */
+export function regionStaticEnough(
+  frames: Uint8Array[],
+  W: number,
+  rect: { x0: number; y0: number; x1: number; y1: number },
+  tol = 32,
+  maxPx = 24,
+  maxBlob = 8,
+): boolean {
+  const w = rect.x1 - rect.x0, h = rect.y1 - rect.y0;
+  if (w <= 0 || h <= 0) return false;
+  const moved = new Uint8Array(w * h);
+  let total = 0;
+  const base = frames[0];
+  for (let f = 1; f < frames.length; f++) {
+    const cur = frames[f];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const k = y * w + x;
+        if (moved[k]) continue;
+        const i = ((rect.y0 + y) * W + rect.x0 + x) * 4;
+        const d = Math.max(
+          Math.abs(cur[i] - base[i]),
+          Math.abs(cur[i + 1] - base[i + 1]),
+          Math.abs(cur[i + 2] - base[i + 2]),
+        );
+        if (d > tol) {
+          moved[k] = 1;
+          if (++total > maxPx) return false; // 총량 초과 — 더 볼 것 없다
+        }
+      }
+    }
+  }
+  if (total === 0) return true;
+  // 가장 큰 연결 덩어리 (8-이웃)
+  const seen = new Uint8Array(w * h);
+  const stack: number[] = [];
+  for (let k0 = 0; k0 < moved.length; k0++) {
+    if (!moved[k0] || seen[k0]) continue;
+    let size = 0;
+    stack.push(k0);
+    seen[k0] = 1;
+    while (stack.length) {
+      const k = stack.pop()!;
+      size++;
+      if (size > maxBlob) return false;
+      const x = k % w, y = (k / w) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const nk = ny * w + nx;
+          if (moved[nk] && !seen[nk]) { seen[nk] = 1; stack.push(nk); }
+        }
+      }
+    }
+  }
+  return true;
+}
+
+/**
  * 패치 사각형이 이웃 박스 코어를 침범하지 않게 여백만 잘라낸다.
  *
  * 자기 코어(core)는 절대 줄이지 않는다 — 잘라낼 수 있는 건 여백뿐이다.
@@ -2387,7 +2461,7 @@ export function staticBandsOf(
   // 좌상 라벨 띠가 통과해 그 영역 움직임이 13.7%→5.4% 로 얼었다.
   // 색상 팔레트 잡음은 tol 32 가 흡수하므로 진짜 정지 영역은 0 으로도 통과한다.
   const isStill = (b: BandRect) =>
-    regionIsStatic(raws, W, { x0: b.left, y0: b.top, x1: b.left + b.width, y1: b.top + b.height }, 32, 0);
+    regionStaticEnough(raws, W, { x0: b.left, y0: b.top, x1: b.left + b.width, y1: b.top + b.height });
 
   // 문구마다 **실제 글자 범위**를 재둔다. 판독 박스는 획 끝을 자주 자르고
   // (실측 오버슈트 0~5px), 그만큼이 패치 밖에 남으면 원문 조각이 그대로 보인다

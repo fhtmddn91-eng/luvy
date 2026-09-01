@@ -76,7 +76,10 @@ const VERIFY_V = 9;
 // 12: 작은 글자는 띠를 확대해 보낸다(목표 44px) + 납작한 띠는 세로 확장 +
 //     재시도는 배율을 바꿔 조건을 달리한다. 실측: 1회에 성공한 띠 9개는 전부
 //     글자 41~94px, 실패한 띠는 22px 였다.
-const RENDER_V = 12;
+// 13: 정지 판정을 "움직인 픽셀 0개"에서 **절대 크기·덩어리** 기준으로 (2026-09-01).
+//     0개 규칙은 과잉 반작용이었다 — M18 의 두 문구는 99.8~100% 정지인데 잡티
+//     9픽셀 때문에 통째로 버려졌다. 얼렸을 때 손실은 11px(0.11%)로 보이지 않는다.
+const RENDER_V = 13;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {
