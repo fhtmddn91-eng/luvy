@@ -79,7 +79,10 @@ const VERIFY_V = 9;
 // 13: 정지 판정을 "움직인 픽셀 0개"에서 **절대 크기·덩어리** 기준으로 (2026-09-01).
 //     0개 규칙은 과잉 반작용이었다 — M18 의 두 문구는 99.8~100% 정지인데 잡티
 //     9픽셀 때문에 통째로 버려졌다. 얼렸을 때 손실은 11px(0.11%)로 보이지 않는다.
-const RENDER_V = 13;
+// 14: 프레임을 하나씩 읽어 움직임 마스크만 누적한다(메모리가 프레임 수와 무관).
+//     전 프레임을 배열로 들던 구조 때문에 프레임 60장 상한이 있었고, 표본 47장
+//     중 5장(10.6%)이 그 상한으로 통째로 배제됐다. 상한 60 → 200.
+const RENDER_V = 14;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {

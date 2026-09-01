@@ -2046,43 +2046,30 @@ export function regionIsStatic(
  * 애니메이션은 덩어리라 걸린다.
  */
 export function regionStaticEnough(
-  frames: Uint8Array[],
+  moved: Uint8Array,
   W: number,
   rect: { x0: number; y0: number; x1: number; y1: number },
-  tol = 32,
   maxPx = 24,
   maxBlob = 8,
 ): boolean {
   const w = rect.x1 - rect.x0, h = rect.y1 - rect.y0;
   if (w <= 0 || h <= 0) return false;
-  const moved = new Uint8Array(w * h);
   let total = 0;
-  const base = frames[0];
-  for (let f = 1; f < frames.length; f++) {
-    const cur = frames[f];
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const k = y * w + x;
-        if (moved[k]) continue;
-        const i = ((rect.y0 + y) * W + rect.x0 + x) * 4;
-        const d = Math.max(
-          Math.abs(cur[i] - base[i]),
-          Math.abs(cur[i + 1] - base[i + 1]),
-          Math.abs(cur[i + 2] - base[i + 2]),
-        );
-        if (d > tol) {
-          moved[k] = 1;
-          if (++total > maxPx) return false; // 총량 초과 — 더 볼 것 없다
-        }
-      }
+  const local = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const row = (rect.y0 + y) * W + rect.x0;
+    for (let x = 0; x < w; x++) {
+      if (!moved[row + x]) continue;
+      local[y * w + x] = 1;
+      if (++total > maxPx) return false; // 총량 초과 — 더 볼 것 없다
     }
   }
   if (total === 0) return true;
   // 가장 큰 연결 덩어리 (8-이웃)
   const seen = new Uint8Array(w * h);
   const stack: number[] = [];
-  for (let k0 = 0; k0 < moved.length; k0++) {
-    if (!moved[k0] || seen[k0]) continue;
+  for (let k0 = 0; k0 < local.length; k0++) {
+    if (!local[k0] || seen[k0]) continue;
     let size = 0;
     stack.push(k0);
     seen[k0] = 1;
@@ -2096,12 +2083,36 @@ export function regionStaticEnough(
           const nx = x + dx, ny = y + dy;
           if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
           const nk = ny * w + nx;
-          if (moved[nk] && !seen[nk]) { seen[nk] = 1; stack.push(nk); }
+          if (local[nk] && !seen[nk]) { seen[nk] = 1; stack.push(nk); }
         }
       }
     }
   }
   return true;
+}
+
+/**
+ * 프레임 배열에서 "프레임0과 달라진 적 있는 픽셀" 마스크를 만든다 (테스트·재사용용).
+ * 운영 경로는 buildMovedMask 로 **프레임을 하나씩 읽어** 같은 마스크를 만든다 —
+ * 전 프레임을 메모리에 올리면 긴 GIF 에서 수백 MB 가 되어, 그것 때문에 프레임
+ * 60장 상한을 두고 있었다(실측: 표본 47장 중 5장이 90~137프레임이라 통째로 배제).
+ */
+export function movedMaskFromFrames(frames: Uint8Array[], W: number, H: number, tol = 32): Uint8Array {
+  const mask = new Uint8Array(W * H);
+  const base = frames[0];
+  for (let f = 1; f < frames.length; f++) {
+    const cur = frames[f];
+    for (let p = 0; p < W * H; p++) {
+      if (mask[p]) continue;
+      const i = p * 4;
+      if (
+        Math.abs(cur[i] - base[i]) > tol ||
+        Math.abs(cur[i + 1] - base[i + 1]) > tol ||
+        Math.abs(cur[i + 2] - base[i + 2]) > tol
+      ) mask[p] = 1;
+    }
+  }
+  return mask;
 }
 
 /**
@@ -2320,8 +2331,14 @@ export function seamGap(
  */
 const SEAM_MAX = 48;
 
-/** 정지 패치를 못 쓸 만큼 프레임이 많은 GIF — 메모리를 아끼고 바로 오버레이로 */
-const GIF_PATCH_MAX_PAGES = 60;
+/**
+ * 프레임 수 상한. 예전 60 은 **전 프레임을 메모리에 올리던 구조** 때문이었다 —
+ * 750×1920 × 137프레임 = 약 500MB. 이제 프레임을 하나씩 읽어 움직임 마스크만
+ * 누적하므로(마스크 = W×H 바이트) 메모리가 프레임 수와 무관하다.
+ * 실측(표본 47장): 90~137프레임짜리 5장(10.6%)이 이 상한 때문에 통째로 배제됐다.
+ * 상한은 이제 렌더 시간 보호용이다.
+ */
+const GIF_PATCH_MAX_PAGES = 200;
 
 /**
  * 어드민 승인 재렌더에서 GIF 정지 띠에 쓸 수 있는 이미지 호출 상한.
@@ -2452,7 +2469,10 @@ async function bandProblem(
  */
 export function staticBandsOf(
   boxes: OcrBox[],
-  raws: Uint8Array[],
+  /** 첫 프레임 RGBA raw — 글자 범위 측정에 쓴다 */
+  frame0: Uint8Array,
+  /** 프레임0과 달라진 적 있는 픽셀 마스크 (W*H) */
+  moved: Uint8Array,
   W: number,
   H: number,
 ): { band: BandRect; boxes: OcrBox[] }[] {
@@ -2461,7 +2481,7 @@ export function staticBandsOf(
   // 좌상 라벨 띠가 통과해 그 영역 움직임이 13.7%→5.4% 로 얼었다.
   // 색상 팔레트 잡음은 tol 32 가 흡수하므로 진짜 정지 영역은 0 으로도 통과한다.
   const isStill = (b: BandRect) =>
-    regionStaticEnough(raws, W, { x0: b.left, y0: b.top, x1: b.left + b.width, y1: b.top + b.height });
+    regionStaticEnough(moved, W, { x0: b.left, y0: b.top, x1: b.left + b.width, y1: b.top + b.height });
 
   // 문구마다 **실제 글자 범위**를 재둔다. 판독 박스는 획 끝을 자주 자르고
   // (실측 오버슈트 0~5px), 그만큼이 패치 밖에 남으면 원문 조각이 그대로 보인다
@@ -2472,7 +2492,7 @@ export function staticBandsOf(
     const cached = glyphOf.get(b);
     if (cached) return cached;
     const [y1, x1, y2, x2] = b.box;
-    const v = glyphExtent(raws[0], W, H, {
+    const v = glyphExtent(frame0, W, H, {
       x0: (x1 / 1000) * W, y0: (y1 / 1000) * H, x1: (x2 / 1000) * W, y1: (y2 / 1000) * H,
     });
     glyphOf.set(b, v);
@@ -2954,21 +2974,36 @@ async function tryBuildGifPatch(
     const targets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
     if (targets.length === 0) return { patch: null, reason: "번역할 문구가 없습니다" };
 
-    const raws: Uint8Array[] = [];
-    for (let i = 0; i < pages; i++) {
-      raws.push(
-        new Uint8Array(await sharp(data, { page: i, pages: 1 }).ensureAlpha().raw().toBuffer()),
+    // 프레임을 **하나씩** 읽어 움직임 마스크만 누적한다. 전 프레임을 배열로
+    // 들고 있으면 137프레임 GIF 에서 500MB 에 달해, 그 때문에 프레임 60장
+    // 상한을 두고 통째로 배제하고 있었다(표본 47장 중 5장, 10.6%).
+    const frame0 = new Uint8Array(
+      await sharp(data, { page: 0, pages: 1 }).ensureAlpha().raw().toBuffer(),
+    );
+    const moved = new Uint8Array(W * H);
+    for (let i = 1; i < pages; i++) {
+      const cur = new Uint8Array(
+        await sharp(data, { page: i, pages: 1 }).ensureAlpha().raw().toBuffer(),
       );
+      for (let p2 = 0; p2 < W * H; p2++) {
+        if (moved[p2]) continue;
+        const k = p2 * 4;
+        if (
+          Math.abs(cur[k] - frame0[k]) > 32 ||
+          Math.abs(cur[k + 1] - frame0[k + 1]) > 32 ||
+          Math.abs(cur[k + 2] - frame0[k + 2]) > 32
+        ) moved[p2] = 1;
+      }
     }
 
-    const groups = staticBandsOf(targets, raws, W, H);
+    const groups = staticBandsOf(targets, frame0, moved, W, H);
     if (groups.length === 0) {
       // 글자가 움직이는 영상 위에 얹혀 있는 GIF — 정지 패치로는 손댈 수 없다.
       // 억지로 얹으면 그 자리의 영상이 전 프레임에 얼어붙는다.
       return { patch: null, reason: "글자가 움직이는 화면 위에 있어 자동 번역이 안 됩니다" };
     }
 
-    const frame0 = await sharp(data, { page: 0, pages: 1 }).png().toBuffer();
+    const frame0Png = await sharp(data, { page: 0, pages: 1 }).png().toBuffer();
     const patchRgba = Buffer.alloc(W * H * 4); // 알파 0 = 투명
     const done: OcrBox[] = [];
     const keptOriginal: string[] = [];
@@ -2983,7 +3018,7 @@ async function tryBuildGifPatch(
         lastFail = lastFail || "이미지 호출 한도 — 남은 띠는 원문 유지";
         break;
       }
-      const crop = await sharp(frame0).extract(band).png().toBuffer();
+      const crop = await sharp(frame0Png).extract(band).png().toBuffer();
       const mapped = inBand.map((b) => remapBoxToBand(b, band, W, H));
       // 작은 글자는 **확대해서** 보낸다. 모델은 22px 짜리 글자를 그리다 획을
       // 뭉갠다(실측: 1회 성공한 띠는 전부 글자 41~94px, 실패한 띠는 22px).
@@ -3049,7 +3084,7 @@ async function tryBuildGifPatch(
         // 가린다. 실측: 배경이 90/230 으로 완전히 어긋난 패치도 페더 뒤에는 통과했다.
         // 실측(2026-09-01 운영 4장): seamGap 0.4~9.6 · p99 1~18 · run 0 — 정상
         // 결과는 한계(48)에 한참 못 미친다. 이 관문은 나쁜 패치만 잡는다.
-        const seamProblem = bandSeamProblem(raws[0], rgba, band, W, H);
+        const seamProblem = bandSeamProblem(frame0, rgba, band, W, H);
         if (seamProblem) {
           problem = seamProblem;
           continue;
