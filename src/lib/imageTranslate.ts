@@ -3068,6 +3068,13 @@ async function tryBuildGifPatch(
       const store = imageBudget.getStore();
       if (store && store.left <= 0) {
         lastFail = lastFail || "이미지 호출 한도 — 남은 띠는 원문 유지";
+        // 남은 띠를 **사유와 함께** 남긴다. 예전엔 그냥 break 해서 이 문구들이
+        // 뒤에서 "움직이는 화면 위"로 잘못 보고됐다 — 운영자는 예산이 모자랐다는
+        // 사실을 알 수 없었고, 그래서 「다시 만들기」로 풀 수 있다는 것도 몰랐다
+        // (실측 M18: 띠 6개 · 예산 6 이라 재시도가 나면 마지막 띠가 잘렸다).
+        for (const g2 of groups.slice(groups.indexOf(groups.find((q) => q.band === band)!))) {
+          keptOriginal.push(...g2.boxes.map((b) => `${b.zh} — 이미지 호출 한도`));
+        }
         break;
       }
       const crop = await sharp(frame0Png).extract(band).png().toBuffer();
