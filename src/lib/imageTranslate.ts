@@ -486,12 +486,29 @@ export function charBudget(
   W: number,
   H: number,
   zhLen: number,
+  /**
+   * tight: **GIF 띠 전용**으로 더 조인 예산.
+   *
+   * 기본 예산은 "글자가 박스 높이의 절반까지 작아져도 된다"(수용량 ×2.2)를
+   * 허용한다. 정지 이미지는 판 전체를 다시 그리므로 모델이 줄바꿈·자간으로
+   * 흡수하지만, GIF 는 **띠 폭이 정지 영역에 갇혀** 있어 넓힐 수가 없다.
+   * 그러면 모델이 글자를 줄여 넣는 수밖에 없다 — 실측(2026-09-02):
+   * 「多种频率」(4자)를 「다양한 진동 모드」(8자)로 옮긴 띠에서 글자가 원본의
+   * **61%** 로 작아졌다. 자리에 안 들어갈 문구는 이미지 단계가 아니라 **번역
+   * 단계에서** 짧게 만드는 게 규칙 1이다("진동 모드"면 원래 크기로 들어간다).
+   */
+  tight = false,
 ): number {
   const [ymin, xmin, ymax, xmax] = box;
   const bw = ((xmax - xmin) / 1000) * W;
   const bh = ((ymax - ymin) / 1000) * H;
   // 세로쓰기는 글자를 쌓으므로 폭÷높이가 수용량이 아니다 — 원문 기준만 본다
   const vertical = bh > bw * 2.5;
+  if (tight) {
+    // 원본 글자 크기를 유지하며 들어갈 수 있는 만큼 (수용량 ×1.2 = 살짝의 자간 압축)
+    const cap = vertical || bh <= 0 ? 0 : Math.ceil((bw / bh) * 1.2);
+    return Math.max(4, Math.ceil(zhLen * 1.2), cap);
+  }
   const capacity = vertical || bh <= 0 ? 0 : Math.ceil((bw / bh) * 2.2);
   return Math.max(6, Math.ceil(zhLen * 1.6), capacity);
 }
@@ -838,7 +855,9 @@ async function translateExtracted(
   const meta = await sharp(mime === "image/gif" ? await sharp(data, { page: 0, pages: 1 }).png().toBuffer() : data).metadata();
   const W = meta.width ?? 0;
   const H = meta.height ?? 0;
-  const budgets = solid.map((b) => charBudget(b.box, W, H, [...b.zh].length));
+  // GIF 는 띠 폭을 넓힐 수 없으므로 번역 단계에서부터 짧게 잡는다 (위 tight 주석)
+  const tight = mime === "image/gif";
+  const budgets = solid.map((b) => charBudget(b.box, W, H, [...b.zh].length, tight));
 
   const koList = await translateTexts(solid.map((b) => b.zh), { budgets });
 

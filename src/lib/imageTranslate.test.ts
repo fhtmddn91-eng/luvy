@@ -747,6 +747,28 @@ describe("splitTwoLines — 긴 문구 두 줄 나누기", () => {
   });
 });
 
+describe("charBudget tight — GIF 띠 전용(폭을 넓힐 수 없다)", () => {
+  // 실측(2026-09-02): 기본 예산은 글자가 박스 높이의 절반까지 작아지는 것을
+  // 허용해, 「多种频率」(4자)→「다양한 진동 모드」(8자) 띠에서 글자가 61%로 줄었다.
+  const box4 = [400, 100, 428, 250] as [number, number, number, number]; // 폭 150 높이 28 (1000x1000 기준)
+
+  it("기본보다 짧게 잡는다 — 원본 글자 크기를 지키는 선", () => {
+    const loose = charBudget(box4, 1000, 1000, 4);
+    const tight = charBudget(box4, 1000, 1000, 4, true);
+    expect(tight).toBeLessThan(loose);
+  });
+
+  it("'다양한 진동 모드'(8자)는 넘고 '진동 모드'(4자)는 들어간다", () => {
+    const b = charBudget(box4, 1000, 1000, 4, true);
+    expect(b).toBeLessThan(8);
+    expect(b).toBeGreaterThanOrEqual(4);
+  });
+
+  it("정지 이미지(기본값)는 그대로 — 이미지 번역 경로는 건드리지 않는다", () => {
+    expect(charBudget(box4, 1000, 1000, 4)).toBe(charBudget(box4, 1000, 1000, 4, false));
+  });
+});
+
 describe("charBudget — 자리에 들어갈 글자 수", () => {
   // 1000x1000 이미지에서 폭 400px·높이 40px 박스 → 수용량 10자
   const wide: [number, number, number, number] = [100, 100, 140, 500];
