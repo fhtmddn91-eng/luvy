@@ -2584,6 +2584,30 @@ export function staticBandsOf(
   // 납작한 조각 안에서 작은 글자를 그리다 획을 뭉갠다. 정지가 유지되는 한
   // 세로 여백을 더 줘서 그릴 공간을 만든다 — 호출 수는 그대로다.
   const FLAT_RATIO = 4;
+  /**
+   * 번역문이 원문보다 길면 띠를 **가로로** 넓힌다.
+   *
+   * 한국어는 원문보다 길어지는 게 정상이다(중앙값 1.31배). 폭이 고정이면 모델은
+   * 글자를 줄여 넣을 수밖에 없다 — 실측(2026-09-01): 「多种频率」(4자)를
+   * 「다양한 진동 모드」(8자)로 바꾼 띠에서 글자가 원본의 **61%** 로 작아졌고,
+   * 69~84% 인 띠가 넷 더 있었다(정상은 92~97%). 정지가 유지되는 만큼 넓혀
+   * 모델이 원래 크기로 쓸 공간을 준다.
+   */
+  const growWide = (band: BandRect, bs: OcrBox[]): BandRect => {
+    const zh = bs.reduce((n, b) => n + b.zh.replace(/\s/g, "").length, 0);
+    const ko = bs.reduce((n, b) => n + b.ko.replace(/\s/g, "").length, 0);
+    if (zh === 0 || ko <= zh * 1.15) return band;
+    const want = Math.round(band.width * Math.min(1.8, ko / zh));
+    let b = band;
+    while (b.width < want) {
+      const left = Math.max(0, b.left - 1);
+      const right = Math.min(W, b.left + b.width + 1);
+      const next: BandRect = { left, top: b.top, width: right - left, height: b.height };
+      if (next.width === b.width || !isStill(next)) break;
+      b = next;
+    }
+    return b;
+  };
   const growFlat = (band: BandRect): BandRect => {
     if (band.width / band.height < FLAT_RATIO) return band;
     let b = band;
@@ -2597,7 +2621,9 @@ export function staticBandsOf(
     }
     return b;
   };
-  for (let i = 0; i < out.length; i++) out[i] = { ...out[i], band: growFlat(out[i].band) };
+  for (let i = 0; i < out.length; i++) {
+    out[i] = { ...out[i], band: growWide(growFlat(out[i].band), out[i].boxes) };
+  }
 
   // 띠는 담은 글자를 **전부** 덮어야 한다 — 반쪽만 덮으면 덮이지 않은 획이
   // 원문 그대로 드러난다. 판독 박스가 아니라 **실제 글자 범위**로 본다.
@@ -3343,7 +3369,8 @@ ${list}
 
 글자 규칙:
 - 원문과 같은 서체 느낌·크기·굵기·색·정렬로. 그림자·외곽선·밑줄·형광펜 강조 같은 장식도 그대로.
-- 한국어가 원문보다 길면 **글자 크기를 조금 줄여** 띠 안에 넣는다. 띠 밖으로 넘치거나 잘리면 실패다.
+- **글자 크기는 원문과 같게 유지한다.** 한국어가 조금 길어져도 크기를 줄이지 말고 자간을 좁혀 넣어라. 원문보다 눈에 띄게 작아지면 실패다. 도저히 안 들어갈 때만 아주 조금 줄인다.
+- 원문에서 글자 색이 도중에 바뀌면(예: 앞 두 글자는 검정, 뒤는 빨강), 번역문에서는 **단어 경계**에서 바꾼다. 글자 수 비율로 잘라 단어 중간에서 색이 바뀌면 안 된다.
 - 라틴 문자 브랜드명·모델명·숫자·단위(mm, MIN, MAH, dB 등)는 그대로 둔다.`;
 }
 
