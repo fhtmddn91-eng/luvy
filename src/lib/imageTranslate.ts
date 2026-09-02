@@ -2358,7 +2358,43 @@ const GIF_PATCH_MAX_PAGES = 200;
  * 같은 구조로, 운영자가 명시로 승인한 재렌더에서만 띠별 호출을 허용한다.
  * 6 = 띠 3개 × 시도 2회 — 관문 불합격 재시도(BAND_ATTEMPTS)까지 덮는 값이다.
  */
-const MAX_GIF_BAND_CALLS = 6;
+const MAX_GIF_BAND_CALLS = 10;
+
+/**
+ * 실제 예산 = 띠 수 + 재시도 여유 3 (상한 MAX_GIF_BAND_CALLS).
+ *
+ * 고정 6 이었을 때, 띠가 6개인 GIF 는 재시도가 한 번만 나도 마지막 띠가 호출을
+ * 못 받아 그 문구가 통째로 원문으로 남았다(실측 마리아 0018: 「360°贴合」·
+ * 「回弹设计」이 중국어로 남았고 사유도 "움직이는 화면 위"로 잘못 보고됐다).
+ * 띠 수는 그림마다 다르므로 예산도 그림에 맞춰야 한다.
+ */
+export function gifBandBudgetFor(bands: number): number {
+  return Math.min(MAX_GIF_BAND_CALLS, bands + 3);
+}
+
+/**
+ * 띠 하나가 그림에서 차지해도 되는 최대 면적.
+ *
+ * GIF 는 **국소 편집**이다. 띠가 커지면 모델이 제품 사진까지 다시 그리는데,
+ * GIF 경로에는 정지 이미지의 제품 무결성 심사가 없었다(fullAdopt 일 때만 돌았다).
+ * 큰 띠는 "글자만 고친다"는 전제를 깨므로 아예 만들지 않는다.
+ * 실측(운영 GIF 5장) 정상 띠의 최대 면적 비율은 28% 였다. 절반을 넘으면
+ * "글자 띠"가 아니라 사실상 전체 재생성이므로 거부한다.
+ */
+const MAX_GIF_BAND_AREA = 0.5;
+
+/**
+ * 한 그림에서 만들 수 있는 띠 개수 상한 — 스펙표처럼 문구가 수십 개인 GIF 에서
+ * 호출이 폭주하지 않게. 넘치면 글자를 많이 담은 띠부터 쓰고 나머지는 원문 유지.
+ */
+const MAX_GIF_BANDS = 12;
+
+/**
+ * 프레임 × 픽셀 예산 — 프레임 수만 보면 큰 그림에서 메모리가 터진다.
+ * (790×1920 × 200프레임 = 3억 픽셀). 렌더 단계는 프레임 PNG 를 모아 인코딩하므로
+ * 여기가 실제 한계다.
+ */
+const MAX_GIF_TOTAL_PIXELS = 250_000_000;
 
 /** 띠 하나에 허용하는 재생성 시도 — 관문 불합격 시 재시도 (예산 안에서만) */
 const BAND_ATTEMPTS = 2;
@@ -3023,6 +3059,9 @@ async function tryBuildGifPatch(
     if (pages > GIF_PATCH_MAX_PAGES) {
       return { patch: null, reason: `프레임이 너무 많습니다 (${pages}장)` };
     }
+    if (pages * W * H > MAX_GIF_TOTAL_PIXELS) {
+      return { patch: null, reason: `그림이 너무 큽니다 (${W}×${H} × ${pages}장)` };
+    }
     const targets = boxes.filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim());
     if (targets.length === 0) return { patch: null, reason: "번역할 문구가 없습니다" };
 
@@ -3048,7 +3087,21 @@ async function tryBuildGifPatch(
       }
     }
 
-    const groups = staticBandsOf(targets, frame0, moved, W, H);
+    const keptOriginal: string[] = [];
+    let groups = staticBandsOf(targets, frame0, moved, W, H);
+    // 너무 큰 띠는 만들지 않는다 — 국소 편집 원칙(위 MAX_GIF_BAND_AREA 주석)
+    const oversized = groups.filter((g) => (g.band.width * g.band.height) / (W * H) > MAX_GIF_BAND_AREA);
+    if (oversized.length > 0) {
+      groups = groups.filter((g) => !oversized.includes(g));
+      for (const g of oversized) keptOriginal.push(...g.boxes.map((b) => `${b.zh} — 고칠 범위가 너무 넓습니다`));
+    }
+    // 띠가 너무 많으면 값진 것부터 (이미 글자 수 내림차순 정렬돼 있다)
+    if (groups.length > MAX_GIF_BANDS) {
+      for (const g of groups.slice(MAX_GIF_BANDS)) {
+        keptOriginal.push(...g.boxes.map((b) => `${b.zh} — 문구가 너무 많습니다`));
+      }
+      groups = groups.slice(0, MAX_GIF_BANDS);
+    }
     if (groups.length === 0) {
       // 글자가 움직이는 영상 위에 얹혀 있는 GIF — 정지 패치로는 손댈 수 없다.
       // 억지로 얹으면 그 자리의 영상이 전 프레임에 얼어붙는다.
@@ -3058,7 +3111,6 @@ async function tryBuildGifPatch(
     const frame0Png = await sharp(data, { page: 0, pages: 1 }).png().toBuffer();
     const patchRgba = Buffer.alloc(W * H * 4); // 알파 0 = 투명
     const done: OcrBox[] = [];
-    const keptOriginal: string[] = [];
     let lastFail = "";
 
     const renderBands = async () => {
@@ -3171,7 +3223,7 @@ async function tryBuildGifPatch(
     if (adminApproved) {
       // 운영자 승인 재렌더 — 안전 폴백과 같은 별도 예산 스코프. 자동 흐름의
       // "원본당 1회"는 그대로 두고, 명시 승인에서만 띠별 호출을 허용한다.
-      const bandBudget = { left: MAX_GIF_BAND_CALLS, used: 0 };
+      const bandBudget = { left: gifBandBudgetFor(groups.length), used: 0 };
       try {
         await imageBudget.run(bandBudget, renderBands);
       } finally {
@@ -3378,6 +3430,7 @@ ${list}
 - 원문과 같은 서체 느낌·크기·굵기·색·정렬로. 그림자·외곽선·밑줄·형광펜 강조 같은 장식도 그대로.
 - **글자 크기는 원문과 같게 유지한다.** 한국어가 조금 길어져도 크기를 줄이지 말고 자간을 좁혀 넣어라. 원문보다 눈에 띄게 작아지면 실패다. 도저히 안 들어갈 때만 아주 조금 줄인다.
 - 원문에서 글자 색이 도중에 바뀌면(예: 앞 두 글자는 검정, 뒤는 빨강), 번역문에서는 **단어 경계**에서 바꾼다. 글자 수 비율로 잘라 단어 중간에서 색이 바뀌면 안 된다.
+- 세로로 쓴 글자는 세로로, 가로는 가로로. 쓰는 방향을 바꾸지 말 것.
 - 라틴 문자 브랜드명·모델명·숫자·단위(mm, MIN, MAH, dB 등)는 그대로 둔다.`;
 }
 
@@ -5892,9 +5945,14 @@ async function translateImageAutoInner(
     const leftover = gateLeftover(gateFound, gaveUpWm);
     if (leftover > 0) reasons.push({ code: "LEFTOVER", detail: `외국어 ${leftover}건 잔존` });
 
-    // 제품 무결성 (전체 채택 경로) — 픽셀 동일성 관문을 대신하는 의미 관문.
+    // 제품 무결성 — 픽셀 동일성 관문을 대신하는 의미 관문.
     // 제품 개수·형태·색상·구성이 달라 보이면 실격, 판 재배치·글자 차이는 허용.
-    if (fullAdopt) {
+    //
+    // GIF 도 포함한다(2026-09-02). 예전엔 fullAdopt(정지 이미지 전체 채택)에서만
+    // 돌아서, GIF 는 띠에 제품이 걸쳐 있어도 모델이 그것을 바꿨는지 아무도 확인하지
+    // 않았다 — 국소 편집이라 위험이 작을 뿐 0 은 아니다. 텍스트 모델 1회(사실상
+    // 공짜)로 막을 수 있는 구멍을 열어둘 이유가 없다.
+    if (fullAdopt || mime === "image/gif") {
       const pi = await verifyProductIntegrity(
         { data: origStill.data, mime: origStill.mime },
         { data: outStill.data, mime: outStill.mime },

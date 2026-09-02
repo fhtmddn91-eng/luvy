@@ -213,8 +213,8 @@ function ReviewCard({
 
   const originalSrc = item.originalUrl ?? item.url;
   // GIF 는 정지 글자 띠가 여러 곳이면 띠마다 호출하고, 품질 관문에 걸리면 한 번
-  // 더 그린다 (상한 6회) — 단가를 정직하게 적는다
-  const rerenderCost = /\.gif($|\?)/i.test(originalSrc) ? "약 100~600원" : "약 100원";
+  // 더 그린다. 예산은 띠 수 + 여유 3 (상한 10회) — 단가를 정직하게 적는다
+  const rerenderCost = /\.gif($|\?)/i.test(originalSrc) ? "약 100~1,000원" : "약 100원";
   // 지금 손님에게 나가는 그림이 이미 승인된 번역본인가 — 이 경우 후보를 버려도
   // 원본이 아니라 그 승인본이 유지된다 (rejectAssetCandidate 와 같은 판별식)
   const liveIsApproved = !!item.originalUrl && item.url !== item.originalUrl;

@@ -6,7 +6,7 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
+import { gifBandBudgetFor, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
 
 const W = 200;
 const H = 200;
@@ -390,5 +390,34 @@ describe("regionStaticEnough", () => {
       for (let x = 0; x < W; x += 2) set(x, 20); // 30px, 흩어져 있지만 총량 초과
     });
     expect(regionStaticEnough(movedMaskFromFrames(fs2, W, H), W, rect)).toBe(false);
+  });
+});
+
+/**
+ * 앞으로 들어올 GIF 를 위한 안전장치 — 지금 카탈로그에 없는 모양까지 견딘다.
+ */
+describe("gifBandBudgetFor", () => {
+  it("띠 수에 재시도 여유 3 을 더한다 — 고정 6 이라 띠 6개 GIF 가 잘렸다", () => {
+    // 실측(마리아 0018): 띠 6 · 예산 6 → 재시도 한 번에 마지막 띠가 호출을 못 받고
+    // 「360°贴合」·「回弹设计」이 중국어로 남았다
+    expect(gifBandBudgetFor(1)).toBe(4);
+    expect(gifBandBudgetFor(4)).toBe(7);
+    expect(gifBandBudgetFor(6)).toBe(9);
+  });
+
+  it("아무리 많아도 상한을 넘지 않는다 — 비용 폭주 방지", () => {
+    expect(gifBandBudgetFor(20)).toBe(10);
+    expect(gifBandBudgetFor(100)).toBe(10);
+  });
+});
+
+describe("띠 프롬프트 — 앞으로 들어올 모양 대비", () => {
+  const p2 = bandRegenPrompt(
+    [{ box: [100, 100, 200, 900], zh: "强劲", ko: "강력", bg: "#fff", fg: "#000" }],
+    { width: 200, height: 50 },
+  );
+  it("세로쓰기를 유지하라고 지시한다 — 중국 상세페이지에 흔한 형태", () => {
+    // 전체 이미지용 프롬프트에는 있었는데 띠 전용으로 분리하며 빠져 있었다
+    expect(p2).toMatch(/세로로 쓴 글자는 세로로/);
   });
 });
