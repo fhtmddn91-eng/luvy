@@ -2332,6 +2332,13 @@ export function seamGap(
 const SEAM_MAX = 48;
 
 /**
+ * 띠 **안쪽** 배경 밝기가 원본과 얼마나 달라도 되는가.
+ * 실측(2026-09-01, 운영 GIF 2장·띠 10개): 정상 8개는 0.1~3.3, 밝은 사각형
+ * 자국이 눈에 보인 2개는 12.4·13.7. 8 이면 둘을 안전하게 가른다.
+ */
+const BAND_INNER_MAX = 8;
+
+/**
  * 프레임 수 상한. 예전 60 은 **전 프레임을 메모리에 올리던 구조** 때문이었다 —
  * 750×1920 × 137프레임 = 약 500MB. 이제 프레임을 하나씩 읽어 움직임 마스크만
  * 누적하므로(마스크 = W×H 바이트) 메모리가 프레임 수와 무관하다.
@@ -2935,6 +2942,25 @@ export function bandSeamProblem(
   if (gap > SEAM_MAX) return `이음매가 보입니다 (경계 색차 ${gap.toFixed(0)})`;
   const s = seamLocalOk(origRaw, comp, W, H, r);
   if (!s.ok) return `이음매가 보입니다 (경계 p99 ${s.p99}, 연속 ${Math.max(s.runHigh, s.runMid)}px)`;
+
+  // 띠 **안쪽 배경**도 본다. 경계만 재면 "테두리는 원본에 맞추고 안쪽만 밝게"
+  // 그린 결과가 통과한다 — 실측(2026-09-01 M19 「눈으로 보는 강력 진동」):
+  // 경계 검사를 통과했는데 띠 자리에 밝은 사각형 자국이 남았다.
+  // 띠는 대부분 배경이고 글자는 소수라 **중앙값**이 배경을 대표한다.
+  // 실측 분리: 정상 띠 10개 중 8개가 0.1~3.3, 자국이 보인 2개가 12.4·13.7.
+  const median = (buf: Uint8Array) => {
+    const v: number[] = [];
+    for (let y = band.top; y < band.top + band.height; y++) {
+      for (let x = band.left; x < band.left + band.width; x++) {
+        const i = (y * W + x) * 4;
+        v.push(0.299 * buf[i] + 0.587 * buf[i + 1] + 0.114 * buf[i + 2]);
+      }
+    }
+    v.sort((a, b) => a - b);
+    return v[v.length >> 1];
+  };
+  const inner = Math.abs(median(comp) - median(origRaw));
+  if (inner > BAND_INNER_MAX) return `덧댄 자국이 보입니다 (배경 밝기 차 ${inner.toFixed(0)})`;
   return null;
 }
 

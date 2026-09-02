@@ -196,6 +196,20 @@ describe("bandSeamProblem", () => {
   it("몇 단계 밝기 차이(압축 노이즈 수준)는 통과시킨다 — 과잉 거부 금지", () => {
     expect(bandSeamProblem(orig, patchOf(196), band, W, H)).toBeNull();
   });
+
+  it("경계는 맞는데 안쪽만 밝게 그린 패치를 잡는다 — 사각 자국", () => {
+    // 실측(2026-09-01 M19 「눈으로 보는 강력 진동」): 경계 검사를 통과했는데
+    // 띠 자리에 밝은 사각형이 남았다. 정상 띠는 배경 밝기 차 0.1~3.3, 이건 13.7.
+    const p = Buffer.alloc(band.width * band.height * 4);
+    for (let i = 0; i < band.width * band.height; i++) {
+      const x = i % band.width, y = (i / band.width) | 0;
+      // 테두리 2px 은 원본과 같게, 안쪽만 밝게
+      const edge = x < 2 || y < 2 || x >= band.width - 2 || y >= band.height - 2;
+      const v = edge ? 200 : 218;
+      p[i * 4] = v; p[i * 4 + 1] = v; p[i * 4 + 2] = v; p[i * 4 + 3] = 255;
+    }
+    expect(bandSeamProblem(orig, p, band, W, H)).toMatch(/덧댄 자국/);
+  });
 });
 
 /**

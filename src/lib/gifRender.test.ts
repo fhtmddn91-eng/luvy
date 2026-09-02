@@ -59,11 +59,10 @@ function stubGemini(
           { status: 200 },
         );
       }
+      // 받은 crop 을 그대로 돌려준다 = 배경이 원본과 같은 정상 결과.
+      // 흰색으로 새로 그리면 내부 배경 검사(BAND_INNER_MAX)에 정당하게 걸린다.
       const b64 = body.contents?.[0]?.parts?.find((p) => p.inline_data?.data)?.inline_data?.data ?? "";
-      const meta = await sharp(Buffer.from(b64, "base64")).metadata();
-      const png = await sharp({
-        create: { width: meta.width ?? 8, height: meta.height ?? 8, channels: 3, background: { r: 250, g: 250, b: 250 } },
-      }).png().toBuffer();
+      const png = await sharp(Buffer.from(b64, "base64")).png().toBuffer();
       return new Response(
         JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: png.toString("base64") } }] } }] }),
         { status: 200 },

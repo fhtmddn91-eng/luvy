@@ -82,7 +82,9 @@ const VERIFY_V = 9;
 // 14: 프레임을 하나씩 읽어 움직임 마스크만 누적한다(메모리가 프레임 수와 무관).
 //     전 프레임을 배열로 들던 구조 때문에 프레임 60장 상한이 있었고, 표본 47장
 //     중 5장(10.6%)이 그 상한으로 통째로 배제됐다. 상한 60 → 200.
-const RENDER_V = 14;
+// 15: 이음매 관문에 **띠 안쪽 배경** 검사 추가. 경계만 재면 "테두리는 원본에
+//     맞추고 안쪽만 밝게" 그린 패치가 통과해 사각 자국이 남는다(실측 M19).
+const RENDER_V = 15;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {
