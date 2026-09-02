@@ -9,6 +9,9 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import sharp from "sharp";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { renderTranslatedImage, type OcrBox } from "./imageTranslate";
 
 const W = 240;
@@ -331,6 +334,31 @@ describe("renderTranslatedImage — GIF", () => {
     const gif = await makeGif(false);
     await expect(renderTranslatedImage(gif, "image/gif", [topBox])).rejects.toThrow(/문구 누락/);
     expect(imageCalls).toBe(2);
+  }, 60_000);
+
+  it("확정 문구와 한두 글자 다른 결과는 재시도 뒤에도 못 맞추면 채택한다 — 최종 관문이 차이를 보고한다", async () => {
+    // 실측(2026-09-02 exp10): "자극적이게"를 "자극적으로"로 그려 헛글자로 거부됐고,
+    // 재시도는 이음매에 걸려 중국어 원문이 남았다. 뜻이 같은 어미 차이는 원문보다 낫다.
+    const longBox: OcrBox = { ...topBox, zh: "大头爆震 更大更刺激", ko: "빅헤드 강진동 더 크고 자극적이게" };
+    stubGemini("ok", ["빅헤드 강진동 더 크고 자극적으로"]);
+    const gif = await makeGif(false);
+    const out = await renderTranslatedImage(gif, "image/gif", [longBox]);
+    expect(out.mime).toBe("image/gif");
+    expect(imageCalls).toBe(2); // 정확히 맞추려 1회 재시도 → 같은 결과 → 채택
+  }, 60_000);
+
+  it("GIF_BAND_DEBUG_DIR 를 주면 시도마다 보낸 띠와 받은 띠를 파일로 남긴다 — 다음 실측의 증거", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gifband-"));
+    process.env.GIF_BAND_DEBUG_DIR = dir;
+    try {
+      stubGemini("ok");
+      await renderTranslatedImage(await makeGif(false), "image/gif", [topBox]);
+    } finally {
+      delete process.env.GIF_BAND_DEBUG_DIR;
+    }
+    const files = fs.readdirSync(dir);
+    expect(files.some((f) => /band1_try1_in\.png$/.test(f))).toBe(true);
+    expect(files.some((f) => /band1_try1_out\.png$/.test(f))).toBe(true);
   }, 60_000);
 
   it("모델이 거부하면 거부 사유가 그대로 올라온다 — 재시도 분류가 가능하게", async () => {

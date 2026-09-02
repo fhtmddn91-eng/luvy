@@ -928,10 +928,32 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     expect(asks).toHaveLength(3);
     expect(asks[1]).toContain("직전 답");
     expect(asks[1]).toContain("아주 강렬하고 깊숙한 진동 자극 느낌");
-    expect(asks[1]).toMatch(/8자 초과/);
+    expect(asks[1]).toMatch(/\d+자 초과/);
     expect(asks[2]).toContain("강렬하고 깊숙한 진동 자극");
-    expect(asks[2]).toMatch(/2자 초과/);
+    expect(asks[2]).toMatch(/\d+자 초과/);
     expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 진동");
+  });
+
+  it("GIF: 교정 재번역도 띠 예산을 쓴다 — 느슨한 정지 이미지 예산으로 교정하면 넘친 문구가 그대로 렌더된다", { timeout: 30_000 }, async () => {
+    // 실측(2026-09-02 exp10): 「大头爆震 更大更刺激」 띠 예산 15자인데 교정문 18자가 그대로
+    // 렌더 단계로 갔다 — 교정 요청문이 정지 이미지 예산(21자)을 싣고 있었다.
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = [
+      [{ box: BOX, text: "强震深处" }],
+      [{ box: BOX, text: "강렬한 진동" }],
+      [{ box: BOX, text: "강렬한 진동" }],
+    ];
+    mock.translate = [["살떨리는 초강력 진동"]];
+    mock.correct = [["강렬한 진동"]];
+    mock.meaning = [[{ ok: false, issues: ["과장: 살떨리는"] }], [{ ok: true, issues: [] }]];
+    await translateImageAuto(gif, "image/gif");
+    const first = textPrompts.find((p) => p.includes("한국어로 번역하세요"))!;
+    const budget = Number(first.match(/최대 (\d+)자/)![1]);
+    expect(budget).toBeLessThan(18); // 정지 이미지 예산(18)이 아니라 띠 예산
+    const corr = textPrompts.find((p) => p.includes("교정 번역을 만드세요"))!;
+    expect(corr).toContain(`최대 ${budget}자`);
   });
 
   it("정지 이미지의 줄이기는 그대로다 — 직전 답 되먹임·2차 줄이기는 GIF 전용", async () => {

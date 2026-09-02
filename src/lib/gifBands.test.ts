@@ -6,7 +6,7 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { gifBandBudgetFor, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, bandGlyphShrink, compositeBand, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
+import { gifBandBudgetFor, gifCharBudget, keptOriginalDetail, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, bandGlyphShrink, compositeBand, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, staticRoomOf, type OcrBox } from "./imageTranslate";
 import { buildBandQualityPrompt } from "./translateVerify";
 
 const W = 200;
@@ -86,6 +86,30 @@ describe("staticBandsOf", () => {
     const raws = [f0, move(f0, 0, 100, W, 130)]; // 두 띠 사이 가로 줄이 움직임
     const groups = staticBandsOf([box([60, 100, 90, 400], "위"), box([800, 100, 830, 400], "아래")], raws[0], movedMaskFromFrames(raws, W, H), W, H);
     expect(groups.length).toBeGreaterThan(1);
+  });
+
+  it("번역문이 길면 막히지 않은 쪽으로 넓힌다 — 한쪽이 움직여도 다른 쪽 여유를 쓴다", () => {
+    // 실측(2026-09-02 M18 「回弹设计」): 왼쪽 위 제품 사진이 움직여 양쪽 동시 확장이
+    // 첫 걸음에 멈췄고, 오른쪽에 여유가 있는데도 띠가 좁아 글자가 가장자리에 닿았다.
+    const f0 = frame();
+    const f1 = move(f0, 0, 0, 50, 200); // 왼쪽 x<50 이 움직인다
+    const moved = movedMaskFromFrames([f0, f1], W, H);
+    const b = { ...box([450, 300, 550, 500], "字"), ko: "글글" }; // x 60~100, y 90~110
+    const [g] = staticBandsOf([b], f0, moved, W, H);
+    expect(g).toBeDefined();
+    expect(g.band.left).toBeGreaterThanOrEqual(50);
+    expect(g.band.left + g.band.width).toBeGreaterThanOrEqual(130); // 오른쪽으로 넓혔다
+  });
+
+  it("납작한 띠는 막히지 않은 쪽으로 두껍게 한다 — 위가 움직이면 아래로", () => {
+    const f0 = frame();
+    const f1 = move(f0, 0, 0, 200, 80); // 위쪽 y<80 이 움직인다
+    const moved = movedMaskFromFrames([f0, f1], W, H);
+    const b = box([480, 100, 520, 900], "字"); // x 20~180, y 96~104 → 160×8 (납작)
+    const [g] = staticBandsOf([b], f0, moved, W, H);
+    expect(g).toBeDefined();
+    expect(g.band.top).toBeGreaterThanOrEqual(80);
+    expect(g.band.top + g.band.height).toBeGreaterThanOrEqual(126);
   });
 
   it("글자를 많이 담은 띠가 먼저 온다 — 호출 1회를 가장 값진 띠에 쓴다", () => {
@@ -252,6 +276,20 @@ describe("bandRegenPrompt", () => {
     );
     expect(q).toContain("글자 높이 약 40px");
     expect(q).toMatch(/장체|글자 폭을 좁혀/);
+  });
+
+  it("띠 안 여백을 알려 주고, 가장자리에 닿느니 줄을 옮기거나 아주 조금 줄이라고 말한다", () => {
+    // 실측(2026-09-02 exp10): 위 여백 1px 띠에서 한국어 글자가 위 가장자리에 닿아
+    // 이음매 관문(연속 217px)에 두 번 다 걸려 원문이 남았다. 아래엔 12px 여유가 있었다.
+    const q = bandRegenPrompt(
+      [{ box: [100, 100, 700, 900], zh: "回弹设计", ko: "쿠션 설계", bg: "#fff", fg: "#000" }],
+      { width: 300, height: 100 },
+      { margins: { top: 2, bottom: 24, left: 60, right: 60 } },
+    );
+    expect(q).toMatch(/위 2px/);
+    expect(q).toMatch(/아래 24px/);
+    expect(q).toMatch(/3px 이상/);
+    expect(q).toMatch(/10%/);
   });
 
   it("색이 바뀌는 지점을 단어 경계로 지시한다 — 실측: '인체공/학설계' 로 갈렸다", () => {
@@ -520,5 +558,54 @@ describe("buildBandQualityPrompt — 띠 육안 심사", () => {
     const q = buildBandQualityPrompt(["강력한 신축"]);
     const hard = q.slice(q.indexOf("hard"), q.indexOf("무시할 것"));
     expect(hard).toMatch(/빠졌|누락|비어/);
+  });
+});
+
+describe("keptOriginalDetail — 원문 유지 사유 표기", () => {
+  it("사유를 자르지 않는다 — 실측(마리아 0018): 항목을 14자에서 잘라 사유가 빈 채로 보고됐다", () => {
+    const d = keptOriginalDetail([
+      "回弹设计 满足多样姿势 — 이음매가 보입니다",
+      "大头爆震 更大更刺激 — 이미지 호출 한도",
+    ]);
+    expect(d).toContain("이음매가 보입니다");
+    expect(d).toContain("이미지 호출 한도");
+  });
+  it("전체 길이는 300자 안에서 끊는다", () => {
+    const d = keptOriginalDetail(Array.from({ length: 40 }, (_, i) => `문구${i} — 움직이는 화면 위`));
+    expect(d.length).toBeLessThanOrEqual(300);
+  });
+});
+
+/**
+ * 띠 기준 길이 예산 — 박스가 아니라 **정지 여백까지 넓힌 띠**에 실제로 들어가는 글자 수.
+ * 실측(2026-09-02 exp10): 「人体进阶」 박스 기준 예산 6자 → "인체 마스터"(어색). 실제
+ * 띠는 589px 로 넓어져 "인체공학 설계"(7자)가 원래 크기로 들어갈 자리였다. 반대로
+ * 「多种频率」는 여백이 없어 4자("진동모드")가 진실이다.
+ */
+describe("gifCharBudget — 띠에 실제로 들어가는 글자 수", () => {
+  it("폭 ÷ (0.85 × 글자 높이) — 공백 포함 한국어 한 글자 평균 0.85em", () => {
+    expect(gifCharBudget(113, 30, 4)).toBe(4); // 「多种频率」 자리 그대로 → "진동모드"
+    expect(gifCharBudget(174, 30, 4)).toBe(6); // 정지 여백으로 넓힌 띠 → "다양한 진동"
+    expect(gifCharBudget(589, 95, 4)).toBe(7); // 「人体进阶」 제목 띠 → "인체공학 설계"
+  });
+  it("아무리 좁아도 4자 — 그 밑으론 뜻을 담을 수 없다", () => {
+    expect(gifCharBudget(20, 30, 4)).toBe(4);
+  });
+});
+
+describe("staticRoomOf — 문구 좌우로 넓힐 수 있는 정지 여백", () => {
+  it("움직이는 쪽은 막히고, 다른 문구 앞에서 멈춘다", () => {
+    const f0 = frame();
+    const f1 = move(f0, 0, 0, 50, 200); // x<50 움직임
+    const moved = movedMaskFromFrames([f0, f1], W, H);
+    const core = { x0: 60, y0: 90, x1: 100, y1: 110 };
+    const r = staticRoomOf(moved, W, H, core, [{ x0: 150, y0: 85, x1: 190, y1: 115 }], 80);
+    expect(r.left).toBe(10); // x50 까지
+    expect(r.right).toBe(48); // 이웃(150) 앞 2px 까지
+  });
+  it("상한을 넘지 않는다", () => {
+    const moved = new Uint8Array(W * H);
+    const r = staticRoomOf(moved, W, H, { x0: 100, y0: 90, x1: 120, y1: 110 }, [], 30);
+    expect(r).toEqual({ left: 30, right: 30 });
   });
 });
