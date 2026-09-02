@@ -750,7 +750,8 @@ describe("splitTwoLines — 긴 문구 두 줄 나누기", () => {
 describe("charBudget tight — GIF 띠 전용(폭을 넓힐 수 없다)", () => {
   // 실측(2026-09-02): 기본 예산은 글자가 박스 높이의 절반까지 작아지는 것을
   // 허용해, 「多种频率」(4자)→「다양한 진동 모드」(8자) 띠에서 글자가 61%로 줄었다.
-  const box4 = [400, 100, 428, 250] as [number, number, number, number]; // 폭 150 높이 28 (1000x1000 기준)
+  // 실측 M19 「多种频率」 자리: 750x534 이미지에서 폭 113px · 글자높이 28px
+  const box4 = [400, 100, 428, 213] as [number, number, number, number];
 
   it("기본보다 짧게 잡는다 — 원본 글자 크기를 지키는 선", () => {
     const loose = charBudget(box4, 1000, 1000, 4);
@@ -758,10 +759,16 @@ describe("charBudget tight — GIF 띠 전용(폭을 넓힐 수 없다)", () => 
     expect(tight).toBeLessThan(loose);
   });
 
-  it("'다양한 진동 모드'(8자)는 넘고 '진동 모드'(4자)는 들어간다", () => {
+  it("'다양한 진동 모드'(8자)는 넘고 '다양한 진동'(6자)은 들어간다", () => {
     const b = charBudget(box4, 1000, 1000, 4, true);
     expect(b).toBeLessThan(8);
-    expect(b).toBeGreaterThanOrEqual(4);
+    expect(b).toBeGreaterThanOrEqual(6);
+  });
+
+  it("뜻을 깎을 만큼 조이지는 않는다 — 실측: ×1.2 로 조였더니 부위 이름이 빠졌다", () => {
+    // 「入体进阶」(4자) 자리에 "인체공학 설계"(공백 제외 6자) 는 들어가야 한다
+    const title = [100, 60, 190, 500] as [number, number, number, number];
+    expect(charBudget(title, 750, 703, 4, true)).toBeGreaterThanOrEqual(6);
   });
 
   it("정지 이미지(기본값)는 그대로 — 이미지 번역 경로는 건드리지 않는다", () => {

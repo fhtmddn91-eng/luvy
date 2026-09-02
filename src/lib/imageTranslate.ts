@@ -505,9 +505,13 @@ export function charBudget(
   // 세로쓰기는 글자를 쌓으므로 폭÷높이가 수용량이 아니다 — 원문 기준만 본다
   const vertical = bh > bw * 2.5;
   if (tight) {
-    // 원본 글자 크기를 유지하며 들어갈 수 있는 만큼 (수용량 ×1.2 = 살짝의 자간 압축)
-    const cap = vertical || bh <= 0 ? 0 : Math.ceil((bw / bh) * 1.2);
-    return Math.max(4, Math.ceil(zhLen * 1.2), cap);
+    // 원본 글자 크기를 유지하며 들어갈 수 있는 만큼 (수용량 ×1.5 = 약간의 자간 압축).
+    // ×1.2 로 더 조였더니 반대편 실패가 났다 — 실측(2026-09-02): 「入体进阶」이
+    // "인체공학 설계"(예산 안에 들어감) 대신 "실전 자극"으로, 「强震蜜豆 伸缩人体」는
+    // 蜜豆(부위) 를 통째로 빠뜨린 채 나왔다. 예산은 상한일 뿐인데 모델이 안전하게
+    // 더 줄여버린다. 규칙 4의 반대편: 너무 조인 규칙은 의미를 깎는다.
+    const cap = vertical || bh <= 0 ? 0 : Math.ceil((bw / bh) * 1.5);
+    return Math.max(5, Math.ceil(zhLen * 1.4), cap);
   }
   const capacity = vertical || bh <= 0 ? 0 : Math.ceil((bw / bh) * 2.2);
   return Math.max(6, Math.ceil(zhLen * 1.6), capacity);
@@ -520,10 +524,16 @@ interface TranslateOpts {
   strict?: boolean;
   /** 앞선 답이 길이 예산을 넘었을 때 */
   shorten?: boolean;
+  /**
+   * 예산이 빡빡한 자리(GIF 띠)에서 **의미를 깎지 말라**고 못 박는다.
+   * 실측(2026-09-02): 상한만 알려주니 모델이 안전하게 더 줄여 「入体进阶」이
+   * "실전 자극"이 되고 부위 이름이 통째로 빠졌다.
+   */
+  preserveMeaning?: boolean;
 }
 
 function translatePrompt(items: string[], opts: TranslateOpts): string {
-  const { budgets, strict, shorten } = opts;
+  const { budgets, strict, shorten, preserveMeaning } = opts;
   const list = budgets
     ? items.map((t, i) => `${i + 1}. "${t}" → 최대 ${budgets[i]}자`).join("\n")
     : JSON.stringify(items);
@@ -535,6 +545,12 @@ function translatePrompt(items: string[], opts: TranslateOpts): string {
 - **항목마다 적힌 "최대 N자"를 공백 포함해서 지키세요.** 원문이 있던 자리에 그대로
   들어가야 합니다. 넘치면 글씨가 깨알이 되거나 뒷말이 잘려 나갑니다${
     shorten ? "\n- 이전 답이 이 한도를 넘었습니다. 뜻을 지키되 더 짧은 말로 바꾸세요." : ""
+  }${
+    // 실측(2026-09-02): 상한만 주면 모델이 안전하게 더 줄여 뜻을 깎는다
+    // (「入体进阶」→"실전 자극", 「强震蜜豆 伸缩人体」에서 부위 이름 누락).
+    preserveMeaning
+      ? "\n- **\"최대 N자\"는 상한일 뿐입니다.** 한도 안에서는 뜻을 온전히 담는 쪽을 고르세요. 한도에 여유가 있는데 억지로 더 줄여 원문의 대상·부위·기능을 빼면 실패입니다."
+      : ""
   }
 - 중국어 의성어·의태어를 소리 나는 대로 옮기지 마세요.
   한국에서 쓰는 말로 바꿉니다 (拍打→탭·두드림, 咬合→흡입·조임, 抠震→자극)
@@ -859,7 +875,7 @@ async function translateExtracted(
   const tight = mime === "image/gif";
   const budgets = solid.map((b) => charBudget(b.box, W, H, [...b.zh].length, tight));
 
-  const koList = await translateTexts(solid.map((b) => b.zh), { budgets });
+  const koList = await translateTexts(solid.map((b) => b.zh), { budgets, preserveMeaning: tight });
 
   // 한자가 남은 항목만 한 번 더 강하게 재번역 (남으면 폰트에서 네모로 깨진다)
   const bad = koList.map((ko, i) => (hasHanzi(ko) ? i : -1)).filter((i) => i >= 0);
@@ -3226,7 +3242,7 @@ async function tryBuildGifPatch(
         lastFail = problem ?? "글자 영역을 다시 그리지 못했습니다";
         // 왜 원문으로 남았는지 함께 남긴다 — 사유 없이 목록만 보면 운영자가
         // 무엇을 해야 할지(재시도인지·직접 올리기인지) 판단할 수 없다
-        const why = lastFail.split("(")[0].trim().slice(0, 30);
+        const why = (lastFail.split("(")[0].trim() || "글자를 깨끗하게 그리지 못했습니다").slice(0, 40);
         keptOriginal.push(...inBand.map((b) => `${b.zh} — ${why}`));
         continue;
       }
