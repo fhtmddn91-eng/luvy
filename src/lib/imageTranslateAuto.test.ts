@@ -102,8 +102,11 @@ interface Mock {
   transcribe: unknown[][];
   /** 제품 무결성 심사(원본·완성본 두 장 비교) — 전체 채택 경로 */
   productCheck: { ok: boolean; issues: string[]; hard?: string[] }[][];
-  /** "echo" = 보낸 이미지와 같은 크기로 응답(국소 편집 띠 검증용) */
-  image: (Json | { status: number } | "hang" | "echo")[];
+  /**
+   * "echo" = 보낸 이미지와 같은 크기의 흰 그림으로 응답(국소 편집 띠 검증용)
+   * "shrink" = 보낸 그림에서 어두운 행(글자)의 위아래 1/4 씩을 지워 돌려준다 = 글자 높이 50%
+   */
+  image: (Json | { status: number } | "hang" | "echo" | "shrink")[];
 }
 let mock: Mock;
 let imageHttp = 0;
@@ -141,6 +144,30 @@ beforeEach(() => {
         const png = await sharp({
           create: { width: meta.width ?? 8, height: meta.height ?? 8, channels: 3, background: { r: 255, g: 255, b: 255 } },
         }).png().toBuffer();
+        return { ok: true, status: 200, json: async () => imageResp(png) } as unknown as Response;
+      }
+      if (r === "shrink") {
+        const inline = (body as { contents?: { parts?: { inline_data?: { data?: string } }[] }[] })
+          .contents?.[0]?.parts?.find((x) => x.inline_data?.data)?.inline_data?.data ?? "";
+        const src = sharp(Buffer.from(inline, "base64"));
+        const meta = await src.metadata();
+        const cw = meta.width ?? 1, ch = meta.height ?? 1;
+        const raw = await src.ensureAlpha().raw().toBuffer();
+        const dark: number[] = [];
+        for (let y = 0; y < ch; y++) {
+          let sum = 0;
+          for (let x = 0; x < cw; x++) sum += raw[(y * cw + x) * 4];
+          if (sum / cw < 200) dark.push(y); // 확대 보간으로 섞인 경계 행까지 포함
+        }
+        const keep = new Set(dark.slice(Math.floor(dark.length / 4), Math.ceil((dark.length * 3) / 4)));
+        for (const y of dark) {
+          if (keep.has(y)) continue;
+          for (let x = 0; x < cw; x++) {
+            const i = (y * cw + x) * 4;
+            raw[i] = raw[0]; raw[i + 1] = raw[1]; raw[i + 2] = raw[2];
+          }
+        }
+        const png = await sharp(raw, { raw: { width: cw, height: ch, channels: 4 } }).png().toBuffer();
         return { ok: true, status: 200, json: async () => imageResp(png) } as unknown as Response;
       }
       if (r === "hang") {
@@ -861,6 +888,60 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
       expect(r.reasons.map((x) => x.code)).toContain("GIF_UNVERIFIED");
       expect(r.data).not.toBeNull(); // 후보(GIF)는 보존 — 육안 확인 대상
     }
+  });
+
+  it("GIF: 글자가 작게 그려진 띠는 채택하되 GIF_SMALL_TEXT 사유로 알린다 — 자동 흐름엔 재시도 예산이 없다", { timeout: 30_000 }, async () => {
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["shrink"];
+    mock.transcribe = [
+      [{ box: BOX, text: "强震深处" }],
+      [{ box: BOX, text: "강렬한 진동" }],
+      [{ box: BOX, text: "강렬한 진동" }],
+    ];
+    const r = await translateImageAuto(gif, "image/gif");
+    expect(r.status).toBe("NEEDS_REVIEW");
+    expect(imageHttp).toBe(1); // 작아졌다고 자동으로 더 두드리지 않는다 — 원본당 1회
+    if (r.status === "NEEDS_REVIEW") {
+      const small = r.reasons.find((x) => x.code === "GIF_SMALL_TEXT");
+      expect(small?.detail).toContain("强震深处");
+      expect(small?.detail).toMatch(/\d+%/);
+      expect(r.data).not.toBeNull(); // 작은 한국어가 중국어 원문보다 낫다 — 후보는 남긴다
+    }
+  });
+
+  it("GIF: 예산을 넘긴 번역은 직전 답과 초과량을 보여 주며 두 번까지 줄인다", { timeout: 30_000 }, async () => {
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = [
+      [{ box: BOX, text: "强震深处" }],
+      [{ box: BOX, text: "강렬한 진동" }],
+      [{ box: BOX, text: "강렬한 진동" }],
+    ];
+    // BOX 320×40px → GIF(tight) 예산 12자. 1차 20자 → 1차 줄이기 14자(아직 초과) → 2차 줄이기 6자.
+    // 실측(2026-09-02 마리아 0018): 「大头爆震 更大更刺激」이 예산 12자에 17자로 나와
+    // 그대로 렌더됐고 글자가 원문의 52% 로 작아졌다 — 줄이기 1회로는 못 잡았다.
+    mock.translate = [["아주 강렬하고 깊숙한 진동 자극 느낌"], ["강렬하고 깊숙한 진동 자극"], ["강렬한 진동"]];
+    const r = await translateImageAuto(gif, "image/gif");
+    const asks = textPrompts.filter((p) => p.includes("한국어로 번역하세요"));
+    expect(asks).toHaveLength(3);
+    expect(asks[1]).toContain("직전 답");
+    expect(asks[1]).toContain("아주 강렬하고 깊숙한 진동 자극 느낌");
+    expect(asks[1]).toMatch(/8자 초과/);
+    expect(asks[2]).toContain("강렬하고 깊숙한 진동 자극");
+    expect(asks[2]).toMatch(/2자 초과/);
+    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 진동");
+  });
+
+  it("정지 이미지의 줄이기는 그대로다 — 직전 답 되먹임·2차 줄이기는 GIF 전용", async () => {
+    mock = happyMock();
+    // 정지 이미지 예산 18자. 1차 20자 → 줄이기 1회 14자 → 채택, 2차 없음
+    mock.translate = [["아주 강렬하고 깊숙한 진동 자극 느낌"], ["강렬하고 깊숙한 진동 자극"], ["강렬한 진동"]];
+    await translateImageAuto(ORIG_PNG, "image/png");
+    const asks = textPrompts.filter((p) => p.includes("한국어로 번역하세요"));
+    expect(asks).toHaveLength(2);
+    expect(asks[1]).not.toContain("직전 답");
   });
 
   it("첫 텍스트 요청이 429(월 한도): 즉시 RETRYABLE — 텍스트 HTTP 1회, 이미지 0회, 재시도 0회", async () => {

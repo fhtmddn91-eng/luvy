@@ -31,6 +31,25 @@ async function makeGif(animateTop: boolean): Promise<Buffer> {
   return sharp(frames, { join: { animated: true } }).gif({ delay: [100, 100, 100] }).toBuffer();
 }
 
+/**
+ * 위쪽 글자 자리에 검은 막대(가짜 글자, 20px)가 있는 GIF — 글자 크기 관문용.
+ * topBox(y 19~48px) 안에 y 24~44 · x 30~210 막대. 위쪽은 정지, 아래쪽만 움직인다.
+ */
+async function makeGifWithGlyph(): Promise<Buffer> {
+  const frames: Buffer[] = [];
+  for (let i = 0; i < 3; i++) {
+    const shade = 40 + i * 60;
+    const raw = Buffer.alloc(W * H * 3);
+    for (let y = 0; y < H; y++) {
+      const v = y < H / 2 ? 230 : shade;
+      raw.fill(v, y * W * 3, (y + 1) * W * 3);
+      if (y >= 24 && y < 44) raw.fill(20, (y * W + 30) * 3, (y * W + 210) * 3);
+    }
+    frames.push(await sharp(raw, { raw: { width: W, height: H, channels: 3 } }).png().toBuffer());
+  }
+  return sharp(frames, { join: { animated: true } }).gif({ delay: [100, 100, 100] }).toBuffer();
+}
+
 /** 글자는 위쪽 절반에 있다 (0~1000 정규화) */
 const topBox: OcrBox = {
   box: [80, 100, 200, 900], zh: "强震", ko: "강력 진동", bg: "#ffffff", fg: "#000000", solid_bg: true,
@@ -40,7 +59,7 @@ let imageCalls = 0;
 
 /** 요청한 crop 과 같은 크기의 흰 PNG 를 돌려주는 가짜 이미지 모델 */
 function stubGemini(
-  mode: "ok" | "refuse",
+  mode: "ok" | "refuse" | "shrink",
   transcribed: string[] = ["강력 진동"],
   /** 띠 육안 심사(그림 품질) 판정을 호출 순서대로 — 없으면 항상 합격 */
   visual: { ok: boolean; issues: string[]; hard: string[] }[] = [],
@@ -62,7 +81,29 @@ function stubGemini(
       // 받은 crop 을 그대로 돌려준다 = 배경이 원본과 같은 정상 결과.
       // 흰색으로 새로 그리면 내부 배경 검사(BAND_INNER_MAX)에 정당하게 걸린다.
       const b64 = body.contents?.[0]?.parts?.find((p) => p.inline_data?.data)?.inline_data?.data ?? "";
-      const png = await sharp(Buffer.from(b64, "base64")).png().toBuffer();
+      let png = await sharp(Buffer.from(b64, "base64")).png().toBuffer();
+      if (mode === "shrink") {
+        // 어두운 행(가짜 글자)의 위아래 1/4 씩을 배경색으로 지운다 = 글자 높이 50%
+        const src = sharp(Buffer.from(b64, "base64"));
+        const m = await src.metadata();
+        const cw = m.width ?? 1, ch = m.height ?? 1;
+        const raw = await src.ensureAlpha().raw().toBuffer();
+        const dark: number[] = [];
+        for (let y = 0; y < ch; y++) {
+          let sum = 0;
+          for (let x = 0; x < cw; x++) sum += raw[(y * cw + x) * 4];
+          if (sum / cw < 200) dark.push(y); // 확대 보간으로 섞인 경계 행까지 포함
+        }
+        const keep = new Set(dark.slice(Math.floor(dark.length / 4), Math.ceil((dark.length * 3) / 4)));
+        for (const y of dark) {
+          if (keep.has(y)) continue;
+          for (let x = 0; x < cw; x++) {
+            const i = (y * cw + x) * 4;
+            raw[i] = raw[0]; raw[i + 1] = raw[1]; raw[i + 2] = raw[2];
+          }
+        }
+        png = await sharp(raw, { raw: { width: cw, height: ch, channels: 4 } }).png().toBuffer();
+      }
       return new Response(
         JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: png.toString("base64") } }] } }] }),
         { status: 200 },
@@ -254,6 +295,42 @@ describe("renderTranslatedImage — GIF", () => {
     const out = await renderTranslatedImage(gif, "image/gif", [a, b]);
     expect(out.mime).toBe("image/gif");
     expect(imageCalls).toBe(2); // 재시도 없이 띠 2개 = 2회
+  }, 60_000);
+
+  /**
+   * 글자 크기 관문(2026-09-02). 실측(exp7~9 산출물 3회분·띠 22개): 정상 88~135%,
+   * 작아진 것 45~83%. 「全面覆盖」는 4자 번역으로도 세 번 다 75~82% 였다 —
+   * 프롬프트의 "같게 유지"를 모델이 절반은 어긴다. 픽셀로 재서(공짜) 실측값을
+   * 힌트에 실어 재시도하고, 그래도 작으면 더 나은 쪽을 채택하되 사유를 남긴다.
+   * 작은 한국어가 중국어 원문보다는 낫다 — '깨진 그림'과는 다른 부류다.
+   */
+  it("글자가 작게 그려지면 재시도하고, 그래도 작으면 더 나은 쪽을 채택하되 사유를 남긴다", async () => {
+    stubGemini("shrink");
+    const gif = await makeGifWithGlyph();
+    const out = await renderTranslatedImage(gif, "image/gif", [topBox]);
+    expect(imageCalls).toBe(2); // 1차 작음 → 재시도 1회 → 여전히 작음 → 채택
+    expect(out.mime).toBe("image/gif");
+    expect((out.notes ?? []).join(" ")).toMatch(/强震.*작아졌/);
+    // 패치가 실제로 얹혔다 — 막대 위쪽 행은 지워져 배경색, 가운데는 여전히 글자
+    const raw = await sharp(out.data, { page: 0, pages: 1 }).ensureAlpha().raw().toBuffer();
+    expect(raw[(26 * W + 120) * 4]).toBeGreaterThan(150);
+    expect(raw[(34 * W + 120) * 4]).toBeLessThan(100);
+  }, 60_000);
+
+  it("글자가 제 크기면 재시도하지 않는다 — 크기 관문은 공짜지만 재시도는 돈이다", async () => {
+    stubGemini("ok");
+    const gif = await makeGifWithGlyph();
+    const out = await renderTranslatedImage(gif, "image/gif", [topBox]);
+    expect(imageCalls).toBe(1);
+    expect(out.notes ?? []).toEqual([]);
+  }, 60_000);
+
+  it("판독에 기대 문구가 하나도 안 읽히면(글자를 지운 채 비움) 재시도 후 원문 유지", async () => {
+    // 잔류 검사(한자만 봄)·헛글자 검사(없는 한글만 봄)는 빈 띠를 통과시킨다.
+    stubGemini("ok", []);
+    const gif = await makeGif(false);
+    await expect(renderTranslatedImage(gif, "image/gif", [topBox])).rejects.toThrow(/문구 누락/);
+    expect(imageCalls).toBe(2);
   }, 60_000);
 
   it("모델이 거부하면 거부 사유가 그대로 올라온다 — 재시도 분류가 가능하게", async () => {

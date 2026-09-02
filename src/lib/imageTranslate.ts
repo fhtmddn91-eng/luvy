@@ -530,12 +530,27 @@ interface TranslateOpts {
    * "실전 자극"이 되고 부위 이름이 통째로 빠졌다.
    */
   preserveMeaning?: boolean;
+  /**
+   * 줄이기 요청에 **직전 답과 초과량**을 같이 보여 준다(GIF 전용).
+   * 실측(2026-09-02 마리아 0018): 「大头爆震 更大更刺激」이 예산 12자에 17자로
+   * 나왔고, "넘었으니 줄여라"만으로는 더 짧은 답이 안 와서 그대로 렌더돼 글자가
+   * 원문의 52% 로 작아졌다. 몇 자를 깎아야 하는지 알려 줘야 깎는다.
+   */
+  previous?: string[];
 }
 
 function translatePrompt(items: string[], opts: TranslateOpts): string {
-  const { budgets, strict, shorten, preserveMeaning } = opts;
+  const { budgets, strict, shorten, preserveMeaning, previous } = opts;
   const list = budgets
-    ? items.map((t, i) => `${i + 1}. "${t}" → 최대 ${budgets[i]}자`).join("\n")
+    ? items
+        .map((t, i) => {
+          const prev = previous?.[i];
+          const over = prev ? [...prev].length - budgets[i] : 0;
+          return `${i + 1}. "${t}" → 최대 ${budgets[i]}자${
+            prev && over > 0 ? ` (직전 답 "${prev}" 은 ${[...prev].length}자 — ${over}자 초과)` : ""
+          }`;
+        })
+        .join("\n")
     : JSON.stringify(items);
   return `중국 상품 상세페이지 이미지에서 추출한 문구 목록입니다. 각각 한국어로 번역하세요.
 
@@ -895,20 +910,45 @@ async function translateExtracted(
 
   // 자리보다 긴 문구만 한 번 더 짧게 — 텍스트 호출은 거의 무료이고,
   // 여기서 못 잡으면 이미지 생성이 뒷말을 잘라 그림을 통째로 다시 뽑아야 한다
+  const adoptShorter = (idx: number[], shorter: string[]) => {
+    idx.forEach((orig, j) => {
+      const s = shorter[j];
+      // 더 짧아졌고 한자가 없을 때만 채택 — 아니면 원래 번역이 낫다
+      if (s && !hasHanzi(s) && [...s].length < [...koList[orig]].length) koList[orig] = s;
+    });
+  };
   const long = overBudget(koList, budgets);
   if (long.length > 0) {
     try {
       const shorter = await translateTexts(
         long.map((i) => solid[i].zh),
-        { budgets: long.map((i) => budgets[i]), shorten: true },
+        // GIF 만 직전 답·초과량을 보여 준다 — 정지 이미지 요청문은 그대로다
+        { budgets: long.map((i) => budgets[i]), shorten: true, previous: tight ? long.map((i) => koList[i]) : undefined, preserveMeaning: tight },
       );
-      long.forEach((orig, j) => {
-        const s = shorter[j];
-        // 더 짧아졌고 한자가 없을 때만 채택 — 아니면 원래 번역이 낫다
-        if (s && !hasHanzi(s) && [...s].length < [...koList[orig]].length) koList[orig] = s;
-      });
+      adoptShorter(long, shorter);
     } catch {
       // 줄이기 실패는 치명적이지 않다 — 렌더 쪽 두 줄 배치·검수가 받아준다
+    }
+  }
+  // GIF 는 한 번 더 — 띠에서는 넘친 글자가 그대로 글자 크기 손실이 된다(원문의 52%
+  // 실측). 정지 이미지는 모델이 판을 다시 흘려 흡수하므로 여기 오지 않는다.
+  if (tight) {
+    const still = overBudget(koList, budgets);
+    if (still.length > 0) {
+      try {
+        const shorter = await translateTexts(
+          still.map((i) => solid[i].zh),
+          { budgets: still.map((i) => budgets[i]), shorten: true, previous: still.map((i) => koList[i]), preserveMeaning: true },
+        );
+        adoptShorter(still, shorter);
+      } catch {
+        /* 위와 같다 */
+      }
+    }
+    for (const i of overBudget(koList, budgets)) {
+      console.warn(
+        `[번역] GIF 예산 초과 유지: 「${solid[i].zh}」→「${koList[i]}」 ${[...koList[i]].length}/${budgets[i]}자 — 띠에서 글자가 작아질 수 있다`,
+      );
     }
   }
 
@@ -2489,6 +2529,21 @@ async function bandPatchProblem(
     // 전체나 개별 문구의 부분 문자열이면 통과. 어디에도 없는 한글만 헛글자다.
     .filter((t) => !joined.includes(t) && !allowed.some((k) => norm(k).includes(t)));
   if (extras.length > 0) return `문구 밖 글자: ${extras.join(", ").slice(0, 60)}`;
+  // 있어야 할 문구가 **하나도 안 읽히면** 빈 띠다. 잔류 검사(한자만 봄)와 헛글자
+  // 검사(없는 한글만 봄)는 글자를 지운 채 비워 둔 결과를 그대로 통과시킨다 —
+  // 원문은 없고 한국어도 없으니 두 검사 다 할 말이 없다. 판독 오차(한두 글자 오독)는
+  // 봐준다: 2글자 조각의 절반 이상이 읽히면 있는 것으로 친다.
+  const readAll = norm(lines.map((l) => l.text).join(""));
+  const missing = mapped
+    .filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim())
+    .map((b) => ({ ko: b.ko.trim(), k: norm(b.ko) }))
+    .filter(({ k }) => k.length > 0)
+    .filter(({ k }) => {
+      if (k.length <= 2) return !readAll.includes(k);
+      const grams = Array.from({ length: k.length - 1 }, (_, i) => k.slice(i, i + 2));
+      return grams.filter((g) => readAll.includes(g)).length < grams.length / 2;
+    });
+  if (missing.length > 0) return `문구 누락: ${missing.map((m) => m.ko).join(", ").slice(0, 60)}`;
   return null;
 }
 
@@ -3061,9 +3116,126 @@ export function bandSeamProblem(
   return null;
 }
 
+/**
+ * 띠(RGBA)를 원본 프레임 위 그 자리에 얹은 사본 — 이음매·글자 크기 관문이
+ * "얹으면 어떻게 보이는가"를 같은 그림으로 잰다. 원본은 바꾸지 않는다.
+ */
+export function compositeBand(origRaw: Uint8Array, bandRgba: Buffer, band: BandRect, W: number, H: number): Uint8Array {
+  const comp = Uint8Array.from(origRaw);
+  for (let y = 0; y < band.height; y++) {
+    for (let x = 0; x < band.width; x++) {
+      const si = (y * band.width + x) * 4;
+      const a = bandRgba[si + 3] / 255;
+      if (a <= 0) continue;
+      const di = ((band.top + y) * W + band.left + x) * 4;
+      for (let c = 0; c < 3; c++) comp[di + c] = Math.round(bandRgba[si + c] * a + comp[di + c] * (1 - a));
+    }
+  }
+  return comp;
+}
+
+/**
+ * 글자 크기 관문의 하한 — 결과 글자 높이 ÷ 원문 글자 높이.
+ *
+ * 실측(2026-09-02, 마리아 0018·0019 산출물 3회분 · 띠 22개): 정상은 88~135%,
+ * 작아진 것은 45~83% 였다. 「全面覆盖」는 번역이 4자로 짧아도 세 번 다 75~82% —
+ * 프롬프트의 "같게 유지"를 모델이 절반은 어긴다(규칙 4: 지켜지지 않는 규칙).
+ * 그래서 픽셀로 재고(공짜) 실측값을 재시도 힌트에 싣는다.
+ */
+const BAND_SHRINK_MIN = 0.85;
+
+/** 영역 안 글자(배경 중앙값과 tol 이상 다른 픽셀)가 차지하는 세로 범위(px) — 없으면 null */
+function inkRowsIn(raw: Uint8Array, W: number, r: PxBox, exclude: PxBox[], tol = 40): number | null {
+  const rows = r.y1 - r.y0, cols = r.x1 - r.x0;
+  if (rows <= 0 || cols <= 0) return null;
+  const lum = new Float32Array(rows * cols);
+  const use = new Uint8Array(rows * cols);
+  const bg: number[] = [];
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const X = r.x0 + x, Y = r.y0 + y;
+      const i = (Y * W + X) * 4;
+      const v = 0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2];
+      const k = y * cols + x;
+      lum[k] = v;
+      if (exclude.some((e) => X >= e.x0 && X < e.x1 && Y >= e.y0 && Y < e.y1)) continue;
+      use[k] = 1;
+      bg.push(v);
+    }
+  }
+  if (bg.length === 0) return null;
+  bg.sort((a, b) => a - b);
+  const med = bg[bg.length >> 1];
+  let first = -1, last = -1;
+  for (let y = 0; y < rows; y++) {
+    let n = 0;
+    for (let x = 0; x < cols; x++) {
+      const k = y * cols + x;
+      if (use[k] && Math.abs(lum[k] - med) > tol) n++;
+    }
+    if (n >= 2) {
+      if (first < 0) first = y;
+      last = y;
+    }
+  }
+  return first < 0 ? null : last - first + 1;
+}
+
+/**
+ * 띠 재생성본의 글자가 원문보다 얼마나 작아졌나 — 문구마다 (결과 높이 ÷ 원문 높이).
+ *
+ * 문구 박스 주위(여백 = 박스 높이의 35%, 4~12px)에서 배경 중앙값과 다른 픽셀의
+ * 세로 범위를 원본·합성본에서 같은 방법으로 잰다. **이웃 문구의 박스는 제외**한다 —
+ * 여백에 걸친 이웃 획을 세면 줄어든 것이 가려진다(실측: 이웃을 빼지 않은 측정은
+ * 47%짜리를 64%로 읽었다). 잴 수 없는 곳(단색 아님·원문 글자 없음·결과 글자
+ * 없음)은 판정하지 않는다 — 글자 유무는 판독 관문의 몫이고, 여기서는 크기만 본다.
+ */
+export function bandGlyphShrink(
+  origRaw: Uint8Array,
+  compRaw: Uint8Array,
+  W: number,
+  H: number,
+  targets: OcrBox[],
+  /** 그림의 모든 문구 — 이웃 제외용 */
+  allBoxes: OcrBox[],
+  band: BandRect,
+): { zh: string; ratio: number }[] {
+  const px = (b: OcrBox): PxBox => {
+    const [y1, x1, y2, x2] = b.box;
+    return { x0: (x1 / 1000) * W, y0: (y1 / 1000) * H, x1: (x2 / 1000) * W, y1: (y2 / 1000) * H };
+  };
+  const out: { zh: string; ratio: number }[] = [];
+  for (const b of targets) {
+    if (b.solid_bg === false) continue; // 사진·무늬 배경은 중앙값이 배경이 아니다
+    const core = px(b);
+    const bh = core.y1 - core.y0;
+    const pad = Math.max(4, Math.min(12, Math.round(bh * 0.35)));
+    const r: PxBox = {
+      x0: Math.max(band.left, Math.floor(core.x0 - pad)),
+      y0: Math.max(band.top, Math.floor(core.y0 - pad)),
+      x1: Math.min(band.left + band.width, Math.ceil(core.x1 + pad)),
+      y1: Math.min(band.top + band.height, Math.ceil(core.y1 + pad)),
+    };
+    if (r.x1 - r.x0 < 4 || r.y1 - r.y0 < 4) continue;
+    const exclude = allBoxes
+      .filter((o) => o !== b)
+      .map((o) => { const q = px(o); return { x0: q.x0 - 1, y0: q.y0 - 1, x1: q.x1 + 1, y1: q.y1 + 1 }; });
+    const oh = inkRowsIn(origRaw, W, r, exclude);
+    // 원문 측정이 박스 높이와 동떨어지면 배경을 잘못 잡은 것 — 판정하지 않는다
+    if (oh === null || oh < bh * 0.4 || oh > bh * 1.7) continue;
+    const ch = inkRowsIn(compRaw, W, r, exclude);
+    if (ch === null) continue;
+    out.push({ zh: b.zh, ratio: ch / oh });
+  }
+  return out;
+}
+
 type GifPatchResult =
-  /** keptOriginal: 정지가 아니거나 관문에 걸려 **원문을 그대로 둔** 문구(원문 한자) */
-  | { patch: Image; overlayBoxes: OcrBox[]; keptOriginal: string[] }
+  /**
+   * keptOriginal: 정지가 아니거나 관문에 걸려 **원문을 그대로 둔** 문구(원문 한자)
+   * notes: 채택은 했지만 운영자가 알아야 할 것(글자가 작아짐 등) — 「다시 만들기」 판단 근거
+   */
+  | { patch: Image; overlayBoxes: OcrBox[]; keptOriginal: string[]; notes: string[] }
   | { patch: null; reason: string };
 
 /**
@@ -3123,6 +3295,7 @@ async function tryBuildGifPatch(
     }
 
     const keptOriginal: string[] = [];
+    const notes: string[] = [];
     let groups = staticBandsOf(targets, frame0, moved, W, H);
     // 너무 큰 띠는 만들지 않는다 — 국소 편집 원칙(위 MAX_GIF_BAND_AREA 주석)
     const oversized = groups.filter((g) => (g.band.width * g.band.height) / (W * H) > MAX_GIF_BAND_AREA);
@@ -3149,7 +3322,8 @@ async function tryBuildGifPatch(
     let lastFail = "";
 
     const renderBands = async () => {
-    for (const { band, boxes: inBand } of groups) {
+    for (const g of groups) {
+      const { band, boxes: inBand } = g;
       // 자동 흐름은 원본당 이미지 HTTP 1회다 — 예산이 끝나면 남은 띠는 원문 유지로
       // 보고한다(운영자 재렌더에서 이어서 처리). 조용히 삼키지 않는다.
       const store = imageBudget.getStore();
@@ -3159,11 +3333,14 @@ async function tryBuildGifPatch(
         // 뒤에서 "움직이는 화면 위"로 잘못 보고됐다 — 운영자는 예산이 모자랐다는
         // 사실을 알 수 없었고, 그래서 「다시 만들기」로 풀 수 있다는 것도 몰랐다
         // (실측 M18: 띠 6개 · 예산 6 이라 재시도가 나면 마지막 띠가 잘렸다).
-        for (const g2 of groups.slice(groups.indexOf(groups.find((q) => q.band === band)!))) {
+        for (const g2 of groups.slice(groups.indexOf(g))) {
           keptOriginal.push(...g2.boxes.map((b) => `${b.zh} — 이미지 호출 한도`));
         }
         break;
       }
+      // 시도마다 결과를 남긴다 — 실측(2026-09-02 마리아 0018): 「回弹设计」 띠가 원문으로
+      // 남았는데 기록이 없어 관문 불합격인지 호출 실패인지 되짚을 수 없었다.
+      const label = `[gif 띠 ${groups.indexOf(g) + 1}/${groups.length}] 「${inBand.map((b) => b.zh).join(" / ")}」 ${band.width}×${band.height}`;
       const crop = await sharp(frame0Png).extract(band).png().toBuffer();
       const mapped = inBand.map((b) => remapBoxToBand(b, band, W, H));
       // 작은 글자는 **확대해서** 보낸다. 모델은 22px 짜리 글자를 그리다 획을
@@ -3179,6 +3356,8 @@ async function tryBuildGifPatch(
       // 시도에서 곧잘 사라지는 비결정 실패다(실측 2026-09-01). 2회로 못 만들면
       // 이 띠는 원문을 유지한다 — 깨진 그림을 채택하느니 원문이 낫다(무결 원칙).
       let accepted: Buffer | null = null; // 검사를 전부 통과한 띠(RGBA raw)
+      // 글자만 작아졌을 뿐 다른 관문은 다 통과한 후보 — 재시도해도 작으면 이걸 쓴다
+      let small: { rgba: Buffer; ratio: number; shrunk: { zh: string; ratio: number }[] } | null = null;
       let problem: string | null = null;
       for (let attempt = 1; attempt <= BAND_ATTEMPTS; attempt++) {
         const b2 = imageBudget.getStore();
@@ -3210,6 +3389,7 @@ async function tryBuildGifPatch(
           // 429·타임아웃(RETRYABLE)과 모델 거부를 갈라야 재시도 버튼이 뜬다.
           if (transientReason(m) || (attempt === 1 && groups.length === 1)) throw e;
           problem = m;
+          console.log(`${label} ×${scale} 시도 ${attempt}: 호출 실패 — ${m.slice(0, 120)}`);
           continue;
         }
         problem = await bandProblem(
@@ -3217,7 +3397,10 @@ async function tryBuildGifPatch(
           mapped,
           targets.filter((t) => !inBand.includes(t)).map((t) => t.ko),
         );
-        if (problem) continue;
+        if (problem) {
+          console.log(`${label} ×${scale} 시도 ${attempt}: ${problem}`);
+          continue;
+        }
         const rgba = await sharp(out)
           .resize(band.width, band.height, { fit: "fill" })
           .ensureAlpha()
@@ -3233,10 +3416,32 @@ async function tryBuildGifPatch(
         const seamProblem = bandSeamProblem(frame0, rgba, band, W, H);
         if (seamProblem) {
           problem = seamProblem;
+          console.log(`${label} ×${scale} 시도 ${attempt}: ${problem}`);
           continue;
         }
-        accepted = featherBand(rgba, band, inBand, W, H, groups.map((g) => g.band));
+        // 글자 크기 관문(공짜) — 작아진 것은 '깨진 것'과 다른 부류다. 재시도 힌트에
+        // 실측 비율을 실어 한 번 더 그리게 하되, 그래도 작으면 더 나은 쪽을 채택한다.
+        // 작은 한국어가 중국어 원문보다는 낫다. 대신 사유를 남겨 운영자가 「다시
+        // 만들기」로 고를 수 있게 한다.
+        const shrunk = bandGlyphShrink(frame0, compositeBand(frame0, rgba, band, W, H), W, H, inBand, boxes, band);
+        const worst = shrunk.reduce((m, s) => Math.min(m, s.ratio), 1);
+        if (worst < BAND_SHRINK_MIN) {
+          problem = `글자가 작아졌습니다 (원문의 ${Math.round(worst * 100)}%)`;
+          if (!small || worst > small.ratio) small = { rgba, ratio: worst, shrunk };
+          console.log(`${label} ×${scale} 시도 ${attempt}: ${problem}`);
+          continue;
+        }
+        accepted = rgba;
+        problem = null;
+        console.log(`${label} ×${scale} 시도 ${attempt}: 합격${shrunk.length > 0 ? ` (글자 ${Math.round(worst * 100)}%)` : ""}`);
         break;
+      }
+      if (!accepted && small) {
+        accepted = small.rgba;
+        for (const sh of small.shrunk) {
+          if (sh.ratio < BAND_SHRINK_MIN) notes.push(`${sh.zh} — 글자가 원문의 ${Math.round(sh.ratio * 100)}% 로 작아졌습니다`);
+        }
+        console.log(`${label} 작은 글자 채택 (원문의 ${Math.round(small.ratio * 100)}%) — 재시도로도 못 키웠다`);
       }
       if (!accepted) {
         lastFail = problem ?? "글자 영역을 다시 그리지 못했습니다";
@@ -3246,7 +3451,7 @@ async function tryBuildGifPatch(
         keptOriginal.push(...inBand.map((b) => `${b.zh} — ${why}`));
         continue;
       }
-      const bandRgba = accepted;
+      const bandRgba = featherBand(accepted, band, inBand, W, H, groups.map((q) => q.band));
       for (let y = 0; y < band.height; y++) {
         const src = y * band.width * 4;
         bandRgba.copy(patchRgba, ((band.top + y) * W + band.left) * 4, src, src + band.width * 4);
@@ -3279,7 +3484,7 @@ async function tryBuildGifPatch(
     const missed = overlayBoxes
       .filter((b) => !keptOriginal.some((k) => k.startsWith(b.zh)))
       .map((b) => `${b.zh} — 움직이는 화면 위`);
-    return { patch: await loadImage(patchPng), overlayBoxes, keptOriginal: [...keptOriginal, ...missed] };
+    return { patch: await loadImage(patchPng), overlayBoxes, keptOriginal: [...keptOriginal, ...missed], notes };
   } catch (e) {
     // 삼키지 않는다 (2026-08-31 실측). 예전엔 여기서 null 로 뭉개서 429·타임아웃·
     // 안전필터 거부가 전부 "GIF 정지 패치 실패"(FAILED)로 굳었다 — 월 한도 초과
@@ -3293,7 +3498,7 @@ async function renderGif(
   data: Buffer,
   boxes: OcrBox[],
   opts: { adminApproved?: boolean } = {},
-): Promise<{ data: Buffer; mime: string; keptOriginal?: string[] }> {
+): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[] }> {
   const meta = await sharp(data, { animated: true }).metadata();
   const pages = meta.pages ?? 1;
   const width = meta.width ?? 0;
@@ -3360,7 +3565,7 @@ async function renderGif(
       : await sharp(keptFrames, { join: { animated: true } })
           .gif({ delay: merged.delays, loop: meta.loop ?? 0 })
           .toBuffer();
-  return { data: out, mime: "image/gif", keptOriginal: patched.keptOriginal };
+  return { data: out, mime: "image/gif", keptOriginal: patched.keptOriginal, notes: patched.notes };
 }
 
 /* ── 정지 이미지: 이미지 모델 재생성 ─────────────────────── */
@@ -3439,9 +3644,17 @@ ${elist}
  * 애초에 통과할 그림을 그리게 지시하는 쪽이 싸다.
  */
 export function bandRegenPrompt(boxes: OcrBox[], band: { width: number; height: number }): string {
+  // 문구마다 글자 높이를 **픽셀로** 적는다. "원문과 같게"라는 말만으로는 모델이
+  // 절반은 어겼다 — 실측(2026-09-02, 띠 22개): 번역이 짧아도 75~82% 로 작아진 띠가
+  // 있었다. 관문(BAND_SHRINK_MIN)이 재는 값을 모델에게도 그대로 준다.
   const list = boxes
     .filter((b) => (b.mode ?? "translate") === "translate" && b.ko.trim())
-    .map((b) => `- "${b.zh}" → "${sanitizeSymbols(b.ko)}"`)
+    .map((b) => {
+      const [y1, x1, y2, x2] = b.box;
+      const vertical = (y2 - y1) * band.height > (x2 - x1) * band.width * 2.5;
+      const px = Math.round(vertical ? ((x2 - x1) / 1000) * band.width : ((y2 - y1) / 1000) * band.height);
+      return `- "${b.zh}" → "${sanitizeSymbols(b.ko)}" (글자 ${vertical ? "폭" : "높이"} 약 ${px}px)`;
+    })
     .join("\n");
   return `이 그림은 상품 상세 이미지에서 **글자 부분만 잘라낸 ${band.width}×${band.height} 픽셀 띠**입니다.
 같은 크기 그대로, 글자만 한국어로 바꾼 띠를 그려 주세요. 결과는 원본 이미지의 그 자리에 그대로 다시 끼워 넣습니다.
@@ -3463,7 +3676,7 @@ ${list}
 
 글자 규칙:
 - 원문과 같은 서체 느낌·크기·굵기·색·정렬로. 그림자·외곽선·밑줄·형광펜 강조 같은 장식도 그대로.
-- **글자 크기는 원문과 같게 유지한다.** 한국어가 조금 길어져도 크기를 줄이지 말고 자간을 좁혀 넣어라. 원문보다 눈에 띄게 작아지면 실패다. 도저히 안 들어갈 때만 아주 조금 줄인다.
+- **글자 크기는 원문과 같게 유지한다.** 위 목록의 "글자 높이 약 Npx"가 결과에서도 그대로여야 한다 — 자동으로 픽셀을 재서 원문의 85% 미만이면 버린다. 한국어가 길어 폭이 모자라면 크기를 줄이지 말고 자간을 좁혀 넣거나 글자 폭을 좁혀(장체) 넣어라. 원문보다 작아지면 실패다.
 - 원문에서 글자 색이 도중에 바뀌면(예: 앞 두 글자는 검정, 뒤는 빨강), 번역문에서는 **단어 경계**에서 바꾼다. 글자 수 비율로 잘라 단어 중간에서 색이 바뀌면 안 된다.
 - 세로로 쓴 글자는 세로로, 가로는 가로로. 쓰는 방향을 바꾸지 말 것.
 - 라틴 문자 브랜드명·모델명·숫자·단위(mm, MIN, MAH, dB 등)는 그대로 둔다.`;
@@ -3486,6 +3699,13 @@ export function bandRetryHint(problem: string): string {
   }
   if (problem.includes("글자 품질")) {
     return `${head}- 글자가 겹쳐 찍히거나 획이 뭉개졌습니다. 각 문구를 정확히 한 번만, 겹침 없이 또렷한 획으로 쓰세요.`;
+  }
+  if (problem.includes("작아졌")) {
+    const m = problem.match(/(\d+)%/);
+    return `${head}- 글자가 원문의 ${m ? m[1] : "?"}% 크기로 작아졌습니다. 글자 높이를 목록에 적힌 픽셀값 그대로 유지하세요. 폭이 모자라면 크기를 줄이지 말고 자간을 좁히거나 글자 폭을 좁혀(장체) 넣으세요.`;
+  }
+  if (problem.includes("문구 누락")) {
+    return `${head}- 있어야 할 문구가 그려지지 않았습니다. 원문을 지운 자리에 위 목록의 한국어를 반드시 써 넣으세요.`;
   }
   return `${head}- ${problem.slice(0, 120)}`;
 }
@@ -4953,7 +5173,7 @@ export async function renderTranslatedImage(
    * 자국이 아예 생기지 않는다(실상품 이미지로 확인).
    */
   opts: { regenerate?: boolean; hint?: string } = {},
-): Promise<{ data: Buffer; mime: string; keptOriginal?: string[] }> {
+): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[] }> {
   // 수동 경로(어드민 문구 수정 재렌더)도 예산 스코프 안에서 돈다 — 지금은 어느
   // 갈래든 호출 1회지만, 그건 REGEN_ATTEMPTS=1 이라는 우연한 상수에 기대는 것이라
   // 루프가 하나만 늘어도 상한이 뚫린다. "장당 이미지 HTTP 1회"를 구조로 못 박는다.
@@ -4966,7 +5186,7 @@ async function renderTranslatedImageInner(
   mime: string,
   boxes: OcrBox[],
   opts: { regenerate?: boolean; hint?: string },
-): Promise<{ data: Buffer; mime: string; keptOriginal?: string[] }> {
+): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[] }> {
   ensureFonts();
   // GIF 는 워터마크 지우기를 하지 않는다 — 프레임마다 로컬 지우개를 돌리면
   // 사진 배경에 얼룩이 프레임 단위로 어른거린다. 정지 이미지부터 확실히.
@@ -5811,6 +6031,7 @@ async function translateImageAutoInner(
   let fullAdopt = false;
   /** GIF 에서 원문을 그대로 둔 문구 — 왜 안 바뀌었는지 운영자에게 알린다 */
   let gifKeptOriginal: string[] = [];
+  let gifNotes: string[] = [];
   try {
     if (resume?.rendered) {
       // 저장된 모델 출력을 그대로 후보로 쓴다 — 이미지 API 호출 0회.
@@ -5822,6 +6043,7 @@ async function translateImageAutoInner(
       const g = await renderGif(data, boxes.filter((b) => !b.wm), { adminApproved: safetyFallback });
       rendered = { data: g.data, mime: g.mime };
       gifKeptOriginal = g.keptOriginal ?? [];
+      gifNotes = g.notes ?? [];
     } else {
       // dropRiskyWm 이 빼는 것 = 이웃 글자와 겹쳐 **지움을 포기한** 워터마크.
       // 최종 관문은 이것만 면책한다 — 지우라고 시킨 워터마크가 남으면 실패다.
@@ -6090,6 +6312,10 @@ async function translateImageAutoInner(
         code: "GIF_KEPT_ORIGINAL",
         detail: gifKeptOriginal.map((z) => z.slice(0, 14)).join(", ").slice(0, 300),
       });
+    }
+    // 채택은 했지만 글자가 작아진 문구 — 「다시 만들기」로 나아질 수 있음을 알린다
+    if (gifNotes.length > 0) {
+      reasons.push({ code: "GIF_SMALL_TEXT", detail: gifNotes.join(", ").slice(0, 300) });
     }
   }
 

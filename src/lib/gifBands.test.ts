@@ -6,7 +6,8 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { gifBandBudgetFor, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
+import { gifBandBudgetFor, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, bandGlyphShrink, compositeBand, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, type OcrBox } from "./imageTranslate";
+import { buildBandQualityPrompt } from "./translateVerify";
 
 const W = 200;
 const H = 200;
@@ -242,6 +243,17 @@ describe("bandRegenPrompt", () => {
     expect(p).toMatch(/자간을 좁혀/);
   });
 
+  it("문구마다 글자 높이를 픽셀로 적는다 — '같게 유지'라는 말만으로는 띠 절반이 작아졌다", () => {
+    // 실측(2026-09-02, exp7~9 산출물 3회분·띠 22개): 번역이 짧아도(「全面覆盖」→4자)
+    // 세 번 다 75~82% 로 작아진 띠가 있었다. 모델이 잴 수 있는 수치를 준다.
+    const q = bandRegenPrompt(
+      [{ box: [200, 100, 600, 900], zh: "强劲伸缩", ko: "강력한 신축", bg: "#fff", fg: "#000" }],
+      { width: 300, height: 100 },
+    );
+    expect(q).toContain("글자 높이 약 40px");
+    expect(q).toMatch(/장체|글자 폭을 좁혀/);
+  });
+
   it("색이 바뀌는 지점을 단어 경계로 지시한다 — 실측: '인체공/학설계' 로 갈렸다", () => {
     expect(p).toMatch(/단어 경계/);
   });
@@ -270,6 +282,13 @@ describe("bandRetryHint", () => {
   it("잔류 실패에는 원문을 지우라고 말한다", () => {
     expect(bandRetryHint("원문 잔류: 强劲伸缩")).toMatch(/원문 획을 완전히 지우고/);
   });
+  it("작아진 실패에는 실측 비율과 함께 높이를 지키고 폭으로 흡수하라고 말한다", () => {
+    const h = bandRetryHint("글자가 작아졌습니다 (원문의 61%)");
+    expect(h).toContain("61%");
+    expect(h).toMatch(/줄이지/);
+    expect(h).toMatch(/장체|자간/);
+  });
+
   it("모르는 사유는 그대로 전달한다 — 삼키지 않는다", () => {
     expect(bandRetryHint("알 수 없는 사유 XYZ")).toContain("알 수 없는 사유 XYZ");
   });
@@ -419,5 +438,87 @@ describe("띠 프롬프트 — 앞으로 들어올 모양 대비", () => {
   it("세로쓰기를 유지하라고 지시한다 — 중국 상세페이지에 흔한 형태", () => {
     // 전체 이미지용 프롬프트에는 있었는데 띠 전용으로 분리하며 빠져 있었다
     expect(p2).toMatch(/세로로 쓴 글자는 세로로/);
+  });
+});
+
+/**
+ * 글자 크기 관문 — 실측(2026-09-02, exp7~9 M18/M19 산출물 3회분 · 띠 22개):
+ * 정상은 원문 높이의 88~135%, 작아진 것은 45~83% 였다. 「全面覆盖」는 번역이
+ * 4자로 짧아도 세 번 다 75~82% 로 작아졌다 — "같게 유지"라는 지시만으로는
+ * 절반이 어긴다(규칙 4). 픽셀로 재서(공짜) 재시도 힌트에 실측값을 싣고,
+ * 그래도 작으면 더 나은 쪽을 채택하되 사유를 남긴다.
+ */
+describe("bandGlyphShrink — 글자가 원문보다 작게 그려졌나 (픽셀, 호출 0회)", () => {
+  const W = 200, H = 120;
+  const band = { left: 40, top: 30, width: 100, height: 50 };
+  const nb = (y0: number, x0: number, y1: number, x1: number): [number, number, number, number] =>
+    [Math.round((y0 / H) * 1000), Math.round((x0 / W) * 1000), Math.round((y1 / H) * 1000), Math.round((x1 / W) * 1000)];
+  /** 균일한 회색 바탕에 검은 막대(가짜 글자)들을 그린 RGBA */
+  const canvas = (bars: { y0: number; y1: number; x0: number; x1: number }[]) => {
+    const a = new Uint8Array(W * H * 4).fill(200);
+    for (let i = 0; i < W * H; i++) a[i * 4 + 3] = 255;
+    for (const b of bars) for (let y = b.y0; y < b.y1; y++) for (let x = b.x0; x < b.x1; x++) {
+      const i = (y * W + x) * 4; a[i] = 20; a[i + 1] = 20; a[i + 2] = 20;
+    }
+    return a;
+  };
+  const target: OcrBox = { box: nb(42, 52, 68, 128), zh: "强震", ko: "강력 진동", bg: "#fff", fg: "#000", solid_bg: true };
+  const origBar = { y0: 45, y1: 65, x0: 55, x1: 125 }; // 20px 높이
+  const smallBar = { y0: 49, y1: 61, x0: 60, x1: 120 }; // 12px 높이 = 60%
+
+  it("같은 크기로 그려지면 비율 1", () => {
+    const r = bandGlyphShrink(canvas([origBar]), canvas([origBar]), W, H, [target], [target], band);
+    expect(r).toHaveLength(1);
+    expect(r[0].zh).toBe("强震");
+    expect(r[0].ratio).toBeCloseTo(1, 1);
+  });
+
+  it("높이가 60% 로 줄면 비율 0.6 — 재시도 사유가 된다", () => {
+    expect(bandGlyphShrink(canvas([origBar]), canvas([smallBar]), W, H, [target], [target], band)[0].ratio).toBeCloseTo(0.6, 1);
+  });
+
+  it("여백에 걸친 이웃 문구의 획은 세지 않는다 — 세면 줄어든 것이 가려진다", () => {
+    const neighbor: OcrBox = { ...target, box: nb(70, 52, 90, 128), zh: "温热" };
+    const nBar = { y0: 72, y1: 88, x0: 55, x1: 125 };
+    const r = bandGlyphShrink(canvas([origBar, nBar]), canvas([smallBar, nBar]), W, H, [target], [target, neighbor], band);
+    expect(r[0].ratio).toBeCloseTo(0.6, 1);
+  });
+
+  it("원문에 잴 글자가 없으면 판정하지 않는다 — 단색 픽스처", () => {
+    expect(bandGlyphShrink(canvas([]), canvas([]), W, H, [target], [target], band)).toEqual([]);
+  });
+
+  it("결과에 글자가 안 보이면 판정하지 않는다 — 글자 유무는 판독 관문의 몫", () => {
+    expect(bandGlyphShrink(canvas([origBar]), canvas([]), W, H, [target], [target], band)).toEqual([]);
+  });
+
+  it("사진 배경(solid_bg=false) 문구는 재지 않는다 — 중앙값 배경이 성립하지 않는다", () => {
+    const photo = { ...target, solid_bg: false };
+    expect(bandGlyphShrink(canvas([origBar]), canvas([smallBar]), W, H, [photo], [photo], band)).toEqual([]);
+  });
+});
+
+describe("compositeBand", () => {
+  it("띠 픽셀을 원본 위 그 자리에 얹는다 — 알파 0 은 원본 그대로, 원본은 안 바뀐다", () => {
+    const W = 10, H = 10;
+    const orig = new Uint8Array(W * H * 4).fill(100);
+    const band = { left: 2, top: 3, width: 4, height: 2 };
+    const p = Buffer.alloc(band.width * band.height * 4);
+    for (let i = 0; i < band.width * band.height; i++) {
+      p[i * 4] = 250; p[i * 4 + 1] = 250; p[i * 4 + 2] = 250; p[i * 4 + 3] = i === 0 ? 0 : 255;
+    }
+    const c = compositeBand(orig, p, band, W, H);
+    expect(c[(3 * W + 2) * 4]).toBe(100); // 알파 0 → 원본
+    expect(c[(3 * W + 3) * 4]).toBe(250);
+    expect(c[(5 * W + 3) * 4]).toBe(100); // 띠 밖
+    expect(orig[(3 * W + 3) * 4]).toBe(100);
+  });
+});
+
+describe("buildBandQualityPrompt — 띠 육안 심사", () => {
+  it("있어야 할 문구가 빠진 것도 hard 다 — 지운 채 비워 둔 띠는 잔류·헛글자 검사를 다 통과한다", () => {
+    const q = buildBandQualityPrompt(["강력한 신축"]);
+    const hard = q.slice(q.indexOf("hard"), q.indexOf("무시할 것"));
+    expect(hard).toMatch(/빠졌|누락|비어/);
   });
 });
