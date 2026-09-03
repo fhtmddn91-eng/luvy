@@ -956,6 +956,98 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     expect(corr).toContain(`최대 ${budget}자`);
   });
 
+  const gifTranscribe = () => [
+    [{ box: BOX, text: "强震深处" }],
+    [{ box: BOX, text: "강렬한 진동" }],
+    [{ box: BOX, text: "강렬한 진동" }],
+  ];
+
+  it("GIF 다시 만들기: 승인된 문구는 재번역하지 않고 그대로 쓴다", { timeout: 30_000 }, async () => {
+    // 실측(2026-09-02 exp10·11): 이 자산은 VERIFIED 문구 "인체공학 설계"를 갖고 있는데 재렌더가
+    // 매번 처음부터 번역해 "인체 마스터"를 만들었고, 다음 실행은 「强震蜜豆」 재번역이 의미
+    // 검수에 걸려 렌더까지 못 갔다(호출 0회). 사람이 승인한 문구가 출발점이어야 한다.
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    mock.translate = [["엉뚱한 번역"]];
+    const r = await translateImageAuto(gif, "image/gif", { phraseMemory: new Map([["强震深处", "강렬한 진동"]]) });
+    expect(textPrompts.filter((p) => p.includes("한국어로 번역하세요"))).toHaveLength(0); // 전부 기억에서
+    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 진동");
+  });
+
+  it("GIF: 기억 문구가 띠 예산을 넘으면 그 문구를 직전 답으로 보여 주며 줄인다 — 새로 짓지 않는다", { timeout: 30_000 }, async () => {
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    mock.translate = [["강렬한 진동"]]; // 줄이기 응답
+    const r = await translateImageAuto(gif, "image/gif", {
+      phraseMemory: new Map([["强震深处", "아주 강렬하고 깊숙한 진동 자극 느낌"]]),
+    });
+    const asks = textPrompts.filter((p) => p.includes("한국어로 번역하세요"));
+    expect(asks).toHaveLength(1);
+    expect(asks[0]).toContain("직전 답");
+    expect(asks[0]).toContain("아주 강렬하고 깊숙한 진동 자극 느낌");
+    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 진동");
+  });
+
+  it("정지 이미지는 기억 문구를 쓰지 않는다 — 정지 이미지 경로는 그대로", async () => {
+    mock = happyMock();
+    await translateImageAuto(ORIG_PNG, "image/png", { phraseMemory: new Map([["强震深处", "강렬한 진동"]]) });
+    const asks = textPrompts.filter((p) => p.includes("한국어로 번역하세요"));
+    expect(asks.length).toBeGreaterThanOrEqual(1);
+    expect(asks[0]).toContain("强震深处");
+  });
+
+  it("GIF 번역 요청문에만 용어집(蜜豆·伸缩)과 '완결된 명사구' 규칙이 실린다", { timeout: 30_000 }, async () => {
+    // 실측(exp11): 「强震蜜豆 伸缩人体」 → "강력 진동과 수축 자극" — 蜜豆(부위)·伸缩(왕복)을 못 옮겨
+    // 의미 검수에 두 번 걸렸다. 정지 이미지 요청문은 건드리지 않는다.
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    await translateImageAuto(gif, "image/gif");
+    const gifAsk = textPrompts.find((p) => p.includes("한국어로 번역하세요"))!;
+    expect(gifAsk).toContain("蜜豆");
+    expect(gifAsk).toContain("완결된 명사구");
+    textPrompts = [];
+    mock = happyMock();
+    await translateImageAuto(ORIG_PNG, "image/png");
+    const stillAsk = textPrompts.find((p) => p.includes("한국어로 번역하세요"))!;
+    expect(stillAsk).not.toContain("蜜豆");
+    expect(stillAsk).not.toContain("완결된 명사구");
+  });
+
+  it("GIF: 교정이 또 실격이면 한 번 더 교정한다(텍스트 호출만) — 렌더 없이 검수함으로 보내는 것보다 싸다", { timeout: 30_000 }, async () => {
+    // 실측(exp11): 1차 오역 → 교정 1회 → 또 실격 → 이미지 호출 0회로 검수함행. 운영자가 손으로
+    // 고쳐 다시 눌러야 했다. 텍스트 호출(≈$0.0001) 한 번이면 대부분 넘어간다.
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    mock.translate = [["살떨리는 초강력 진동"]];
+    mock.correct = [["여전히 살떨리는 진동"], ["강렬한 진동"]];
+    mock.meaning = [[{ ok: false, issues: ["과장: 살떨리는"] }], [{ ok: false, issues: ["여전히 과장"] }], [{ ok: true, issues: [] }]];
+    const r = await translateImageAuto(gif, "image/gif");
+    expect(textPrompts.filter((p) => p.includes("교정 번역을 만드세요"))).toHaveLength(2);
+    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 진동");
+    expect(imageHttp).toBe(1);
+  });
+
+  it("GIF: 패치 밖이 원본과 같음을 픽셀로 확인해 사유에 적는다 — 운영자는 띠 안만 보면 된다", { timeout: 30_000 }, async () => {
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    const r = await translateImageAuto(gif, "image/gif");
+    expect(r.status).toBe("NEEDS_REVIEW");
+    if (r.status === "NEEDS_REVIEW") {
+      const u = r.reasons.find((x) => x.code === "GIF_UNVERIFIED");
+      expect(u?.detail).toMatch(/패치 밖.*원본과 같음/);
+    }
+  });
+
   it("정지 이미지의 줄이기는 그대로다 — 직전 답 되먹임·2차 줄이기는 GIF 전용", async () => {
     mock = happyMock();
     // 정지 이미지 예산 18자. 1차 20자 → 줄이기 1회 14자 → 채택, 2차 없음

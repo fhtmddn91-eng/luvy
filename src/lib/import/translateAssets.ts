@@ -3,6 +3,7 @@ import path from "node:path";
 import { db } from "@/lib/db";
 import { readPublicUpload, saveImageBuffer, deleteUploadIfUnused } from "@/lib/storage";
 import { translateImageAuto, hasHanzi, type TranslateOutcome, type OcrBox } from "@/lib/imageTranslate";
+import { phraseMemoryFrom } from "@/lib/phraseMemory";
 import { retranslateName } from "@/lib/import/translate";
 import { audit } from "@/lib/audit";
 import { sha256Of, lookupTranslationCache, saveTranslationCache } from "@/lib/translateCache";
@@ -111,10 +112,20 @@ export async function runAssetTranslation(
     data: { translateStatus: TRANSLATE_STATUS.TRANSLATING, originalSha256: sha },
   });
 
+  // GIF 는 승인 문구를 출발점으로 쓴다 — 자기 확정 문구 + 같은 상품 VERIFIED 그림의 문구.
+  // 실측(2026-09-02): 재렌더가 매번 처음부터 번역해 승인된 "인체공학 설계"를 "인체 마스터"로 바꿨다.
+  let phraseMemory: Map<string, string> | undefined;
+  if (file.contentType === "image/gif") {
+    const rows = await db.productAsset.findMany({
+      where: { productId: asset.productId },
+      select: { id: true, translateStatus: true, ocrData: true, candidateOcr: true },
+    });
+    phraseMemory = phraseMemoryFrom(rows, asset.id);
+  }
   let outcome: TranslateOutcome;
   try {
     // 국소 폴백은 운영자 승인 재렌더(force)에서만 — 자동 흐름의 1회 원칙 유지
-    outcome = await translateImageAuto(file.data, file.contentType, { safetyFallback: opts.force === true });
+    outcome = await translateImageAuto(file.data, file.contentType, { safetyFallback: opts.force === true, phraseMemory });
   } catch (e) {
     outcome = { status: "FAILED", reason: e instanceof Error ? e.message : String(e) };
   }

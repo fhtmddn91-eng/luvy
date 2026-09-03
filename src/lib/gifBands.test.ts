@@ -6,7 +6,7 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { gifBandBudgetFor, gifCharBudget, keptOriginalDetail, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, bandGlyphShrink, compositeBand, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, staticRoomOf, type OcrBox } from "./imageTranslate";
+import { gifBandBudgetFor, gifCharBudget, keptOriginalDetail, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, bandGlyphShrink, bandGlyphColorShift, compositeBand, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, staticRoomOf, type OcrBox } from "./imageTranslate";
 import { buildBandQualityPrompt } from "./translateVerify";
 
 const W = 200;
@@ -607,5 +607,39 @@ describe("staticRoomOf — 문구 좌우로 넓힐 수 있는 정지 여백", ()
     const moved = new Uint8Array(W * H);
     const r = staticRoomOf(moved, W, H, { x0: 100, y0: 90, x1: 120, y1: 110 }, [], 30);
     expect(r).toEqual({ left: 30, right: 30 });
+  });
+});
+
+describe("bandGlyphColorShift — 글자색이 원본과 달라졌나 (픽셀, 호출 0회)", () => {
+  const W = 200, H = 120;
+  const band = { left: 40, top: 30, width: 100, height: 50 };
+  const nb = (y0: number, x0: number, y1: number, x1: number): [number, number, number, number] =>
+    [Math.round((y0 / H) * 1000), Math.round((x0 / W) * 1000), Math.round((y1 / H) * 1000), Math.round((x1 / W) * 1000)];
+  const canvas = (bars: { y0: number; y1: number; x0: number; x1: number; rgb: [number, number, number] }[]) => {
+    const a = new Uint8Array(W * H * 4).fill(235);
+    for (let i = 0; i < W * H; i++) a[i * 4 + 3] = 255;
+    for (const b of bars) for (let y = b.y0; y < b.y1; y++) for (let x = b.x0; x < b.x1; x++) {
+      const i = (y * W + x) * 4; a[i] = b.rgb[0]; a[i + 1] = b.rgb[1]; a[i + 2] = b.rgb[2];
+    }
+    return a;
+  };
+  const target: OcrBox = { box: nb(42, 52, 68, 128), zh: "强震", ko: "강력 진동", bg: "#fff", fg: "#000", solid_bg: true };
+  const red = { y0: 45, y1: 65, x0: 55, x1: 125, rgb: [210, 30, 30] as [number, number, number] };
+  const black = { ...red, rgb: [20, 20, 20] as [number, number, number] };
+
+  it("빨간 제목이 검정으로 바뀌면 잡는다 — 지금까지는 어떤 관문도 색을 보지 않았다", () => {
+    const r = bandGlyphColorShift(canvas([red]), canvas([black]), W, H, [target], [target], band);
+    expect(r).toHaveLength(1);
+    expect(r[0].zh).toBe("强震");
+    expect(r[0].delta).toBeGreaterThan(100);
+  });
+
+  it("같은 색이면 차이 0 근처", () => {
+    const r = bandGlyphColorShift(canvas([red]), canvas([red]), W, H, [target], [target], band);
+    expect(r[0].delta).toBeLessThan(10);
+  });
+
+  it("글자가 없는 곳은 판정하지 않는다", () => {
+    expect(bandGlyphColorShift(canvas([]), canvas([]), W, H, [target], [target], band)).toEqual([]);
   });
 });

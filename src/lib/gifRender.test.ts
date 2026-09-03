@@ -361,6 +361,14 @@ describe("renderTranslatedImage — GIF", () => {
     expect(files.some((f) => /band1_try1_out\.png$/.test(f))).toBe(true);
   }, 60_000);
 
+  it("패치 밖이 원본과 같은지 프레임마다 재서 돌려준다 — 재부호화 손실은 팔레트 양자화뿐이다", async () => {
+    stubGemini("ok");
+    const out = await renderTranslatedImage(await makeGifWithGlyph(), "image/gif", [topBox]);
+    expect(out.outsideMaxDiff).toBeDefined();
+    expect(out.outsideMaxDiff!).toBeLessThanOrEqual(8);
+    expect(out.outsideChangedFrac!).toBe(0);
+  }, 60_000);
+
   it("모델이 거부하면 거부 사유가 그대로 올라온다 — 재시도 분류가 가능하게", async () => {
     stubGemini("refuse");
     const gif = await makeGif(false);

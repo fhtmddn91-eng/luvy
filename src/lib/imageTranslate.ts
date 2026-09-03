@@ -661,7 +661,9 @@ function translatePrompt(items: string[], opts: TranslateOpts): string {
     preserveMeaning
       ? "\n- **\"최대 N자\"는 상한일 뿐입니다.** 한도 안에서는 뜻을 온전히 담는 쪽을 고르세요. 한도에 여유가 있는데 억지로 더 줄여 원문의 대상·부위·기능을 빼면 실패입니다." +
         // 실측(2026-09-02 exp10): 짧게 쓰라니 뒤가 잘린 꼴("여운이 남는")·숫자 나열("1스틱 2용도")이 나왔다
-        "\n- 짧아도 **그 자체로 완결된 명사구**로 끝맺으세요. 뒤가 잘린 꼴(\"여운이 남는\")이나 숫자 나열(\"1스틱 2용도\")은 실패입니다. 예: 多种频率→\"다양한 진동\", 回味无穷→\"진한 여운\", 一棒两用→\"하나로 두 기능\", 人体进阶→\"인체공학 설계\""
+        "\n- 짧아도 **그 자체로 완결된 명사구**로 끝맺으세요. 뒤가 잘린 꼴(\"여운이 남는\")이나 숫자 나열(\"1스틱 2용도\")은 실패입니다. 예: 静音设计→\"저소음 설계\", 一键启动→\"원터치 시작\", 柔软亲肤→\"부드러운 촉감\"" +
+        // 실측(exp11): 「强震蜜豆 伸缩人体」→"강력 진동과 수축 자극" — 부위·동작 용어를 못 옮겨 의미 검수에 두 번 걸렸다
+        "\n- 부위·동작 용어: 蜜豆→클리(클리토리스), 伸缩→왕복·스트로크, 炮机→피스톤, 后庭→애널, 花心→질 안쪽. 원문에 있는 부위·동작을 빼면 실패입니다."
       : ""
   }
 - 중국어 의성어·의태어를 소리 나는 대로 옮기지 마세요.
@@ -963,6 +965,8 @@ async function translateExtracted(
   data: Buffer,
   mime: string,
   extracted: OcrBox[],
+  /** 승인 문구 기억 — GIF 에서만 쓴다(정지 이미지 경로는 그대로) */
+  phraseMemory?: Map<string, string>,
 ): Promise<{ boxes: OcrBox[]; untranslated: string[]; /** GIF 만 — 문구별 띠 예산 */ budgetByKey?: Map<string, number> }> {
   if (extracted.length === 0) return { boxes: [], untranslated: [] };
 
@@ -990,7 +994,16 @@ async function translateExtracted(
     ? await gifBudgetsFor(data, W, H, solid)
     : solid.map((b) => charBudget(b.box, W, H, [...b.zh].length, false));
 
-  const koList = await translateTexts(solid.map((b) => b.zh), { budgets, preserveMeaning: tight });
+  // 승인 문구가 있으면 그 문구는 번역하지 않는다 — 실측(2026-09-02): 재렌더가 매번 처음부터
+  // 번역해 승인된 "인체공학 설계"를 "인체 마스터"로 바꿨다. 예산을 넘는 기억 문구는
+  // 아래 줄이기 단계가 "직전 답"으로 보여 주며 줄인다 — 새로 짓는 것보다 낫다.
+  const remembered = solid.map((b) => (tight && phraseMemory ? phraseMemory.get(b.zh) ?? null : null));
+  const need = solid.map((_, i) => i).filter((i) => !remembered[i]);
+  const koList: string[] = remembered.map((k) => k ?? "");
+  if (need.length > 0) {
+    const got = await translateTexts(need.map((i) => solid[i].zh), { budgets: need.map((i) => budgets[i]), preserveMeaning: tight });
+    need.forEach((i, j) => { koList[i] = got[j]; });
+  }
 
   // 한자가 남은 항목만 한 번 더 강하게 재번역 (남으면 폰트에서 네모로 깨진다)
   const bad = koList.map((ko, i) => (hasHanzi(ko) ? i : -1)).filter((i) => i >= 0);
@@ -3399,12 +3412,77 @@ export function keptOriginalDetail(list: string[]): string {
     .slice(0, 300);
 }
 
+/**
+ * 글자색이 원문과 얼마나 달라졌나 — 문구마다 원본·합성본의 **글자 픽셀 중앙값 색**을 비교
+ * (채널 최대 차). 지금까지 어떤 관문도 색을 보지 않았다 — 빨간 제목이 검정으로 바뀌어도
+ * 통과했다. 측정 영역·이웃 제외는 bandGlyphShrink 와 같다. 글자가 없으면 판정하지 않는다.
+ */
+export function bandGlyphColorShift(
+  origRaw: Uint8Array,
+  compRaw: Uint8Array,
+  W: number,
+  H: number,
+  targets: OcrBox[],
+  allBoxes: OcrBox[],
+  band: BandRect,
+): { zh: string; delta: number }[] {
+  const px = (b: OcrBox): PxBox => {
+    const [y1, x1, y2, x2] = b.box;
+    return { x0: (x1 / 1000) * W, y0: (y1 / 1000) * H, x1: (x2 / 1000) * W, y1: (y2 / 1000) * H };
+  };
+  const inkColor = (raw: Uint8Array, r: PxBox, exclude: PxBox[]): [number, number, number] | null => {
+    const lum: number[] = [];
+    const px4: number[] = [];
+    for (let y = r.y0; y < r.y1; y++) {
+      for (let x = r.x0; x < r.x1; x++) {
+        if (exclude.some((e) => x >= e.x0 && x < e.x1 && y >= e.y0 && y < e.y1)) continue;
+        const i = (y * W + x) * 4;
+        lum.push(0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2]);
+        px4.push(i);
+      }
+    }
+    if (lum.length === 0) return null;
+    const sorted = [...lum].sort((a, b) => a - b);
+    const med = sorted[sorted.length >> 1];
+    const rs: number[] = [], gs: number[] = [], bs: number[] = [];
+    lum.forEach((v, k) => {
+      if (Math.abs(v - med) > 40) { const i = px4[k]; rs.push(raw[i]); gs.push(raw[i + 1]); bs.push(raw[i + 2]); }
+    });
+    if (rs.length < 4) return null;
+    const mid = (a: number[]) => a.sort((x, y) => x - y)[a.length >> 1];
+    return [mid(rs), mid(gs), mid(bs)];
+  };
+  const out: { zh: string; delta: number }[] = [];
+  for (const b of targets) {
+    if (b.solid_bg === false) continue;
+    const core = px(b);
+    const bh = core.y1 - core.y0;
+    const pad = Math.max(4, Math.min(12, Math.round(bh * 0.35)));
+    const r: PxBox = {
+      x0: Math.max(band.left, Math.floor(core.x0 - pad)),
+      y0: Math.max(band.top, Math.floor(core.y0 - pad)),
+      x1: Math.min(band.left + band.width, Math.ceil(core.x1 + pad)),
+      y1: Math.min(band.top + band.height, Math.ceil(core.y1 + pad)),
+    };
+    if (r.x1 - r.x0 < 4 || r.y1 - r.y0 < 4) continue;
+    const exclude = allBoxes.filter((o) => o !== b).map((o) => { const q = px(o); return { x0: q.x0 - 1, y0: q.y0 - 1, x1: q.x1 + 1, y1: q.y1 + 1 }; });
+    const a = inkColor(origRaw, r, exclude);
+    const c = inkColor(compRaw, r, exclude);
+    if (!a || !c) continue;
+    out.push({ zh: b.zh, delta: Math.max(Math.abs(a[0] - c[0]), Math.abs(a[1] - c[1]), Math.abs(a[2] - c[2])) });
+  }
+  return out;
+}
+
+/** 글자색 차이 허용치(채널 최대 차). 압축·안티앨리어싱은 수 단계, 색이 바뀐 것은 100 이상이다 */
+const BAND_COLOR_MAX = 60;
+
 type GifPatchResult =
   /**
    * keptOriginal: 정지가 아니거나 관문에 걸려 **원문을 그대로 둔** 문구(원문 한자)
    * notes: 채택은 했지만 운영자가 알아야 할 것(글자가 작아짐 등) — 「다시 만들기」 판단 근거
    */
-  | { patch: Image; overlayBoxes: OcrBox[]; keptOriginal: string[]; notes: string[] }
+  | { patch: Image; overlayBoxes: OcrBox[]; keptOriginal: string[]; notes: string[]; bands: BandRect[] }
   | { patch: null; reason: string };
 
 /**
@@ -3601,17 +3679,22 @@ async function tryBuildGifPatch(
         const shrunk = bandGlyphShrink(frame0, compositeBand(frame0, rgba, band, W, H), W, H, inBand, boxes, band);
         const worst = shrunk.reduce((m, s) => Math.min(m, s.ratio), 1);
         const softNotes: string[] = [];
+        const colorBad = bandGlyphColorShift(frame0, compositeBand(frame0, rgba, band, W, H), W, H, inBand, boxes, band)
+          .filter((c) => c.delta > BAND_COLOR_MAX);
         if (worst < BAND_SHRINK_MIN) {
           problem = `글자가 작아졌습니다 (원문의 ${Math.round(worst * 100)}%)`;
           for (const sh of shrunk) {
             if (sh.ratio < BAND_SHRINK_MIN) softNotes.push(`${sh.zh} — 글자가 원문의 ${Math.round(sh.ratio * 100)}% 로 작아졌습니다`);
           }
+        } else if (colorBad.length > 0) {
+          problem = `글자색이 달라졌습니다 (${colorBad.map((c) => `「${c.zh}」 차 ${c.delta}`).join(", ").slice(0, 60)})`;
+          for (const c of colorBad) softNotes.push(`${c.zh} — 글자색이 원본과 달라졌습니다`);
         } else if (verdict.soft) {
           problem = verdict.soft;
         }
         if (problem) {
           // 점수: 작아짐은 크기 비율(<0.85), 문구 차이는 0.85~1 사이 — 문구 차이가 작아짐보다 낫다
-          const score = worst < BAND_SHRINK_MIN ? worst : 0.9;
+          const score = worst < BAND_SHRINK_MIN ? worst : colorBad.length > 0 ? 0.86 : 0.9;
           if (!soft || score > soft.score) soft = { rgba, score, notes: softNotes };
           console.log(`${label} ×${scale} 시도 ${attempt}: ${problem}`);
           continue;
@@ -3666,7 +3749,7 @@ async function tryBuildGifPatch(
     const missed = overlayBoxes
       .filter((b) => !keptOriginal.some((k) => k.startsWith(b.zh)))
       .map((b) => `${b.zh} — 움직이는 화면 위`);
-    return { patch: await loadImage(patchPng), overlayBoxes, keptOriginal: [...keptOriginal, ...missed], notes };
+    return { patch: await loadImage(patchPng), overlayBoxes, keptOriginal: [...keptOriginal, ...missed], notes, bands: groups.map((q) => q.band) };
   } catch (e) {
     // 삼키지 않는다 (2026-08-31 실측). 예전엔 여기서 null 로 뭉개서 429·타임아웃·
     // 안전필터 거부가 전부 "GIF 정지 패치 실패"(FAILED)로 굳었다 — 월 한도 초과
@@ -3680,7 +3763,7 @@ async function renderGif(
   data: Buffer,
   boxes: OcrBox[],
   opts: { adminApproved?: boolean } = {},
-): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[] }> {
+): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[]; outsideMaxDiff?: number; outsideChangedFrac?: number }> {
   const meta = await sharp(data, { animated: true }).metadata();
   const pages = meta.pages ?? 1;
   const width = meta.width ?? 0;
@@ -3745,9 +3828,37 @@ async function renderGif(
     keptFrames.length === 1
       ? await sharp(keptFrames[0]).gif().toBuffer()
       : await sharp(keptFrames, { join: { animated: true } })
-          .gif({ delay: merged.delays, loop: meta.loop ?? 0 })
+          // interPaletteMaxError 0: 프레임마다 색이 다르면 팔레트를 새로 만든다. 기본값(3)은
+          // 앞 프레임 팔레트를 재사용해, 띠의 재표본화 회색이 팔레트를 채운 뒤 다음 프레임의
+          // 고유색이 엉뚱한 항목에 붙었다 — 실측: 프레임 전체(100→78, 160→117)가 어긋났다.
+          .gif({ delay: merged.delays, loop: meta.loop ?? 0, interPaletteMaxError: 0 })
           .toBuffer();
-  return { data: out, mime: "image/gif", keptOriginal: patched.keptOriginal, notes: patched.notes };
+  // 패치 밖이 원본과 같은지 프레임마다 픽셀로 잰다. 실측(2026-09-02): sharp 의 GIF 재부호화는
+  // 원본 프레임에 대해 손실 0 이고, 패치가 색을 보태 256색을 넘는 프레임에서만 양자화가
+  // 몇 픽셀 흩어진다. "증명할 수 없다"던 전제가 틀렸다 — 재서 사유에 적으면 운영자는
+  // 띠 안만 보면 된다.
+  const inBand = new Uint8Array(width * height);
+  for (const b of patched.bands) {
+    for (let y = b.top; y < b.top + b.height; y++) inBand.fill(1, y * width + b.left, y * width + b.left + b.width);
+  }
+  // 실측(M18, 패치 포함 415색): 평균 0.14 · 8 넘게 다른 픽셀 0.09% · 최대 22~47. 최대값은
+  // 양자화가 튄 몇 픽셀이라 "같음"의 기준으로 못 쓴다 — 달라진 픽셀 **비율**로 본다.
+  let outsideMaxDiff = 0;
+  let changed = 0, total = 0;
+  for (let j = 0; j < merged.keep.length; j++) {
+    const o = await sharp(data, { page: merged.keep[j], pages: 1 }).ensureAlpha().raw().toBuffer();
+    const r = await sharp(out, { page: j, pages: 1 }).ensureAlpha().raw().toBuffer();
+    for (let p2 = 0; p2 < width * height; p2++) {
+      if (inBand[p2]) continue;
+      const k = p2 * 4;
+      const d = Math.max(Math.abs(o[k] - r[k]), Math.abs(o[k + 1] - r[k + 1]), Math.abs(o[k + 2] - r[k + 2]));
+      total++;
+      if (d > 8) changed++;
+      if (d > outsideMaxDiff) outsideMaxDiff = d;
+    }
+  }
+  const outsideChangedFrac = total > 0 ? changed / total : 0;
+  return { data: out, mime: "image/gif", keptOriginal: patched.keptOriginal, notes: patched.notes, outsideMaxDiff, outsideChangedFrac };
 }
 
 /* ── 정지 이미지: 이미지 모델 재생성 ─────────────────────── */
@@ -3902,6 +4013,9 @@ export function bandRetryHint(problem: string): string {
   if (problem.includes("작아졌")) {
     const m = problem.match(/(\d+)%/);
     return `${head}- 글자가 원문의 ${m ? m[1] : "?"}% 크기로 작아졌습니다. 글자 높이를 목록에 적힌 픽셀값 그대로 유지하세요. 폭이 모자라면 크기를 줄이지 말고 자간을 좁히거나 글자 폭을 좁혀(장체) 넣으세요.`;
+  }
+  if (problem.includes("글자색")) {
+    return `${head}- 글자 색이 원문과 달라졌습니다. 각 문구의 글자 색(그리고 색이 바뀌는 자리)을 원문과 똑같이 쓰세요.`;
   }
   if (problem.includes("문구 누락")) {
     return `${head}- 있어야 할 문구가 그려지지 않았습니다. 원문을 지운 자리에 위 목록의 한국어를 반드시 써 넣으세요.`;
@@ -5372,7 +5486,7 @@ export async function renderTranslatedImage(
    * 자국이 아예 생기지 않는다(실상품 이미지로 확인).
    */
   opts: { regenerate?: boolean; hint?: string } = {},
-): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[] }> {
+): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[]; outsideMaxDiff?: number; outsideChangedFrac?: number }> {
   // 수동 경로(어드민 문구 수정 재렌더)도 예산 스코프 안에서 돈다 — 지금은 어느
   // 갈래든 호출 1회지만, 그건 REGEN_ATTEMPTS=1 이라는 우연한 상수에 기대는 것이라
   // 루프가 하나만 늘어도 상한이 뚫린다. "장당 이미지 HTTP 1회"를 구조로 못 박는다.
@@ -5385,7 +5499,7 @@ async function renderTranslatedImageInner(
   mime: string,
   boxes: OcrBox[],
   opts: { regenerate?: boolean; hint?: string },
-): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[] }> {
+): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[]; outsideMaxDiff?: number; outsideChangedFrac?: number }> {
   ensureFonts();
   // GIF 는 워터마크 지우기를 하지 않는다 — 프레임마다 로컬 지우개를 돌리면
   // 사진 배경에 얼룩이 프레임 단위로 어른거린다. 정지 이미지부터 확실히.
@@ -5970,9 +6084,13 @@ export async function translateImageAuto(
    * **어드민 승인 재렌더(force)에서만** 켠다 — 띠별 추가 호출(상한 5회)이 들어
    * 자동 흐름의 "이미지 HTTP 최대 1회" 원칙과 함께 둘 수 없다.
    */
-  opts: { safetyFallback?: boolean } = {},
+  opts: {
+    safetyFallback?: boolean;
+    /** 승인 문구 기억(원문 → 확정 번역) — GIF 재렌더·같은 상품 그림의 출발점. phraseMemory.ts */
+    phraseMemory?: Map<string, string>;
+  } = {},
 ): Promise<TranslateOutcome> {
-  return runTranslatePipeline(data, mime, undefined, opts.safetyFallback === true);
+  return runTranslatePipeline(data, mime, undefined, opts.safetyFallback === true, opts.phraseMemory);
 }
 
 /**
@@ -5994,10 +6112,11 @@ async function runTranslatePipeline(
   mime: string,
   resume?: ResumeInput,
   safetyFallback = false,
+  phraseMemory?: Map<string, string>,
 ): Promise<TranslateOutcome> {
   const budget = { left: MAX_IMAGE_CALLS_PER_ASSET, used: 0 };
   try {
-    return await imageBudget.run(budget, () => translateImageAutoInner(data, mime, resume, safetyFallback));
+    return await imageBudget.run(budget, () => translateImageAutoInner(data, mime, resume, safetyFallback, phraseMemory));
   } finally {
     console.log(`[비용] 이미지 HTTP ${budget.used}회 ≈ $${(budget.used * IMAGE_CALL_COST_USD).toFixed(3)} (1K 출력 단가 기준 추정)`);
   }
@@ -6008,6 +6127,7 @@ async function translateImageAutoInner(
   mime: string,
   resume?: ResumeInput,
   safetyFallback = false,
+  phraseMemory?: Map<string, string>,
 ): Promise<TranslateOutcome> {
   ensureFonts();
 
@@ -6052,7 +6172,7 @@ async function translateImageAutoInner(
     boxes = resume.boxes;
   } else {
     try {
-      const t = await translateExtracted(data, mime, merged);
+      const t = await translateExtracted(data, mime, merged, phraseMemory);
       boxes = t.boxes;
       untranslated = t.untranslated;
       gifBudgetByKey = t.budgetByKey ?? null;
@@ -6140,9 +6260,29 @@ async function translateImageAutoInner(
       // 2차 실격"이었다. 각 문구는 여전히 같은 기준으로 최소 1회 검수된다.
       const p2 = failed1.map((f) => f.b);
       const verdicts2 = await verifyMeaning(p2.map((b) => ({ zh: b.zh, ko: b.ko })));
-      const failed2 = p2.map((b, i) => ({ b, v: verdicts2[i] })).filter((x) => blocksRender(x.v));
+      let failed2 = p2.map((b, i) => ({ b, v: verdicts2[i] })).filter((x) => blocksRender(x.v));
+      const hist = new Map(failed1.map((f, i) => [f.b, { ...f.item, correctedKo: corrected[i] }]));
+      // GIF 만 한 번 더 교정한다(텍스트 호출 ≈ $0.0001). 실측(2026-09-02 exp11): 1차 오역 →
+      // 교정 1회 실격 → 이미지 호출 0회로 검수함행. 운영자가 손으로 고쳐 다시 눌러야 했다.
+      // 정지 이미지는 v2.1 설계(교정 1회) 그대로다.
+      if (failed2.length > 0 && mime === "image/gif") {
+        const items2 = failed2.map(({ b, v }) => ({
+          zh: b.zh,
+          firstKo: b.ko,
+          issues: [...(hist.get(b)?.issues ?? []), ...(v?.issues ?? [])],
+          budget: hist.get(b)?.budget ?? charBudget(b.box, W, H, [...b.zh].length),
+        }));
+        const corrected2 = await retranslateWithIssues(items2);
+        const rejects2 = failed2.map((f, i) => correctionRejected(f.b.zh, f.b.ko, corrected2[i]));
+        if (rejects2.every((r) => r === null)) {
+          failed2.forEach((f, i) => {
+            f.b.ko = corrected2[i];
+          });
+          const verdicts3 = await verifyMeaning(failed2.map((f) => ({ zh: f.b.zh, ko: f.b.ko })));
+          failed2 = failed2.map((f, i) => ({ b: f.b, v: verdicts3[i] })).filter((x) => blocksRender(x.v));
+        }
+      }
       if (failed2.length > 0) {
-        const hist = new Map(failed1.map((f, i) => [f.b, { ...f.item, correctedKo: corrected[i] }]));
         return {
           status: "NEEDS_REVIEW",
           data: null,
@@ -6234,6 +6374,8 @@ async function translateImageAutoInner(
   /** GIF 에서 원문을 그대로 둔 문구 — 왜 안 바뀌었는지 운영자에게 알린다 */
   let gifKeptOriginal: string[] = [];
   let gifNotes: string[] = [];
+  let gifOutsideMaxDiff: number | undefined;
+  let gifOutsideChangedFrac: number | undefined;
   try {
     if (resume?.rendered) {
       // 저장된 모델 출력을 그대로 후보로 쓴다 — 이미지 API 호출 0회.
@@ -6246,6 +6388,8 @@ async function translateImageAutoInner(
       rendered = { data: g.data, mime: g.mime };
       gifKeptOriginal = g.keptOriginal ?? [];
       gifNotes = g.notes ?? [];
+      gifOutsideMaxDiff = g.outsideMaxDiff;
+      gifOutsideChangedFrac = g.outsideChangedFrac;
     } else {
       // dropRiskyWm 이 빼는 것 = 이웃 글자와 겹쳐 **지움을 포기한** 워터마크.
       // 최종 관문은 이것만 면책한다 — 지우라고 시킨 워터마크가 남으면 실패다.
@@ -6506,7 +6650,16 @@ async function translateImageAutoInner(
   // GIF 는 재부호화(팔레트 양자화) 때문에 "패치 밖 원본 보존"을 프레임 단위로
   // 픽셀 증명할 수 없다 — 증명 못 하면 자동 VERIFIED 금지, 육안 확인으로 보낸다 (v2.1 보강)
   if (mime === "image/gif") {
-    reasons.push({ code: "GIF_UNVERIFIED", detail: "GIF 재부호화 — 패치 밖 보존을 픽셀로 증명 불가, 육안 확인 필요" });
+    // 패치 밖은 픽셀로 잰다(renderGif). 작으면 운영자는 띠 안(글자)만 보면 된다.
+    // 기준: 8 넘게 달라진 픽셀이 0.5% 이하면 같음(팔레트 양자화 수준 — 실측 0.09%)
+    const pct = gifOutsideChangedFrac === undefined ? undefined : (gifOutsideChangedFrac * 100).toFixed(2);
+    const outside =
+      gifOutsideChangedFrac === undefined
+        ? "패치 밖 보존 미측정"
+        : gifOutsideChangedFrac <= 0.005
+          ? `패치 밖은 원본과 같음(픽셀 확인, 달라진 픽셀 ${pct}%, 최대 차 ${gifOutsideMaxDiff})`
+          : `패치 밖 달라진 픽셀 ${pct}% (최대 차 ${gifOutsideMaxDiff}) — 재부호화 확인 필요`;
+    reasons.push({ code: "GIF_UNVERIFIED", detail: `GIF — ${outside}. 띠 안 글자는 눈으로 확인` });
     // 원문을 그대로 둔 문구는 잔류 검사에도 걸린다 — 그쪽 사유("글자가 깨졌을 수
     // 있습니다")만 보면 운영자가 실패로 오해한다. 의도된 보존임을 따로 밝힌다.
     if (gifKeptOriginal.length > 0) {
@@ -6515,10 +6668,11 @@ async function translateImageAutoInner(
         detail: keptOriginalDetail(gifKeptOriginal),
       });
     }
-    // 채택은 했지만 글자가 작아진 문구 — 「다시 만들기」로 나아질 수 있음을 알린다
-    if (gifNotes.length > 0) {
-      reasons.push({ code: "GIF_SMALL_TEXT", detail: gifNotes.join(", ").slice(0, 300) });
-    }
+    // 채택은 했지만 글자가 작아지거나 색이 달라진 문구 — 「다시 만들기」로 나아질 수 있음을 알린다
+    const small = gifNotes.filter((n) => n.includes("작아졌"));
+    const color = gifNotes.filter((n) => n.includes("글자색"));
+    if (small.length > 0) reasons.push({ code: "GIF_SMALL_TEXT", detail: small.join(", ").slice(0, 300) });
+    if (color.length > 0) reasons.push({ code: "GIF_TEXT_COLOR", detail: color.join(", ").slice(0, 300) });
   }
 
   // 문구별 추적 — 번역 대상인데 상태가 없는 문구가 있으면 조용한 누락이다 (요구 4).

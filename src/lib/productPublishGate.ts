@@ -61,6 +61,7 @@ export type ReviewCode =
   | "GIF_UNVERIFIED" // GIF 재부호화 — 패치 밖 보존을 프레임 단위로 증명 못 함, 육안 확인
   | "GIF_KEPT_ORIGINAL" // 움직이는 화면 위 문구 등 — 의도적으로 원문을 그대로 둠
   | "GIF_SMALL_TEXT" // 띠 글자가 원문보다 작게 그려짐 — 채택은 했지만 「다시 만들기」 후보
+  | "GIF_TEXT_COLOR" // 띠 글자색이 원본과 달라짐 — 채택은 했지만 「다시 만들기」 후보
   | "MANUAL_EDIT" // 운영자 문구 수정 재렌더 — 육안 승인 대기
   | "TIMEOUT" // 이미지 호출 시간 초과
   | "RATE_LIMITED" // 429 (월 지출 한도 포함)
@@ -110,6 +111,7 @@ export const REVIEW_CODE_LABELS: Record<ReviewCode, string> = {
   GIF_UNVERIFIED: "움직이는 이미지(GIF)라 눈으로 확인이 필요합니다",
   GIF_KEPT_ORIGINAL: "일부 문구는 원문 그대로 두었습니다 — 자동으로 깨끗하게 바꿀 수 없는 자리입니다",
   GIF_SMALL_TEXT: "일부 문구의 글자가 원문보다 작게 그려졌습니다 — 「다시 만들기」로 나아질 수 있습니다",
+  GIF_TEXT_COLOR: "일부 문구의 글자색이 원본과 달라졌습니다 — 「다시 만들기」로 나아질 수 있습니다",
   MANUAL_EDIT: "직접 수정한 결과 — 확인 후 승인해주세요",
   TIMEOUT: "시간이 초과됐습니다 — 재시도해주세요",
   RATE_LIMITED: "호출 한도에 걸렸습니다 — 잠시 후 재시도해주세요",
