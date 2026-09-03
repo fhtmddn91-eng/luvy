@@ -6,7 +6,7 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { gifBandBudgetFor, gifCharBudget, keptOriginalDetail, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, bandGlyphShrink, bandGlyphColorShift, compositeBand, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, staticRoomOf, type OcrBox } from "./imageTranslate";
+import { gifBandBudgetFor, gifCharBudget, keptOriginalDetail, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, bandGlyphShrink, bandGlyphColorShift, bandGlyphWeightShift, bandWeightBad, compositeBand, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, staticRoomOf, type OcrBox } from "./imageTranslate";
 import { buildBandQualityPrompt } from "./translateVerify";
 
 const W = 200;
@@ -643,6 +643,17 @@ describe("bandGlyphColorShift — 글자색이 원본과 달라졌나 (픽셀, �
     expect(bandGlyphColorShift(canvas([]), canvas([]), W, H, [target], [target], band)).toEqual([]);
   });
 
+  it("두 색 제목의 한쪽만 바뀌어도 잡는다 — 「인체공학 설계」처럼 앞은 검정·뒤는 빨강", () => {
+    const blk: [number, number, number] = [20, 20, 20];
+    const twoTone = canvas([
+      { y0: 45, y1: 65, x0: 55, x1: 90, rgb: blk },
+      { y0: 45, y1: 65, x0: 90, x1: 125, rgb: [210, 30, 30] },
+    ]);
+    const allBlack = canvas([{ y0: 45, y1: 65, x0: 55, x1: 125, rgb: blk }]);
+    const r = bandGlyphColorShift(twoTone, allBlack, W, H, [target], [target], band);
+    expect(r[0].delta).toBeGreaterThan(100);
+  });
+
   it("가는 글자의 안티앨리어싱 번짐은 색 변화가 아니다 — 획 중심색으로 비교한다", () => {
     // 실측(exp12): 회갈색 가는 부제를 모델이 같은 색·굵은 획으로 그렸는데 중앙값 비교가 차 89 로
     // 잡아 재시도 1회(≈$0.067)를 헛되이 썼다. 원본 획은 번짐 픽셀이 많아 중앙값이 옅다.
@@ -656,5 +667,42 @@ describe("bandGlyphColorShift — 글자색이 원본과 달라졌나 (픽셀, �
     const thick = canvas([{ y0: 45, y1: 65, x0: 55, x1: 125, rgb: core }]);
     const r = bandGlyphColorShift(thin, thick, W, H, [target], [target], band);
     expect(r[0].delta).toBeLessThan(30);
+  });
+});
+
+describe("bandGlyphWeightShift — 획 굵기가 원문과 달라졌나 (픽셀, 호출 0회)", () => {
+  const W = 200, H = 120;
+  const band = { left: 40, top: 30, width: 100, height: 50 };
+  const nb = (y0: number, x0: number, y1: number, x1: number): [number, number, number, number] =>
+    [Math.round((y0 / H) * 1000), Math.round((x0 / W) * 1000), Math.round((y1 / H) * 1000), Math.round((x1 / W) * 1000)];
+  /** 세로 줄무늬 글자: 획 폭 stroke, 간격 12 */
+  const stripes = (stroke: number) => {
+    const a = new Uint8Array(W * H * 4).fill(230);
+    for (let i = 0; i < W * H; i++) a[i * 4 + 3] = 255;
+    for (let y = 45; y < 65; y++) for (let x = 55; x < 125; x++) {
+      if ((x - 55) % 12 < stroke) { const i = (y * W + x) * 4; a[i] = a[i + 1] = a[i + 2] = 20; }
+    }
+    return a;
+  };
+  const target: OcrBox = { box: nb(42, 52, 68, 128), zh: "强震", ko: "강력 진동", bg: "#fff", fg: "#000", solid_bg: true };
+
+  it("획이 두 배로 굵어지면 비율 ≈ 2", () => {
+    const r = bandGlyphWeightShift(stripes(3), stripes(6), W, H, [target], [target], band);
+    expect(r).toHaveLength(1);
+    expect(r[0].ratio).toBeGreaterThan(1.6);
+  });
+  it("같은 굵기면 비율 ≈ 1", () => {
+    expect(bandGlyphWeightShift(stripes(3), stripes(3), W, H, [target], [target], band)[0].ratio).toBeCloseTo(1, 1);
+  });
+  it("글자가 없으면 판정하지 않는다", () => {
+    expect(bandGlyphWeightShift(stripes(0), stripes(0), W, H, [target], [target], band)).toEqual([]);
+  });
+
+  it("가는 글자의 한 픽셀 차이(2→3px)는 굵기 변화가 아니다 — 재생 검증에서 띠 4개가 전부 ×1.5 로 오탐됐다", () => {
+    const r = bandGlyphWeightShift(stripes(2), stripes(3), W, H, [target], [target], band)[0];
+    expect(r.ratio).toBeCloseTo(1.5, 1);
+    expect(bandWeightBad(r)).toBe(false);
+    expect(bandWeightBad({ ratio: 2, delta: 3 })).toBe(true);
+    expect(bandWeightBad({ ratio: 0.5, delta: -5 })).toBe(true);
   });
 });

@@ -63,6 +63,7 @@ export type ReviewCode =
   | "GIF_SMALL_TEXT" // 띠 글자가 원문보다 작게 그려짐 — 채택은 했지만 「다시 만들기」 후보
   | "GIF_TEXT_COLOR" // 띠 글자색이 원본과 달라짐 — 채택은 했지만 「다시 만들기」 후보
   | "GIF_LOCAL_TEXT" // 단색 배경 자리를 직접 그림(서체 변경) — 육안 승인
+  | "GIF_TEXT_WEIGHT" // 띠 글자 굵기가 원본과 달라짐 — 채택은 했지만 「다시 만들기」 후보
   | "MANUAL_EDIT" // 운영자 문구 수정 재렌더 — 육안 승인 대기
   | "TIMEOUT" // 이미지 호출 시간 초과
   | "RATE_LIMITED" // 429 (월 지출 한도 포함)
@@ -114,6 +115,7 @@ export const REVIEW_CODE_LABELS: Record<ReviewCode, string> = {
   GIF_SMALL_TEXT: "일부 문구의 글자가 원문보다 작게 그려졌습니다 — 「다시 만들기」로 나아질 수 있습니다",
   GIF_TEXT_COLOR: "일부 문구의 글자색이 원본과 달라졌습니다 — 「다시 만들기」로 나아질 수 있습니다",
   GIF_LOCAL_TEXT: "일부 문구는 배경이 단색이라 직접 그렸습니다(서체 변경) — 확인 후 승인해주세요",
+  GIF_TEXT_WEIGHT: "일부 문구의 글자 굵기가 원본과 달라졌습니다 — 「다시 만들기」로 나아질 수 있습니다",
   MANUAL_EDIT: "직접 수정한 결과 — 확인 후 승인해주세요",
   TIMEOUT: "시간이 초과됐습니다 — 재시도해주세요",
   RATE_LIMITED: "호출 한도에 걸렸습니다 — 잠시 후 재시도해주세요",

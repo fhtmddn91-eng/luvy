@@ -92,7 +92,8 @@ const BOX_BAND0 = [Math.round(((BOX[0] / 1000) * H) / (0.45 * H) * 1000), BOX[1]
 interface Mock {
   /** OCR(추출) 호출이 올 때마다 순서대로 꺼내 쓴다 — 다 떨어지면 마지막 값 반복 */
   ocr: unknown[][];
-  translate: string[][];
+  /** 번역 응답 — 항목이 문자열이면 답 1개, 배열이면 후보 여러 개(GIF 처음 보는 문구) */
+  translate: (string | string[])[][];
   /** 교정 재번역(검수 지적 되먹임) — 배치 1회 호출 */
   correct: string[][];
   /** hard 가 있으면 렌더 전 차단, soft(issues 만)면 렌더 진입 */
@@ -107,6 +108,8 @@ interface Mock {
    * "shrink" = 보낸 그림에서 어두운 행(글자)의 위아래 1/4 씩을 지워 돌려준다 = 글자 높이 50%
    */
   image: (Json | { status: number } | "hang" | "echo" | "shrink")[];
+  /** 후보 3개 심사(GIF) — 항목별로 고른 후보 번호 */
+  judge: number[][];
 }
 let mock: Mock;
 let imageHttp = 0;
@@ -185,6 +188,7 @@ beforeEach(() => {
     let payload: Json;
     if (prompt.includes("모두 찾아주세요")) payload = textResp(take(mock.ocr));
     else if (prompt.includes("교정 번역을 만드세요")) payload = textResp(take(mock.correct));
+    else if (prompt.includes("가장 알맞은 후보의 번호")) payload = textResp(take(mock.judge));
     else if (prompt.includes("한국어로 번역하세요")) payload = textResp(take(mock.translate));
     else if (prompt.includes("실제로 읽어온 한국어입니다")) payload = textResp(take(mock.renderedMeaning));
     else if (prompt.includes("각 쌍을 심사하세요")) payload = textResp(take(mock.meaning));
@@ -215,6 +219,7 @@ function happyMock(): Mock {
       [],
     ],
     translate: [["강렬한 진동"]],
+    judge: [[0]],
     correct: [[]],
     meaning: [[{ ok: true, issues: [] }]],
     renderedMeaning: [[{ ok: true, issues: [] }]],
@@ -1086,6 +1091,58 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
       expect(r.reasons.find((x) => x.code === "GIF_LOCAL_TEXT")?.detail).toContain("强震深处");
       expect(r.data).not.toBeNull();
     }
+  });
+
+  it("GIF 재렌더: 저장된 판독 좌표(knownBoxes)를 주면 판독을 다시 하지 않는다 — 같은 GIF 는 항상 같은 띠", { timeout: 30_000 }, async () => {
+    // 실측(exp10 vs exp12): 판독 좌표가 실행마다 몇 px 달라 「回弹设计」 띠가 생겼다 안 생겼다 했다.
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    // 기준: 저장 좌표 없이 한 번 — 렌더 전 교차 판독(전체+띠) + 완성본 관문 판독
+    await translateImageAuto(gif, "image/gif");
+    const baseline = textPrompts.filter((p) => p.includes("모두 찾아주세요")).length;
+    textPrompts = [];
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    const known = [{ box: BOX, zh: "强震深处", ko: "예전 후보", bg: "#ffffff", fg: "#000000", bold: true, solid_bg: true }];
+    const r = await translateImageAuto(gif, "image/gif", { knownBoxes: known });
+    const ocrCalls = textPrompts.filter((p) => p.includes("모두 찾아주세요")).length;
+    expect(ocrCalls).toBeLessThan(baseline); // 렌더 전 판독이 사라졌다(완성본 관문 판독만 남는다)
+    expect(ocrCalls).toBe(baseline - 4);
+    expect("boxes" in r && r.boxes[0]?.zh).toBe("强震深处");
+    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 진동"); // 문구는 새로(기억 없음) — 좌표만 재사용
+  });
+
+  it("정지 이미지는 knownBoxes 를 무시한다 — 정지 이미지 경로는 그대로", async () => {
+    mock = happyMock();
+    await translateImageAuto(ORIG_PNG, "image/png", { knownBoxes: [{ box: BOX, zh: "强震深处", ko: "", bg: "#fff", fg: "#000" }] });
+    expect(textPrompts.filter((p) => p.includes("모두 찾아주세요")).length).toBeGreaterThan(0);
+  });
+
+  it("GIF: 처음 보는 문구는 후보 3개를 받아 심사로 고른다 — 한 번에 하나만 받으면 어색한 답이 그대로 간다", { timeout: 30_000 }, async () => {
+    // 실측(exp12): 처음 보는 문구 8개 중 3개가 어색했다("1스틱 2기능", "클리진동 체형왕복").
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    mock.translate = [[["강진 심부", "강렬한 진동", "깊은 곳 강진"]]];
+    mock.judge = [[1]];
+    const r = await translateImageAuto(gif, "image/gif");
+    const ask = textPrompts.find((p) => p.includes("한국어로 번역하세요"))!;
+    expect(ask).toContain("후보 3개");
+    const judge = textPrompts.find((p) => p.includes("가장 알맞은 후보의 번호"))!;
+    expect(judge).toContain("강진 심부");
+    expect(judge).toContain("강렬한 진동");
+    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 진동");
+  });
+
+  it("정지 이미지 번역 요청문은 후보 3개를 묻지 않는다", async () => {
+    mock = happyMock();
+    await translateImageAuto(ORIG_PNG, "image/png");
+    const ask = textPrompts.find((p) => p.includes("한국어로 번역하세요"))!;
+    expect(ask).not.toContain("후보 3개");
   });
 
   it("정지 이미지의 줄이기는 그대로다 — 직전 답 되먹임·2차 줄이기는 GIF 전용", async () => {

@@ -950,3 +950,24 @@ export function matchExpectedSegments(
   }
   return { ok: true, seen: seen.join(" ") };
 }
+
+/**
+ * 번역 후보 3개 중 고르기(GIF 처음 보는 문구) — 텍스트 호출 1회.
+ * 실측(2026-09-02 exp12): 한 번에 하나만 받으면 8개 중 3개가 어색했다("1스틱 2기능",
+ * "클리진동 체형왕복"). 후보를 받아 심사로 고르면 그런 답이 뽑힐 확률이 준다.
+ */
+export function buildCandidateJudgePrompt(items: { zh: string; candidates: string[]; budget: number }[]): string {
+  const list = items
+    .map((it, i) => `${i + 1}. 원문 "${it.zh}" (최대 ${it.budget}자)\n${it.candidates.map((c, j) => `   [${j}] ${c}`).join("\n")}`)
+    .join("\n");
+  return `중국 상품 상세페이지 문구의 한국어 번역 후보들입니다. 항목마다 **가장 알맞은 후보의 번호**(0부터)를 고르세요.
+
+기준 (위가 우선):
+1. 원문의 대상·부위·기능·숫자를 빠짐없이 담은 것
+2. 한국 성인용품 도매몰 상세페이지 카피처럼 자연스러운 것 — 뒤가 잘린 꼴("여운이 남는"), 숫자 나열("1스틱 2기능"), 한자어 직역은 탈락
+3. "최대 N자"(공백 포함) 안에 드는 것. 전부 넘으면 가장 짧은 것
+
+${list}
+
+입력과 같은 개수, 같은 순서의 번호 배열만 출력: [1, 0, 2]`;
+}

@@ -14,33 +14,59 @@ import { hasHanzi, type OcrBox } from "./imageTranslate";
  * 후보(candidateOcr)·검수 대기 문구는 승인이 아니므로 쓰지 않는다.
  */
 export function phraseMemoryFrom(
-  rows: { id: string; translateStatus: string | null; ocrData: string | null; candidateOcr: string | null }[],
+  rows: { id: string; productId?: string; translateStatus: string | null; ocrData: string | null; candidateOcr: string | null }[],
   selfId: string,
+  opts: { productId?: string } = {},
 ): Map<string, string> {
   const out = new Map<string, string>();
-  const add = (json: string | null) => {
-    if (!json) return;
+  const parse = (json: string | null): { zh: string; ko: string }[] => {
+    if (!json) return [];
     let boxes: unknown;
     try {
       boxes = JSON.parse(json);
     } catch {
-      return;
+      return [];
     }
-    if (!Array.isArray(boxes)) return;
+    if (!Array.isArray(boxes)) return [];
+    const pairs: { zh: string; ko: string }[] = [];
     for (const raw of boxes as Partial<OcrBox>[]) {
       const zh = typeof raw.zh === "string" ? raw.zh.trim() : "";
       const ko = typeof raw.ko === "string" ? raw.ko.trim() : "";
       if (!zh || !ko) continue;
       if ((raw.mode ?? "translate") !== "translate") continue; // keep·erase 는 번역이 아니다
       if (ko === zh || hasHanzi(ko)) continue; // 에코·한자 잔존은 승인 문구가 아니다
-      if (!out.has(zh)) out.set(zh, ko);
+      pairs.push({ zh, ko });
     }
+    return pairs;
   };
+  const addFirst = (json: string | null) => {
+    for (const { zh, ko } of parse(json)) if (!out.has(zh)) out.set(zh, ko);
+  };
+  // ① 자기 확정 문구 ② 같은 상품의 VERIFIED 문구
   const self = rows.find((r) => r.id === selfId);
-  add(self?.ocrData ?? null);
+  addFirst(self?.ocrData ?? null);
   for (const r of rows) {
     if (r.id === selfId || r.translateStatus !== "VERIFIED") continue;
-    add(r.ocrData);
+    if (opts.productId !== undefined && r.productId !== opts.productId) continue;
+    addFirst(r.ocrData);
+  }
+  // ③ 카탈로그 전체 — 상품끼리 번역이 갈리면 더 많이 승인된 쪽. 「防水设计」「智能加温」 같은
+  //    문구는 공급처가 달라도 같다(운영 DB: 같은 상품 안 반복 14%, 상품 간은 그 이상).
+  const votes = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    if (r.id === selfId || r.translateStatus !== "VERIFIED") continue;
+    if (opts.productId !== undefined && r.productId === opts.productId) continue;
+    for (const { zh, ko } of parse(r.ocrData)) {
+      if (out.has(zh)) continue;
+      const v = votes.get(zh) ?? new Map<string, number>();
+      v.set(ko, (v.get(ko) ?? 0) + 1);
+      votes.set(zh, v);
+    }
+  }
+  for (const [zh, v] of votes) {
+    let best = "", n = 0;
+    for (const [ko, c] of v) if (c > n) { best = ko; n = c; }
+    if (best) out.set(zh, best);
   }
   return out;
 }

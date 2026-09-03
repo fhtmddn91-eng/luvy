@@ -6,8 +6,9 @@
 import { describe, it, expect } from "vitest";
 import { phraseMemoryFrom } from "./phraseMemory";
 
-const row = (id: string, status: string | null, boxes: unknown[] | null, candidate: unknown[] | null = null) => ({
+const row = (id: string, status: string | null, boxes: unknown[] | null, candidate: unknown[] | null = null, productId = "P1") => ({
   id,
+  productId,
   translateStatus: status,
   ocrData: boxes ? JSON.stringify(boxes) : null,
   candidateOcr: candidate ? JSON.stringify(candidate) : null,
@@ -55,5 +56,42 @@ describe("phraseMemoryFrom", () => {
   it("깨진 JSON 은 건너뛴다", () => {
     const m = phraseMemoryFrom([{ id: "x", translateStatus: "VERIFIED", ocrData: "{not json", candidateOcr: null }], "me");
     expect(m.size).toBe(0);
+  });
+});
+
+describe("phraseMemoryFrom — 카탈로그 전체", () => {
+  // 운영 DB 조사(2026-09-02): 같은 상품 안 반복 문구 14%. 「防水设计」「智能加温」 같은 문구는
+  // 공급처가 달라도 같다 — 한 번 승인하면 카탈로그 전체가 그 문구를 써야 한다.
+  it("우선순위: 자기 문구 → 같은 상품 → 다른 상품(VERIFIED 만)", () => {
+    const m = phraseMemoryFrom(
+      [
+        row("me", "VERIFIED", [{ zh: "A", ko: "자기", box: [0, 0, 1, 1] }], null, "P1"),
+        row("s1", "VERIFIED", [{ zh: "A", ko: "같은상품", box: [0, 0, 1, 1] }, { zh: "B", ko: "같은상품B", box: [0, 0, 1, 1] }], null, "P1"),
+        row("o1", "VERIFIED", [{ zh: "A", ko: "다른상품", box: [0, 0, 1, 1] }, { zh: "B", ko: "다른상품B", box: [0, 0, 1, 1] }, { zh: "C", ko: "다른상품C", box: [0, 0, 1, 1] }], null, "P2"),
+      ],
+      "me",
+      { productId: "P1" },
+    );
+    expect(m.get("A")).toBe("자기");
+    expect(m.get("B")).toBe("같은상품B");
+    expect(m.get("C")).toBe("다른상품C");
+  });
+
+  it("다른 상품끼리 번역이 갈리면 더 많이 승인된 쪽", () => {
+    const m = phraseMemoryFrom(
+      [
+        row("o2", "VERIFIED", [{ zh: "防水设计", ko: "생활 방수", box: [0, 0, 1, 1] }], null, "P3"),
+        row("o1", "VERIFIED", [{ zh: "防水设计", ko: "방수 설계", box: [0, 0, 1, 1] }], null, "P2"),
+        row("o3", "VERIFIED", [{ zh: "防水设计", ko: "방수 설계", box: [0, 0, 1, 1] }], null, "P4"),
+      ],
+      "me",
+      { productId: "P1" },
+    );
+    expect(m.get("防水设计")).toBe("방수 설계");
+  });
+
+  it("다른 상품의 검수 대기 문구는 쓰지 않는다", () => {
+    const m = phraseMemoryFrom([row("o1", "NEEDS_REVIEW", [{ zh: "A", ko: "대기", box: [0, 0, 1, 1] }], null, "P2")], "me", { productId: "P1" });
+    expect(m.has("A")).toBe(false);
   });
 });

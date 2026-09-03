@@ -107,25 +107,40 @@ export async function runAssetTranslation(
     return { result: hit.status === TRANSLATE_STATUS.RETRYABLE ? "retryable" : "review", message: "이미 판정된 그림(캐시) — 운영자 승인 시에만 재실행" };
   }
 
+  // GIF 는 (1) 승인 문구를 출발점으로 쓴다 — 자기 확정 문구 → 같은 상품 → 카탈로그 전체의
+  // VERIFIED 문구(실측: 재렌더가 매번 처음부터 번역해 승인된 "인체공학 설계"를 "인체 마스터"로
+  // 바꿨다). (2) 같은 원본(해시 동일)을 다시 돌릴 때는 저장된 판독 좌표를 재사용한다 —
+  // 판독은 실행마다 몇 px 씩 달라 같은 GIF 도 띠가 생겼다 안 생겼다 했다(exp10 vs exp12).
+  // TRANSLATING 갱신 **전에** 읽어야 직전 실행의 해시와 비교할 수 있다.
+  let phraseMemory: Map<string, string> | undefined;
+  let knownBoxes: OcrBox[] | undefined;
+  if (file.contentType === "image/gif") {
+    const rows = await db.productAsset.findMany({
+      where: { OR: [{ productId: asset.productId }, { translateStatus: TRANSLATE_STATUS.VERIFIED, NOT: { ocrData: null } }] },
+      select: { id: true, productId: true, translateStatus: true, ocrData: true, candidateOcr: true, originalSha256: true },
+    });
+    phraseMemory = phraseMemoryFrom(rows, asset.id, { productId: asset.productId });
+    const self = rows.find((r) => r.id === asset.id);
+    const stored = self?.ocrData ?? self?.candidateOcr ?? null;
+    if (self && self.originalSha256 === sha && stored) {
+      try {
+        const parsed = JSON.parse(stored) as OcrBox[];
+        if (Array.isArray(parsed) && parsed.length > 0) knownBoxes = parsed;
+      } catch {
+        /* 깨진 저장본은 무시 — 판독을 새로 한다 */
+      }
+    }
+  }
+
   await db.productAsset.update({
     where: { id: asset.id },
     data: { translateStatus: TRANSLATE_STATUS.TRANSLATING, originalSha256: sha },
   });
 
-  // GIF 는 승인 문구를 출발점으로 쓴다 — 자기 확정 문구 + 같은 상품 VERIFIED 그림의 문구.
-  // 실측(2026-09-02): 재렌더가 매번 처음부터 번역해 승인된 "인체공학 설계"를 "인체 마스터"로 바꿨다.
-  let phraseMemory: Map<string, string> | undefined;
-  if (file.contentType === "image/gif") {
-    const rows = await db.productAsset.findMany({
-      where: { productId: asset.productId },
-      select: { id: true, translateStatus: true, ocrData: true, candidateOcr: true },
-    });
-    phraseMemory = phraseMemoryFrom(rows, asset.id);
-  }
   let outcome: TranslateOutcome;
   try {
     // 국소 폴백은 운영자 승인 재렌더(force)에서만 — 자동 흐름의 1회 원칙 유지
-    outcome = await translateImageAuto(file.data, file.contentType, { safetyFallback: opts.force === true, phraseMemory });
+    outcome = await translateImageAuto(file.data, file.contentType, { safetyFallback: opts.force === true, phraseMemory, knownBoxes });
   } catch (e) {
     outcome = { status: "FAILED", reason: e instanceof Error ? e.message : String(e) };
   }

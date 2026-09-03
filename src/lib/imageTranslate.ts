@@ -32,6 +32,7 @@ import {
   forCompareText,
   buildProductIntegrityPrompt,
   buildBandQualityPrompt,
+  buildCandidateJudgePrompt,
   type CorrectionItem,
   type PreservedItem,
   type TextLikeRegion,
@@ -634,10 +635,12 @@ interface TranslateOpts {
    * 원문의 52% 로 작아졌다. 몇 자를 깎아야 하는지 알려 줘야 깎는다.
    */
   previous?: string[];
+  /** 항목마다 서로 다른 후보 N개를 받는다(GIF 처음 보는 문구) — 심사로 고른다 */
+  candidates?: number;
 }
 
 function translatePrompt(items: string[], opts: TranslateOpts): string {
-  const { budgets, strict, shorten, preserveMeaning, previous } = opts;
+  const { budgets, strict, shorten, preserveMeaning, previous, candidates } = opts;
   const list = budgets
     ? items
         .map((t, i) => {
@@ -682,10 +685,68 @@ function translatePrompt(items: string[], opts: TranslateOpts): string {
     strict ? "\n- 이전 답에 한자가 남아 있었습니다. 이번에는 반드시 순수 한글+숫자+영문만 사용하세요." : ""
   }
 - 과장·의학적 효능 표현 금지
-- 입력과 같은 개수, 같은 순서의 JSON 문자열 배열만 출력
+${
+    candidates && candidates > 1
+      ? `- 항목마다 **서로 다른 후보 ${candidates}개**를 만드세요(표현·길이를 달리). 출력은 입력과 같은 개수, 같은 순서의 배열이고, 각 항목은 후보 ${candidates}개의 문자열 배열입니다: [["후보1","후보2","후보3"], ...]`
+      : "- 입력과 같은 개수, 같은 순서의 JSON 문자열 배열만 출력"
+  }
 
 입력 (${items.length}개):
 ${list}`;
+}
+
+/** 항목마다 후보 여러 개 — 응답이 문자열이면 후보 1개로 받는다 */
+async function translateCandidates(items: string[], opts: TranslateOpts & { candidates: number }): Promise<string[][]> {
+  const parts = await callGemini(MODEL, [{ text: translatePrompt(items, opts) }], {
+    maxOutputTokens: 4000,
+    responseMimeType: "application/json",
+    thinkingConfig: { thinkingLevel: "minimal" },
+  });
+  const raw = jsonArrayOf(parts);
+  if (!Array.isArray(raw) || raw.length !== items.length) {
+    throw new Error(`번역 결과 개수 불일치 (${items.length} → ${Array.isArray(raw) ? raw.length : "?"})`);
+  }
+  return raw.map((it) =>
+    (Array.isArray(it) ? it : [it]).map((s) => String(s ?? "").trim().slice(0, 200)).filter((s) => s.length > 0),
+  );
+}
+
+/**
+ * 후보 중 고르기 — 쓸 수 없는 것(빈 답·한자·에코)을 빼고, 하나만 남으면 그것, 여럿이면
+ * 텍스트 심사 1회로 번호를 받는다. 심사가 깨지면 예산 안에서 가장 긴 것(뜻이 덜 깎인 쪽).
+ */
+async function pickCandidates(
+  items: { zh: string; budget: number }[],
+  cands: string[][],
+): Promise<string[]> {
+  const usable = cands.map((cs, i) => cs.filter((c) => c && c !== items[i].zh && !hasHanzi(c)));
+  const fallback = (i: number): string => {
+    const cs = usable[i];
+    if (cs.length === 0) return cands[i][0] ?? "";
+    const fit = cs.filter((c) => [...c].length <= items[i].budget);
+    const pool = fit.length > 0 ? fit : cs;
+    return pool.reduce((a, b) => ([...b].length > [...a].length ? b : a));
+  };
+  const needJudge = usable.map((cs, i) => ({ cs, i })).filter(({ cs }) => cs.length > 1);
+  const picked = items.map((_, i) => fallback(i));
+  if (needJudge.length === 0) return picked;
+  try {
+    const parts = await callGemini(
+      MODEL,
+      [{ text: buildCandidateJudgePrompt(needJudge.map(({ cs, i }) => ({ zh: items[i].zh, candidates: cs, budget: items[i].budget }))) }],
+      { maxOutputTokens: 400, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "minimal" } },
+    );
+    const raw = jsonArrayOf(parts);
+    if (Array.isArray(raw) && raw.length === needJudge.length) {
+      needJudge.forEach(({ cs, i }, j) => {
+        const k = Number(raw[j]);
+        if (Number.isInteger(k) && k >= 0 && k < cs.length) picked[i] = cs[k];
+      });
+    }
+  } catch {
+    /* 심사 실패는 치명적이지 않다 — fallback 값 유지 */
+  }
+  return picked;
 }
 
 async function translateTexts(items: string[], opts: TranslateOpts = {}): Promise<string[]> {
@@ -1009,8 +1070,15 @@ async function translateExtracted(
   const need = solid.map((_, i) => i).filter((i) => !remembered[i]);
   const koList: string[] = remembered.map((k) => k ?? "");
   if (need.length > 0) {
-    const got = await translateTexts(need.map((i) => solid[i].zh), { budgets: need.map((i) => budgets[i]), preserveMeaning: tight });
-    need.forEach((i, j) => { koList[i] = got[j]; });
+    if (tight) {
+      // 처음 보는 문구는 후보 3개를 받아 심사로 고른다 — 실측(exp12): 하나만 받으면 8개 중 3개가 어색했다
+      const cands = await translateCandidates(need.map((i) => solid[i].zh), { budgets: need.map((i) => budgets[i]), preserveMeaning: true, candidates: 3 });
+      const got = await pickCandidates(need.map((i) => ({ zh: solid[i].zh, budget: budgets[i] })), cands);
+      need.forEach((i, j) => { koList[i] = got[j]; });
+    } else {
+      const got = await translateTexts(need.map((i) => solid[i].zh), { budgets: need.map((i) => budgets[i]) });
+      need.forEach((i, j) => { koList[i] = got[j]; });
+    }
   }
 
   // 한자가 남은 항목만 한 번 더 강하게 재번역 (남으면 폰트에서 네모로 깨진다)
@@ -3487,16 +3555,100 @@ export function bandGlyphColorShift(
     };
     if (r.x1 - r.x0 < 4 || r.y1 - r.y0 < 4) continue;
     const exclude = allBoxes.filter((o) => o !== b).map((o) => { const q = px(o); return { x0: q.x0 - 1, y0: q.y0 - 1, x1: q.x1 + 1, y1: q.y1 + 1 }; });
-    const a = inkColor(origRaw, r, exclude);
-    const c = inkColor(compRaw, r, exclude);
-    if (!a || !c) continue;
-    out.push({ zh: b.zh, delta: Math.max(Math.abs(a[0] - c[0]), Math.abs(a[1] - c[1]), Math.abs(a[2] - c[2])) });
+    // 전체 + 왼쪽 반 + 오른쪽 반 — 두 색 제목(「인체공/학 설계」)은 한쪽만 바뀌면 전체 중앙값이 못 잡는다
+    const mid = Math.round((r.x0 + r.x1) / 2);
+    const parts: PxBox[] = [r, { ...r, x1: mid }, { ...r, x0: mid }];
+    let delta = -1;
+    for (const part of parts) {
+      const a = inkColor(origRaw, part, exclude);
+      const c = inkColor(compRaw, part, exclude);
+      if (!a || !c) continue;
+      delta = Math.max(delta, Math.abs(a[0] - c[0]), Math.abs(a[1] - c[1]), Math.abs(a[2] - c[2]));
+    }
+    if (delta >= 0) out.push({ zh: b.zh, delta });
   }
   return out;
 }
 
-/** 글자색 차이 허용치(채널 최대 차). 압축·안티앨리어싱은 수 단계, 색이 바뀐 것은 100 이상이다 */
-const BAND_COLOR_MAX = 60;
+/**
+ * 획 굵기가 원문과 얼마나 달라졌나 — 문구마다 (결과 획 두께 ÷ 원문 획 두께).
+ * 획 두께 = 글자 행에서 잉크가 이어진 가로 길이의 중앙값. 크기·색 관문과 같은 영역·이웃 제외.
+ * 지금까지 굵기는 어떤 관문도 보지 않았다(실측 exp12: 가는 부제가 굵게 그려져도 통과).
+ */
+export function bandGlyphWeightShift(
+  origRaw: Uint8Array,
+  compRaw: Uint8Array,
+  W: number,
+  H: number,
+  targets: OcrBox[],
+  allBoxes: OcrBox[],
+  band: BandRect,
+): { zh: string; ratio: number; delta: number }[] {
+  const px = (b: OcrBox): PxBox => {
+    const [y1, x1, y2, x2] = b.box;
+    return { x0: (x1 / 1000) * W, y0: (y1 / 1000) * H, x1: (x2 / 1000) * W, y1: (y2 / 1000) * H };
+  };
+  const stroke = (raw: Uint8Array, r: PxBox, exclude: PxBox[]): number | null => {
+    const lum: number[] = [];
+    for (let y = r.y0; y < r.y1; y++) for (let x = r.x0; x < r.x1; x++) {
+      if (exclude.some((e) => x >= e.x0 && x < e.x1 && y >= e.y0 && y < e.y1)) continue;
+      const i = (y * W + x) * 4;
+      lum.push(0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2]);
+    }
+    if (lum.length === 0) return null;
+    const med = [...lum].sort((a, b) => a - b)[lum.length >> 1];
+    const runs: number[] = [];
+    for (let y = r.y0; y < r.y1; y++) {
+      let run = 0;
+      for (let x = r.x0; x <= r.x1; x++) {
+        const inside = x < r.x1 && !exclude.some((e) => x >= e.x0 && x < e.x1 && y >= e.y0 && y < e.y1);
+        let ink = false;
+        if (inside) { const i = (y * W + x) * 4; ink = Math.abs(0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2] - med) > 40; }
+        if (ink) run++;
+        else if (run > 0) { runs.push(run); run = 0; }
+      }
+    }
+    if (runs.length < 4) return null;
+    // 평균(실수) — 중앙값은 정수라 가는 글자에서 2→3px 가 그대로 ×1.5 로 튄다
+    return runs.reduce((a, b) => a + b, 0) / runs.length;
+  };
+  const out: { zh: string; ratio: number; delta: number }[] = [];
+  for (const b of targets) {
+    if (b.solid_bg === false) continue;
+    const core = px(b);
+    const bh = core.y1 - core.y0;
+    const pad = Math.max(4, Math.min(12, Math.round(bh * 0.35)));
+    const r: PxBox = {
+      x0: Math.max(band.left, Math.floor(core.x0 - pad)),
+      y0: Math.max(band.top, Math.floor(core.y0 - pad)),
+      x1: Math.min(band.left + band.width, Math.ceil(core.x1 + pad)),
+      y1: Math.min(band.top + band.height, Math.ceil(core.y1 + pad)),
+    };
+    if (r.x1 - r.x0 < 4 || r.y1 - r.y0 < 4) continue;
+    const exclude = allBoxes.filter((o) => o !== b).map((o) => { const q = px(o); return { x0: q.x0 - 1, y0: q.y0 - 1, x1: q.x1 + 1, y1: q.y1 + 1 }; });
+    const a = stroke(origRaw, r, exclude);
+    const c = stroke(compRaw, r, exclude);
+    if (!a || !c) continue;
+    out.push({ zh: b.zh, ratio: c / a, delta: c - a });
+  }
+  return out;
+}
+
+/**
+ * 획 굵기 판정 — 비율이 0.7~1.4 를 벗어나고 **절대 차이도 2px 넘을 때만** 문제로 본다.
+ * 재생 검증(exp8 산출물, 띠 4개): 가는 글자 2px 가 3px 로 그려져 비율만 보면 전부 ×1.5 였다 —
+ * 한 픽셀 차이는 안티앨리어싱·재표본화 수준이고, 진짜 굵기 변화는 3px 이상 벌어진다.
+ */
+export function bandWeightBad(w: { ratio: number; delta: number }): boolean {
+  // 재생 검증 2차: 가는 글자 3px 가 4.7px 로도 그려진다(한국어 고딕이 중국어 가는 획보다 굵다) — 2px 까지 봐준다
+  return (w.ratio < 0.7 || w.ratio > 1.4) && Math.abs(w.delta) > 2;
+}
+
+/**
+ * 글자색 차이 허용치(채널 최대 차). 색이 바뀐 것은 100 이상이다. 재생 검증(exp8 산출물):
+ * 같은 색인데 획이 굵어진 부제가 반쪽 비교에서 61 — 60 은 너무 빠듯했다.
+ */
+const BAND_COLOR_MAX = 75;
 
 /**
  * 단색 배경 직접 그리기 — 모델 띠를 만들 수 없는 자리의 마지막 수단(2026-09-02 결정).
@@ -3879,8 +4031,9 @@ async function tryBuildGifPatch(
         const shrunk = bandGlyphShrink(frame0, compositeBand(frame0, rgba, band, W, H), W, H, inBand, boxes, band);
         const worst = shrunk.reduce((m, s) => Math.min(m, s.ratio), 1);
         const softNotes: string[] = [];
-        const colorBad = bandGlyphColorShift(frame0, compositeBand(frame0, rgba, band, W, H), W, H, inBand, boxes, band)
-          .filter((c) => c.delta > BAND_COLOR_MAX);
+        const compRaw = compositeBand(frame0, rgba, band, W, H);
+        const colorBad = bandGlyphColorShift(frame0, compRaw, W, H, inBand, boxes, band).filter((c) => c.delta > BAND_COLOR_MAX);
+        const weightBad = bandGlyphWeightShift(frame0, compRaw, W, H, inBand, boxes, band).filter(bandWeightBad);
         if (worst < BAND_SHRINK_MIN) {
           problem = `글자가 작아졌습니다 (원문의 ${Math.round(worst * 100)}%)`;
           for (const sh of shrunk) {
@@ -3889,12 +4042,15 @@ async function tryBuildGifPatch(
         } else if (colorBad.length > 0) {
           problem = `글자색이 달라졌습니다 (${colorBad.map((c) => `「${c.zh}」 차 ${c.delta}`).join(", ").slice(0, 60)})`;
           for (const c of colorBad) softNotes.push(`${c.zh} — 글자색이 원본과 달라졌습니다`);
+        } else if (weightBad.length > 0) {
+          problem = `굵기가 달라졌습니다 (${weightBad.map((w) => `「${w.zh}」 ×${w.ratio.toFixed(2)}`).join(", ").slice(0, 60)})`;
+          for (const w of weightBad) softNotes.push(`${w.zh} — 획 굵기가 원본의 ${Math.round(w.ratio * 100)}% 입니다`);
         } else if (verdict.soft) {
           problem = verdict.soft;
         }
         if (problem) {
           // 점수: 작아짐은 크기 비율(<0.85), 문구 차이는 0.85~1 사이 — 문구 차이가 작아짐보다 낫다
-          const score = worst < BAND_SHRINK_MIN ? worst : colorBad.length > 0 ? 0.86 : 0.9;
+          const score = worst < BAND_SHRINK_MIN ? worst : colorBad.length > 0 ? 0.86 : weightBad.length > 0 ? 0.88 : 0.9;
           if (!soft || score > soft.score) soft = { rgba, score, notes: softNotes };
           console.log(`${label} ×${scale} 시도 ${attempt}: ${problem}`);
           continue;
@@ -4253,6 +4409,9 @@ export function bandRetryHint(problem: string): string {
   if (problem.includes("작아졌")) {
     const m = problem.match(/(\d+)%/);
     return `${head}- 글자가 원문의 ${m ? m[1] : "?"}% 크기로 작아졌습니다. 글자 높이를 목록에 적힌 픽셀값 그대로 유지하세요. 폭이 모자라면 크기를 줄이지 말고 자간을 좁히거나 글자 폭을 좁혀(장체) 넣으세요.`;
+  }
+  if (problem.includes("굵기")) {
+    return `${head}- 글자 굵기가 원문과 달라졌습니다. 획 두께를 원문과 똑같이(가는 글자는 가늘게, 굵은 글자는 굵게) 쓰세요.`;
   }
   if (problem.includes("글자색")) {
     return `${head}- 글자 색이 원문과 달라졌습니다. 각 문구의 글자 색(그리고 색이 바뀌는 자리)을 원문과 똑같이 쓰세요.`;
@@ -6328,9 +6487,15 @@ export async function translateImageAuto(
     safetyFallback?: boolean;
     /** 승인 문구 기억(원문 → 확정 번역) — GIF 재렌더·같은 상품 그림의 출발점. phraseMemory.ts */
     phraseMemory?: Map<string, string>;
+    /**
+     * 같은 원본의 저장된 판독 좌표 — GIF 만 쓴다. 판독을 건너뛰어 같은 GIF 는 항상 같은 띠가
+     * 나온다(실측 exp10 vs exp12: 좌표가 몇 px 달라 「回弹设计」 띠가 생겼다 안 생겼다 했다).
+     * 문구(ko)는 무시하고 좌표·모드만 쓴다 — 번역은 기억·번역 단계가 다시 정한다.
+     */
+    knownBoxes?: OcrBox[];
   } = {},
 ): Promise<TranslateOutcome> {
-  return runTranslatePipeline(data, mime, undefined, opts.safetyFallback === true, opts.phraseMemory);
+  return runTranslatePipeline(data, mime, undefined, opts.safetyFallback === true, opts.phraseMemory, opts.knownBoxes);
 }
 
 /**
@@ -6353,10 +6518,11 @@ async function runTranslatePipeline(
   resume?: ResumeInput,
   safetyFallback = false,
   phraseMemory?: Map<string, string>,
+  knownBoxes?: OcrBox[],
 ): Promise<TranslateOutcome> {
   const budget = { left: MAX_IMAGE_CALLS_PER_ASSET, used: 0 };
   try {
-    return await imageBudget.run(budget, () => translateImageAutoInner(data, mime, resume, safetyFallback, phraseMemory));
+    return await imageBudget.run(budget, () => translateImageAutoInner(data, mime, resume, safetyFallback, phraseMemory, knownBoxes));
   } finally {
     console.log(`[비용] 이미지 HTTP ${budget.used}회 ≈ $${(budget.used * IMAGE_CALL_COST_USD).toFixed(3)} (1K 출력 단가 기준 추정)`);
   }
@@ -6368,6 +6534,7 @@ async function translateImageAutoInner(
   resume?: ResumeInput,
   safetyFallback = false,
   phraseMemory?: Map<string, string>,
+  knownBoxes?: OcrBox[],
 ): Promise<TranslateOutcome> {
   ensureFonts();
 
@@ -6378,6 +6545,10 @@ async function translateImageAutoInner(
   if (resume?.boxes) {
     // 저장된 판독·번역을 그대로 쓴다 — 검사 단계는 아래에서 전부 정상 수행된다
     merged = resume.boxes;
+    unconfirmedZh = [];
+  } else if (mime === "image/gif" && knownBoxes && knownBoxes.length > 0) {
+    // GIF 재렌더 — 같은 원본의 저장된 좌표를 쓴다(판독 0회). 문구는 아래 번역 단계가 다시 정한다.
+    merged = dedupeOcrBoxes(knownBoxes.map((b) => ({ ...b, ko: (b.mode ?? "translate") === "translate" ? "" : b.ko })));
     unconfirmedZh = [];
   } else {
   try {
@@ -6915,6 +7086,8 @@ async function translateImageAutoInner(
     const color = gifNotes.filter((n) => n.includes("글자색"));
     if (small.length > 0) reasons.push({ code: "GIF_SMALL_TEXT", detail: small.join(", ").slice(0, 300) });
     if (color.length > 0) reasons.push({ code: "GIF_TEXT_COLOR", detail: color.join(", ").slice(0, 300) });
+    const weight = gifNotes.filter((n) => n.includes("획 굵기"));
+    if (weight.length > 0) reasons.push({ code: "GIF_TEXT_WEIGHT", detail: weight.join(", ").slice(0, 300) });
     // 직접 그린 문구 — 서체가 바뀐 자리를 운영자가 보고 승인한다
     if (gifLocalText.length > 0) reasons.push({ code: "GIF_LOCAL_TEXT", detail: gifLocalText.join(", ").slice(0, 300) });
   }
