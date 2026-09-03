@@ -53,6 +53,31 @@ async function makeGifWithGlyph(): Promise<Buffer> {
   return sharp(frames, { join: { animated: true } }).gif({ delay: [100, 100, 100] }).toBuffer();
 }
 
+/**
+ * 글자 막대(y 24~44) **바로 위 한 줄(y 0~23)까지** 움직이는 GIF — 정지 띠를 만들 여백이 0.
+ * 실측(exp12 「回弹设计」): 제품 사진이 글자 1px 위까지 움직여 "움직이는 화면 위"로 원문이 남았다.
+ * noisy=true 면 배경이 사진처럼 얼룩져 단색이 아니다.
+ */
+async function makeGifTouchingMotion(noisy = false): Promise<Buffer> {
+  const frames: Buffer[] = [];
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const noise = Buffer.alloc(W * H);
+  for (let i = 0; i < W * H; i++) noise[i] = noisy ? Math.floor(rnd() * 50) : 0;
+  for (let i = 0; i < 3; i++) {
+    const raw = Buffer.alloc(W * H * 3);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const k = (y * W + x) * 3;
+      let v = 230 - noise[y * W + x];
+      if (y < 24) v = 40 + i * 60; // 글자 바로 위까지 움직인다
+      if (y >= 24 && y < 44 && x >= 30 && x < 210 && (x - 30) % 12 < 4) v = 20; // 정지 글자(세로 줄무늬 = 획, 잉크 1/3)
+      raw[k] = raw[k + 1] = raw[k + 2] = v;
+    }
+    frames.push(await sharp(raw, { raw: { width: W, height: H, channels: 3 } }).png().toBuffer());
+  }
+  return sharp(frames, { join: { animated: true } }).gif({ delay: [100, 100, 100] }).toBuffer();
+}
+
 /** 글자는 위쪽 절반에 있다 (0~1000 정규화) */
 const topBox: OcrBox = {
   box: [80, 100, 200, 900], zh: "强震", ko: "강력 진동", bg: "#ffffff", fg: "#000000", solid_bg: true,
@@ -367,6 +392,70 @@ describe("renderTranslatedImage — GIF", () => {
     expect(out.outsideMaxDiff).toBeDefined();
     expect(out.outsideMaxDiff!).toBeLessThanOrEqual(8);
     expect(out.outsideChangedFrac!).toBe(0);
+  }, 60_000);
+
+  /**
+   * 단색 배경 폴백(2026-09-02 결정). 글자 바로 옆까지 움직이는 자리는 모델 띠를 만들 수
+   * 없다 — 실측(exp10~12 「回弹设计」): 세 번 중 두 번 원문이 남았다. 배경이 픽셀로
+   * 확인된 단색이고 글자 자리가 정지면, 그 자리만 배경색으로 지우고 우리가 직접 쓴다.
+   * 서체는 바뀌지만(프리텐다드) 자국은 없다 — 사진·그라데이션(자국의 원인)은 절대 안 한다.
+   */
+  it("띠를 못 만드는 자리라도 배경이 단색이면 직접 그린다 — 모델 호출 0회, 애니메이션 유지", async () => {
+    stubGemini("ok");
+    const gif = await makeGifTouchingMotion();
+    const out = await renderTranslatedImage(gif, "image/gif", [topBox]);
+    expect(imageCalls).toBe(0);
+    expect(out.localText).toEqual(["强震"]);
+    const raw = await sharp(out.data, { page: 0, pages: 1 }).ensureAlpha().raw().toBuffer();
+    // 줄무늬(획 50%)가 지워지고 그 자리에 글자가 그려졌다 — 어두운 픽셀 비율이 달라진다
+    let dark = 0, n = 0, stripeLeft = 0;
+    for (let y = 24; y < 44; y++) for (let x = 30; x < 210; x++) {
+      n++;
+      const d = raw[(y * W + x) * 4] < 100;
+      if (d) dark++;
+      if (d && (x - 30) % 12 >= 6) stripeLeft++; // 원래 배경이던 자리에 획이 있다 = 새 글자
+    }
+    expect(dark / n).toBeGreaterThan(0.02);
+    expect(dark / n).toBeLessThan(0.45);
+    expect(stripeLeft).toBeGreaterThan(20);
+    // 글자 밖은 그대로
+    expect(raw[(60 * W + 120) * 4]).toBe(230);
+    const meta = await sharp(out.data, { animated: true }).metadata();
+    expect(meta.pages).toBe(3);
+  }, 60_000);
+
+  it("글자 자리가 좁아도 좌우 정지 여백이 있으면 그리로 넓혀 원래 크기로 쓴다", async () => {
+    // 실측(M18 「回弹设计」): 잉크 범위 247px 에 16자는 82% 로 줄여야 들어가지만, 좌우에 정지 여백
+    // 98+51px 이 있었다. 띠 예산이 그 여백까지 세어 준 문구이니 폴백도 그 여백을 써야 한다.
+    stubGemini("ok");
+    const frames: Buffer[] = [];
+    for (let i = 0; i < 3; i++) {
+      const raw = Buffer.alloc(W * H * 3);
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = (y * W + x) * 3;
+        let v = 230;
+        if (y < 24) v = 40 + i * 60;
+        if (y >= 24 && y < 44 && x >= 100 && x < 140 && (x - 100) % 12 < 4) v = 20; // 좁은 글자(40px)
+        raw[k] = raw[k + 1] = raw[k + 2] = v;
+      }
+      frames.push(await sharp(raw, { raw: { width: W, height: H, channels: 3 } }).png().toBuffer());
+    }
+    const gif = await sharp(frames, { join: { animated: true } }).gif({ delay: [100, 100, 100] }).toBuffer();
+    const narrow: OcrBox = { box: [100, 417, 183, 583], zh: "强震", ko: "강력한 진동 자극", bg: "#ffffff", fg: "#000000", solid_bg: true };
+    const out = await renderTranslatedImage(gif, "image/gif", [narrow]);
+    expect(out.localText).toEqual(["强震"]);
+    const raw = await sharp(out.data, { page: 0, pages: 1 }).ensureAlpha().raw().toBuffer();
+    // 원래 글자 자리(x100~140) 밖, 여백 쪽(x60~100 또는 x140~180)에 글자 획이 생겼다 = 넓혀서 썼다
+    let outside = 0;
+    for (let y = 24; y < 44; y++) for (let x = 60; x < 180; x++) if ((x < 100 || x >= 140) && raw[(y * W + x) * 4] < 100) outside++;
+    expect(outside).toBeGreaterThan(20);
+  }, 60_000);
+
+  it("배경이 사진처럼 얼룩지면 직접 그리지 않는다 — 자국의 원인이던 자리", async () => {
+    stubGemini("ok");
+    const gif = await makeGifTouchingMotion(true);
+    await expect(renderTranslatedImage(gif, "image/gif", [topBox])).rejects.toThrow(/움직이는 화면 위/);
+    expect(imageCalls).toBe(0);
   }, 60_000);
 
   it("모델이 거부하면 거부 사유가 그대로 올라온다 — 재시도 분류가 가능하게", async () => {

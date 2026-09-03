@@ -642,4 +642,19 @@ describe("bandGlyphColorShift — 글자색이 원본과 달라졌나 (픽셀, �
   it("글자가 없는 곳은 판정하지 않는다", () => {
     expect(bandGlyphColorShift(canvas([]), canvas([]), W, H, [target], [target], band)).toEqual([]);
   });
+
+  it("가는 글자의 안티앨리어싱 번짐은 색 변화가 아니다 — 획 중심색으로 비교한다", () => {
+    // 실측(exp12): 회갈색 가는 부제를 모델이 같은 색·굵은 획으로 그렸는데 중앙값 비교가 차 89 로
+    // 잡아 재시도 1회(≈$0.067)를 헛되이 썼다. 원본 획은 번짐 픽셀이 많아 중앙값이 옅다.
+    const core: [number, number, number] = [90, 70, 60];
+    const fringe: [number, number, number] = [180, 165, 155];
+    const thin = canvas([
+      { y0: 46, y1: 52, x0: 55, x1: 125, rgb: fringe },
+      { y0: 52, y1: 57, x0: 55, x1: 125, rgb: core },
+      { y0: 57, y1: 63, x0: 55, x1: 125, rgb: fringe },
+    ]);
+    const thick = canvas([{ y0: 45, y1: 65, x0: 55, x1: 125, rgb: core }]);
+    const r = bandGlyphColorShift(thin, thick, W, H, [target], [target], band);
+    expect(r[0].delta).toBeLessThan(30);
+  });
 });

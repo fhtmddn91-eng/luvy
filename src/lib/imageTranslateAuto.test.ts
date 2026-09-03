@@ -981,7 +981,9 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     mock = happyMock();
     mock.image = ["echo"];
     mock.transcribe = gifTranscribe();
-    mock.translate = [["강렬한 진동"]]; // 줄이기 응답
+    mock.translate = [["강렬하고 깊은 진동"]]; // 줄이기 응답 (예산 안, 너무 짧지 않음)
+    mock.transcribe[1] = [{ box: BOX, text: "강렬하고 깊은 진동" }];
+    mock.transcribe[2] = [{ box: BOX, text: "강렬하고 깊은 진동" }];
     const r = await translateImageAuto(gif, "image/gif", {
       phraseMemory: new Map([["强震深处", "아주 강렬하고 깊숙한 진동 자극 느낌"]]),
     });
@@ -989,7 +991,7 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     expect(asks).toHaveLength(1);
     expect(asks[0]).toContain("직전 답");
     expect(asks[0]).toContain("아주 강렬하고 깊숙한 진동 자극 느낌");
-    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 진동");
+    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬하고 깊은 진동");
   });
 
   it("정지 이미지는 기억 문구를 쓰지 않는다 — 정지 이미지 경로는 그대로", async () => {
@@ -1045,6 +1047,44 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     if (r.status === "NEEDS_REVIEW") {
       const u = r.reasons.find((x) => x.code === "GIF_UNVERIFIED");
       expect(u?.detail).toMatch(/패치 밖.*원본과 같음/);
+    }
+  });
+
+  it("GIF: 줄인 답이 예산의 60% 도 안 되면 너무 짧다 — 예산에 가깝게 한 번 더 받는다", { timeout: 30_000 }, async () => {
+    // 실측(exp12): 예산 15자에 17자 → "대형헤드 폭풍진동"(9자)로 깎아 更大更刺激 이 통째로 사라졌다
+    // (MEANING_MISMATCH). "초과한 만큼만" 줄이라고 해도 모델은 절반을 잘라 낸다.
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    mock.translate = [["아주 강렬하고 깊숙한 진동 자극 느낌"], ["강한 진동"], ["강렬하고 깊은 진동"]];
+    mock.transcribe[1] = [{ box: BOX, text: "강렬하고 깊은 진동" }];
+    mock.transcribe[2] = [{ box: BOX, text: "강렬하고 깊은 진동" }];
+    const r = await translateImageAuto(gif, "image/gif");
+    const asks = textPrompts.filter((p) => p.includes("한국어로 번역하세요"));
+    expect(asks).toHaveLength(3);
+    expect(asks[2]).toMatch(/너무 짧/);
+    expect(asks[2]).toContain("강한 진동");
+    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬하고 깊은 진동");
+  });
+
+  it("GIF: 직접 그린 문구는 GIF_LOCAL_TEXT 사유로 알린다 — 서체가 바뀐 자리를 운영자가 본다", { timeout: 30_000 }, async () => {
+    // 픽스처: 검은 막대(글자) 바로 위 한 줄까지 움직이는 2프레임 GIF, 배경 흰색 단색
+    const c1 = createCanvas(W, H); const x1 = c1.getContext("2d");
+    x1.fillStyle = "#ffffff"; x1.fillRect(0, 0, W, H); x1.fillStyle = "#000000";
+    for (let x = 40; x < 360; x += 12) x1.fillRect(x, 40, 4, 40); // 세로 줄무늬 = 획(잉크 1/3)
+    x1.fillStyle = "#4040ff"; x1.fillRect(0, 0, W, 40);
+    const c2 = createCanvas(W, H); const x2 = c2.getContext("2d");
+    x2.drawImage(c1, 0, 0); x2.fillStyle = "#ff4040"; x2.fillRect(0, 0, W, 40);
+    const gif = await sharp([c1.toBuffer("image/png"), c2.toBuffer("image/png")], { join: { animated: true } }).gif({ delay: [100, 100] }).toBuffer();
+    mock = happyMock();
+    mock.transcribe = gifTranscribe();
+    const r = await translateImageAuto(gif, "image/gif");
+    expect(imageHttp).toBe(0);
+    expect(r.status).toBe("NEEDS_REVIEW");
+    if (r.status === "NEEDS_REVIEW") {
+      expect(r.reasons.find((x) => x.code === "GIF_LOCAL_TEXT")?.detail).toContain("强震深处");
+      expect(r.data).not.toBeNull();
     }
   });
 

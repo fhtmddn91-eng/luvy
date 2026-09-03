@@ -545,9 +545,11 @@ export function staticRoomOf(
   core: PxBox,
   avoid: PxBox[],
   maxExt: number,
+  /** 재는 행 범위 — 기본은 글자 행 ±2px. 이미 정지가 확인된 사각형이면 그 행만(위 1px 이 움직이는 자리) */
+  strip?: { y0: number; y1: number },
 ): { left: number; right: number } {
-  const y0 = Math.max(0, Math.floor(core.y0) - 2);
-  const y1 = Math.min(H, Math.ceil(core.y1) + 2);
+  const y0 = strip ? strip.y0 : Math.max(0, Math.floor(core.y0) - 2);
+  const y1 = strip ? strip.y1 : Math.min(H, Math.ceil(core.y1) + 2);
   const colOk = (x: number): boolean => {
     if (x < 0 || x >= W) return false;
     if (avoid.some((a) => x >= a.x0 - 2 && x < a.x1 + 2 && a.y1 > y0 && a.y0 < y1)) return false;
@@ -641,9 +643,14 @@ function translatePrompt(items: string[], opts: TranslateOpts): string {
         .map((t, i) => {
           const prev = previous?.[i];
           const over = prev ? [...prev].length - budgets[i] : 0;
-          return `${i + 1}. "${t}" → 최대 ${budgets[i]}자${
-            prev && over > 0 ? ` (직전 답 "${prev}" 은 ${[...prev].length}자 — ${over}자 초과)` : ""
-          }`;
+          // 예산 안인데 되묻는 것은 "너무 짧게 깎았다"는 뜻 — 실측(exp12): 15자 예산에 9자로
+          // 깎아 更大更刺激 이 통째로 사라졌다
+          const note = !prev
+            ? ""
+            : over > 0
+              ? ` (직전 답 "${prev}" 은 ${[...prev].length}자 — ${over}자 초과)`
+              : ` (직전 답 "${prev}" 은 ${[...prev].length}자 — 너무 짧습니다. 최대 ${budgets[i]}자에 가깝게 뜻을 더 담으세요)`;
+          return `${i + 1}. "${t}" → 최대 ${budgets[i]}자${note}`;
         })
         .join("\n")
     : JSON.stringify(items);
@@ -663,7 +670,8 @@ function translatePrompt(items: string[], opts: TranslateOpts): string {
         // 실측(2026-09-02 exp10): 짧게 쓰라니 뒤가 잘린 꼴("여운이 남는")·숫자 나열("1스틱 2용도")이 나왔다
         "\n- 짧아도 **그 자체로 완결된 명사구**로 끝맺으세요. 뒤가 잘린 꼴(\"여운이 남는\")이나 숫자 나열(\"1스틱 2용도\")은 실패입니다. 예: 静音设计→\"저소음 설계\", 一键启动→\"원터치 시작\", 柔软亲肤→\"부드러운 촉감\"" +
         // 실측(exp11): 「强震蜜豆 伸缩人体」→"강력 진동과 수축 자극" — 부위·동작 용어를 못 옮겨 의미 검수에 두 번 걸렸다
-        "\n- 부위·동작 용어: 蜜豆→클리(클리토리스), 伸缩→왕복·스트로크, 炮机→피스톤, 后庭→애널, 花心→질 안쪽. 원문에 있는 부위·동작을 빼면 실패입니다."
+        "\n- 부위·동작 용어: 蜜豆→클리(클리토리스), 伸缩→왕복·스트로크, 炮机→피스톤, 后庭→애널, 花心→질 안쪽. 원문에 있는 부위·동작을 빼면 실패입니다." +
+        "\n- 줄일 때는 **초과한 만큼만** 줄이고 한도에 가깝게 쓰세요. 절반으로 깎으면 뜻이 사라집니다."
       : ""
   }
 - 중국어 의성어·의태어를 소리 나는 대로 옮기지 마세요.
@@ -1023,13 +1031,18 @@ async function translateExtracted(
 
   // 자리보다 긴 문구만 한 번 더 짧게 — 텍스트 호출은 거의 무료이고,
   // 여기서 못 잡으면 이미지 생성이 뒷말을 잘라 그림을 통째로 다시 뽑아야 한다
-  const adoptShorter = (idx: number[], shorter: string[]) => {
+  const adoptShorter = (idx: number[], shorter: string[], allowLonger = false) => {
     idx.forEach((orig, j) => {
       const s = shorter[j];
-      // 더 짧아졌고 한자가 없을 때만 채택 — 아니면 원래 번역이 낫다
-      if (s && !hasHanzi(s) && [...s].length < [...koList[orig]].length) koList[orig] = s;
+      if (!s || hasHanzi(s)) return;
+      const len = [...s].length, cur = [...koList[orig]].length;
+      // 더 짧아졌을 때 채택 — 아니면 원래 번역이 낫다. "너무 짧게 깎은 답"을 되묻는 2차는
+      // 예산 안에서 길어진 답도 받는다.
+      if (len < cur || (allowLonger && len > cur && len <= budgets[orig])) koList[orig] = s;
     });
   };
+  /** 줄인 답이 예산의 60% 도 안 되면 너무 짧다 — 실측(exp12): 15자 자리에 9자, 뜻이 빠졌다 */
+  const tooShort = (i: number) => [...koList[i]].length < budgets[i] * 0.65;
   const long = overBudget(koList, budgets);
   if (long.length > 0) {
     try {
@@ -1047,13 +1060,15 @@ async function translateExtracted(
   // 실측). 정지 이미지는 모델이 판을 다시 흘려 흡수하므로 여기 오지 않는다.
   if (tight) {
     const still = overBudget(koList, budgets);
-    if (still.length > 0) {
+    const cut = long.filter((i) => !still.includes(i) && tooShort(i));
+    const again = [...still, ...cut];
+    if (again.length > 0) {
       try {
         const shorter = await translateTexts(
-          still.map((i) => solid[i].zh),
-          { budgets: still.map((i) => budgets[i]), shorten: true, previous: still.map((i) => koList[i]), preserveMeaning: true },
+          again.map((i) => solid[i].zh),
+          { budgets: again.map((i) => budgets[i]), shorten: true, previous: again.map((i) => koList[i]), preserveMeaning: true },
         );
-        adoptShorter(still, shorter);
+        adoptShorter(again, shorter, true);
       } catch {
         /* 위와 같다 */
       }
@@ -3444,13 +3459,19 @@ export function bandGlyphColorShift(
     if (lum.length === 0) return null;
     const sorted = [...lum].sort((a, b) => a - b);
     const med = sorted[sorted.length >> 1];
-    const rs: number[] = [], gs: number[] = [], bs: number[] = [];
+    const ink: { v: number; i: number }[] = [];
     lum.forEach((v, k) => {
-      if (Math.abs(v - med) > 40) { const i = px4[k]; rs.push(raw[i]); gs.push(raw[i + 1]); bs.push(raw[i + 2]); }
+      if (Math.abs(v - med) > 40) ink.push({ v, i: px4[k] });
     });
-    if (rs.length < 4) return null;
+    if (ink.length < 4) return null;
+    // **획 중심색**만 본다 — 가는 글자는 안티앨리어싱 번짐 픽셀이 획보다 많아 중앙값이 옅다.
+    // 실측(exp12): 회갈색 부제를 같은 색·굵은 획으로 그렸는데 중앙값 비교가 차 89 로 잡아
+    // 재시도 1회를 헛되이 썼다. 어두운 글자면 가장 어두운 30%, 밝은 글자면 가장 밝은 30%.
+    const inkMed = [...ink].sort((a, b) => a.v - b.v)[ink.length >> 1].v;
+    ink.sort((a, b) => (inkMed < med ? a.v - b.v : b.v - a.v));
+    const core = ink.slice(0, Math.max(4, Math.ceil(ink.length * 0.3)));
     const mid = (a: number[]) => a.sort((x, y) => x - y)[a.length >> 1];
-    return [mid(rs), mid(gs), mid(bs)];
+    return [mid(core.map((c) => raw[c.i])), mid(core.map((c) => raw[c.i + 1])), mid(core.map((c) => raw[c.i + 2]))];
   };
   const out: { zh: string; delta: number }[] = [];
   for (const b of targets) {
@@ -3477,12 +3498,193 @@ export function bandGlyphColorShift(
 /** 글자색 차이 허용치(채널 최대 차). 압축·안티앨리어싱은 수 단계, 색이 바뀐 것은 100 이상이다 */
 const BAND_COLOR_MAX = 60;
 
+/**
+ * 단색 배경 직접 그리기 — 모델 띠를 만들 수 없는 자리의 마지막 수단(2026-09-02 결정).
+ *
+ * 글자 바로 옆(1px)까지 제품 사진이 움직이면 여백 있는 정지 띠가 없다 — 실측(exp10~12
+ * 「回弹设计」): 세 번 중 두 번 원문이 남았다. 조건이 전부 픽셀로 맞을 때만 한다:
+ *  1) 글자 자리(글자 범위 ± 최대 2px)가 **완전 정지**
+ *  2) 그 자리의 배경이 **단색**(글자 아닌 픽셀의 95% 가 대표색 ±6 안)
+ *  3) 번역문이 원문 글자 높이의 85% 이상으로 들어간다
+ * 그 자리만 배경색으로 칠하고 프리텐다드로 원문 색·굵기·높이대로 쓴다. 서체는 바뀌지만
+ * 자국은 없다. 사진·그라데이션(예전 로컬 렌더 자국의 원인)에는 절대 하지 않는다.
+ */
+export function localSolidPatch(
+  frame0: Uint8Array,
+  moved: Uint8Array,
+  W: number,
+  H: number,
+  b: OcrBox,
+  /** 거절 사유를 받는다(로그·진단용) */
+  why: (reason: string) => void = () => {},
+  /** 다른 문구의 글자 범위 — 좌우로 넓힐 때 피한다 */
+  others: PxBox[] = [],
+): { rect: PxBox; rgba: Buffer } | null {
+  const [y1, x1, y2, x2] = b.box;
+  // 판독 박스가 아니라 **실제 잉크 범위**를 쓴다 — 박스는 움직이는 이웃 영역까지 몇 px 걸치는
+  // 일이 흔해(「回弹设计」 위 1px), 박스 기준으로 정지를 재면 늘 실패한다.
+  const search: PxBox = {
+    x0: Math.max(0, Math.floor((x1 / 1000) * W) - 2), y0: Math.max(0, Math.floor((y1 / 1000) * H) - 2),
+    x1: Math.min(W, Math.ceil((x2 / 1000) * W) + 2), y1: Math.min(H, Math.ceil((y2 / 1000) * H) + 2),
+  };
+  const sw = search.x1 - search.x0, sh = search.y1 - search.y0;
+  if (sw < 8 || sh < 8) { why("박스가 너무 작음"); return null; }
+  const sl = new Float32Array(sw * sh);
+  for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+    const i = ((search.y0 + y) * W + search.x0 + x) * 4;
+    sl[y * sw + x] = 0.299 * frame0[i] + 0.587 * frame0[i + 1] + 0.114 * frame0[i + 2];
+  }
+  // 배경 대표 밝기는 **정지 픽셀**로만 잰다 — 움직이는 이웃(제품 사진)이 절반을 차지하면
+  // 중앙값이 그쪽으로 넘어가 글자와 배경이 뒤집힌다
+  const staticLum: number[] = [];
+  for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+    if (!moved[(search.y0 + y) * W + search.x0 + x]) staticLum.push(sl[y * sw + x]);
+  }
+  if (staticLum.length < 16) { why("정지 픽셀 없음"); return null; }
+  const smed = staticLum.sort((a, c) => a - c)[staticLum.length >> 1];
+  // 움직이는 픽셀은 글자가 아니다(글자는 정지가 전제) — 옆 제품 사진의 어두운 픽셀이
+  // 잉크로 잡혀 범위가 움직이는 영역까지 번지는 것을 막는다
+  let gx0 = sw, gy0 = sh, gx1 = -1, gy1 = -1;
+  for (let y = 0; y < sh; y++) for (let x = 0; x < sw; x++) {
+    if (moved[(search.y0 + y) * W + search.x0 + x]) continue;
+    if (Math.abs(sl[y * sw + x] - smed) <= 40) continue;
+    if (x < gx0) gx0 = x; if (x + 1 > gx1) gx1 = x + 1; if (y < gy0) gy0 = y; if (y + 1 > gy1) gy1 = y + 1;
+  }
+  if (gx1 < 0) { why("글자 없음"); return null; }
+  const g = { x0: search.x0 + gx0, y0: search.y0 + gy0, x1: search.x0 + gx1, y1: search.y0 + gy1 };
+  const glyphH = g.y1 - g.y0;
+  if (glyphH < 8 || g.x1 - g.x0 < 8) { why(`글자 범위 너무 작음 ${g.x1 - g.x0}x${glyphH}`); return null; }
+  // ① 정지 — 여백은 있는 만큼만(2 → 1 → 0)
+  let rect: PxBox | null = null;
+  for (const pad of [2, 1, 0]) {
+    const r = {
+      x0: Math.max(0, Math.floor(g.x0) - pad), y0: Math.max(0, Math.floor(g.y0) - pad),
+      x1: Math.min(W, Math.ceil(g.x1) + pad), y1: Math.min(H, Math.ceil(g.y1) + pad),
+    };
+    // 허용치는 띠 선택과 같다(흩어진 24px·덩어리 8px) — 팔레트 깜빡임 몇 픽셀은 얼려도 안 보인다
+    if (regionStaticEnough(moved, W, r)) { rect = r; break; }
+  }
+  if (!rect) { why("글자 자리가 움직임"); return null; }
+  // 좌우 정지 여백 — 띠 예산(gifBudgetsFor)이 세어 준 만큼 폴백도 쓸 수 있어야 한다.
+  // 실측(M18 「回弹设计」): 잉크 범위 247px 에 16자는 82% 로 줄여야 들어가지만 좌우 여백이 98+51px.
+  // 여백은 필요한 만큼(글자 폭까지) 잰다 — 정지·단색은 아래서 다시 확인한다. 행 범위는 정지가
+  // 확인된 사각형 그대로(±2px 를 더하면 바로 위 1px 이 움직이는 자리에서 여백이 0 이 된다).
+  const roomOf = (need: number) => {
+    const r0 = staticRoomOf(moved, W, H, g, others, Math.max(0, need), { y0: rect!.y0, y1: rect!.y1 });
+    // 정지여도 단색이 아니면(제품 사진 가장자리·그림자) 쓸 수 없다 — 열 단위로 단색인 곳까지만
+    const solidCol = (x: number): boolean => {
+      for (let y = rect!.y0; y < rect!.y1; y++) {
+        const i = (y * W + x) * 4;
+        if (Math.max(Math.abs(frame0[i] - bg[0]), Math.abs(frame0[i + 1] - bg[1]), Math.abs(frame0[i + 2] - bg[2])) > 6) return false;
+      }
+      return true;
+    };
+    let left = 0;
+    for (let x = rect!.x0 - 1; left < r0.left && x >= 0 && solidCol(x); x--) left++;
+    let right = 0;
+    for (let x = rect!.x1; right < r0.right && x < W && solidCol(x); x++) right++;
+    return { left, right };
+  };
+  // ② 단색 배경
+  const w = rect.x1 - rect.x0, h = rect.y1 - rect.y0;
+  const lum = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = ((rect.y0 + y) * W + rect.x0 + x) * 4;
+    lum[y * w + x] = 0.299 * frame0[i] + 0.587 * frame0[i + 1] + 0.114 * frame0[i + 2];
+  }
+  const med = smed; // 글자가 굵어 사각형 안에서 잉크가 절반을 넘어도 배경 기준은 흔들리지 않는다
+  // 배경 후보는 대표 밝기 ±12 안의 픽셀만 — 글자 가장자리 번짐(안티앨리어싱)을 배경으로 세면
+  // 진짜 단색 배경도 떨어진다. 실측(M18 「回弹设计」): 번짐을 포함하면 ±6 안 84%, 빼면 97% 이상.
+  const bgIdx: number[] = [], inkIdx: number[] = [];
+  for (let k = 0; k < w * h; k++) {
+    const i = ((rect.y0 + ((k / w) | 0)) * W + rect.x0 + (k % w)) * 4;
+    const d = Math.abs(lum[k] - med);
+    if (d > 40) inkIdx.push(i);
+    else if (d <= 12) bgIdx.push(i);
+  }
+  if (bgIdx.length < (w * h) * 0.3 || inkIdx.length < 4) { why(`배경 후보 부족 ${bgIdx.length}/${w * h}, 잉크 ${inkIdx.length}`); return null; }
+  const mid = (a: number[]) => [...a].sort((x, y) => x - y)[a.length >> 1];
+  const bg: [number, number, number] = [mid(bgIdx.map((i) => frame0[i])), mid(bgIdx.map((i) => frame0[i + 1])), mid(bgIdx.map((i) => frame0[i + 2]))];
+  const flat = bgIdx.filter((i) => Math.max(Math.abs(frame0[i] - bg[0]), Math.abs(frame0[i + 1] - bg[1]), Math.abs(frame0[i + 2] - bg[2])) <= 6).length;
+  // 실측(M18 「回弹设计」, 진짜 단색 #F8F4EF): 번짐을 뺀 뒤 96.7%. 옅은 그라데이션은 40~84% 로 뚝 떨어진다.
+  if (flat < bgIdx.length * 0.95) { why(`배경이 단색이 아님 (${((flat / bgIdx.length) * 100).toFixed(1)}%)`); return null; }
+  // 글자색 = 획 중심색(가장 진한 30%)
+  const inkLum = inkIdx.map((i) => ({ i, v: 0.299 * frame0[i] + 0.587 * frame0[i + 1] + 0.114 * frame0[i + 2] }));
+  const dark = mid(inkLum.map((k) => k.v)) < med;
+  inkLum.sort((a, c) => (dark ? a.v - c.v : c.v - a.v));
+  const core = inkLum.slice(0, Math.max(4, Math.ceil(inkLum.length * 0.3)));
+  const fg: [number, number, number] = [mid(core.map((k) => frame0[k.i])), mid(core.map((k) => frame0[k.i + 1])), mid(core.map((k) => frame0[k.i + 2]))];
+  // ③ 그리기 — 원문 글자 높이에 맞추고, 폭이 모자라면 85% 까지만 줄인다
+  const text = sanitizeSymbols(b.ko.trim());
+  if (!text) { why("번역문 없음"); return null; }
+  ensureFonts();
+  const canvas = createCanvas(w, h);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = `rgb(${bg[0]},${bg[1]},${bg[2]})`;
+  ctx.fillRect(0, 0, w, h);
+  const family = FONT_FAMILIES[pickWeight(b.bold, glyphH)];
+  ctx.textBaseline = "alphabetic";
+  let size = glyphH * 1.2;
+  let m = (() => { ctx.font = `${size}px "${family}"`; return ctx.measureText(text); })();
+  const inkH = (mm: TextMetrics) => mm.actualBoundingBoxAscent + mm.actualBoundingBoxDescent;
+  if (inkH(m) <= 0) { why("글꼴 측정 실패"); return null; }
+  size = size * (glyphH / inkH(m));
+  ctx.font = `${size}px "${family}"`;
+  m = ctx.measureText(text);
+  const fitted = size;
+  // 폭이 모자라면 좌우 여백으로 넓힌다(여백 비율대로 나눠). 그래도 모자라면 85% 까지만 줄인다.
+  let ext = { left: 0, right: 0 };
+  if (m.width > w - 2) {
+    const need = Math.ceil(m.width + 2 - w);
+    const room = roomOf(need);
+    const avail = room.left + room.right;
+    const take = Math.min(need, avail);
+    if (take > 0 && avail > 0) {
+      ext = { left: Math.min(room.left, Math.round((take * room.left) / avail)), right: 0 };
+      ext.right = Math.min(room.right, take - ext.left);
+      ext.left = Math.min(room.left, take - ext.right);
+    }
+    const w2 = w + ext.left + ext.right;
+    if (m.width > w2 - 2) {
+      size = size * ((w2 - 2) / m.width);
+      if (size < fitted * 0.85) { why(`폭 부족 — ${Math.round((size / fitted) * 100)}% 로 줄여야 들어감 (정지 여백 ${room.left}+${room.right}px 포함)`); return null; }
+      ctx.font = `${size}px "${family}"`;
+      m = ctx.measureText(text);
+    }
+  }
+  if (ext.left > 0 || ext.right > 0) {
+    // 넓힌 사각형도 단색·정지여야 한다 — 여백 쪽 픽셀을 대표색과 비교
+    const r2: PxBox = { x0: rect.x0 - ext.left, y0: rect.y0, x1: rect.x1 + ext.right, y1: rect.y1 };
+    let off = 0, n = 0;
+    for (let y = r2.y0; y < r2.y1; y++) for (let x = r2.x0; x < r2.x1; x++) {
+      if (x >= rect.x0 && x < rect.x1) continue;
+      const i = (y * W + x) * 4; n++;
+      if (Math.max(Math.abs(frame0[i] - bg[0]), Math.abs(frame0[i + 1] - bg[1]), Math.abs(frame0[i + 2] - bg[2])) > 6) off++;
+    }
+    if (n > 0 && off > n * 0.05) { why("좌우 여백이 단색이 아님"); return null; }
+    if (!regionStaticEnough(moved, W, r2)) { why("좌우 여백이 움직임"); return null; }
+    rect = r2;
+  }
+  const w3 = rect.x1 - rect.x0;
+  const canvas2 = createCanvas(w3, h);
+  const ctx2 = canvas2.getContext("2d");
+  ctx2.fillStyle = `rgb(${bg[0]},${bg[1]},${bg[2]})`;
+  ctx2.fillRect(0, 0, w3, h);
+  ctx2.textBaseline = "alphabetic";
+  ctx2.font = `${size}px "${family}"`;
+  ctx2.fillStyle = `rgb(${fg[0]},${fg[1]},${fg[2]})`;
+  const m3 = ctx2.measureText(text);
+  ctx2.fillText(text, (w3 - m3.width) / 2, (h - inkH(m3)) / 2 + m3.actualBoundingBoxAscent);
+  const rgba = Buffer.from(ctx2.getImageData(0, 0, w3, h).data);
+  return { rect, rgba };
+}
+
 type GifPatchResult =
   /**
    * keptOriginal: 정지가 아니거나 관문에 걸려 **원문을 그대로 둔** 문구(원문 한자)
    * notes: 채택은 했지만 운영자가 알아야 할 것(글자가 작아짐 등) — 「다시 만들기」 판단 근거
    */
-  | { patch: Image; overlayBoxes: OcrBox[]; keptOriginal: string[]; notes: string[]; bands: BandRect[] }
+  | { patch: Image; overlayBoxes: OcrBox[]; keptOriginal: string[]; notes: string[]; bands: BandRect[]; localText: string[] }
   | { patch: null; reason: string };
 
 /**
@@ -3540,11 +3742,9 @@ async function tryBuildGifPatch(
       }
       groups = groups.slice(0, MAX_GIF_BANDS);
     }
-    if (groups.length === 0) {
-      // 글자가 움직이는 영상 위에 얹혀 있는 GIF — 정지 패치로는 손댈 수 없다.
-      // 억지로 얹으면 그 자리의 영상이 전 프레임에 얼어붙는다.
-      return { patch: null, reason: "글자가 움직이는 화면 위에 있어 자동 번역이 안 됩니다" };
-    }
+    // 띠가 하나도 없으면 아래 단색 배경 직접 그리기만 남는다 — 그것도 안 되면 원문 유지.
+    // 억지로 얹으면 그 자리의 영상이 전 프레임에 얼어붙는다.
+    const NO_BAND = "글자가 움직이는 화면 위에 있어 자동 번역이 안 됩니다";
 
     const frame0Png = await sharp(data, { page: 0, pages: 1 }).png().toBuffer();
     const patchRgba = Buffer.alloc(W * H * 4); // 알파 0 = 투명
@@ -3725,7 +3925,7 @@ async function tryBuildGifPatch(
     }
     };
 
-    if (adminApproved) {
+    if (groups.length > 0 && adminApproved) {
       // 운영자 승인 재렌더 — 안전 폴백과 같은 별도 예산 스코프. 자동 흐름의
       // "원본당 1회"는 그대로 두고, 명시 승인에서만 띠별 호출을 허용한다.
       const bandBudget = { left: gifBandBudgetFor(groups.length), used: 0 };
@@ -3734,12 +3934,41 @@ async function tryBuildGifPatch(
       } finally {
         console.log(`[비용] GIF 띠 편집 ${bandBudget.used}회 ≈ $${(bandBudget.used * IMAGE_CALL_COST_USD).toFixed(3)}`);
       }
-    } else {
+    } else if (groups.length > 0) {
       await renderBands();
     }
 
+    // 모델 띠로 못 한 문구 중 **단색 배경·정지** 자리만 직접 그린다(호출 0회). 호출 한도로
+    // 미룬 띠는 제외 — 그건 「다시 만들기」에서 모델이 그리는 게 낫다(서체 통일).
+    const localText: string[] = [];
+    const budgetKept = new Set(
+      keptOriginal.filter((k) => k.endsWith("이미지 호출 한도")).map((k) => k.slice(0, k.indexOf(" — "))),
+    );
+    for (const t of targets) {
+      if (done.includes(t) || budgetKept.has(t.zh)) continue;
+      let whyNot = "";
+      const others = boxes.filter((o) => o !== t).map((o) => {
+        const [oy1, ox1, oy2, ox2] = o.box;
+        return glyphExtent(frame0, W, H, { x0: (ox1 / 1000) * W, y0: (oy1 / 1000) * H, x1: (ox2 / 1000) * W, y1: (oy2 / 1000) * H });
+      });
+      const lp = localSolidPatch(frame0, moved, W, H, t, (r) => { whyNot = r; }, others);
+      if (!lp) {
+        console.log(`[gif 직접 그리기] 「${t.zh}」 불가 — ${whyNot}`);
+        continue;
+      }
+      const rw = lp.rect.x1 - lp.rect.x0;
+      for (let y = lp.rect.y0; y < lp.rect.y1; y++) {
+        const src = (y - lp.rect.y0) * rw * 4;
+        lp.rgba.copy(patchRgba, (y * W + lp.rect.x0) * 4, src, src + rw * 4);
+      }
+      done.push(t);
+      localText.push(t.zh);
+      for (let i = keptOriginal.length - 1; i >= 0; i--) if (keptOriginal[i].startsWith(`${t.zh} — `)) keptOriginal.splice(i, 1);
+      console.log(`[gif 직접 그리기] 「${t.zh}」 ${rw}×${lp.rect.y1 - lp.rect.y0} — 단색 배경·정지, 호출 0회`);
+    }
+
     if (done.length === 0) {
-      return { patch: null, reason: lastFail || "글자 영역을 다시 그리지 못했습니다" };
+      return { patch: null, reason: groups.length === 0 ? NO_BAND : lastFail || "글자 영역을 다시 그리지 못했습니다" };
     }
     const patchPng = await sharp(patchRgba, { raw: { width: W, height: H, channels: 4 } })
       .png()
@@ -3749,7 +3978,18 @@ async function tryBuildGifPatch(
     const missed = overlayBoxes
       .filter((b) => !keptOriginal.some((k) => k.startsWith(b.zh)))
       .map((b) => `${b.zh} — 움직이는 화면 위`);
-    return { patch: await loadImage(patchPng), overlayBoxes, keptOriginal: [...keptOriginal, ...missed], notes, bands: groups.map((q) => q.band) };
+    // 직접 그린 자리도 "패치 안"이다 — 패치 밖 보존 측정에서 뺀다
+    const bandsAll = [...groups.map((q) => q.band)];
+    for (const t of targets) {
+      if (!localText.includes(t.zh)) continue;
+      const others = boxes.filter((o) => o !== t).map((o) => {
+        const [oy1, ox1, oy2, ox2] = o.box;
+        return glyphExtent(frame0, W, H, { x0: (ox1 / 1000) * W, y0: (oy1 / 1000) * H, x1: (ox2 / 1000) * W, y1: (oy2 / 1000) * H });
+      });
+      const lp = localSolidPatch(frame0, moved, W, H, t, () => {}, others);
+      if (lp) bandsAll.push({ left: lp.rect.x0, top: lp.rect.y0, width: lp.rect.x1 - lp.rect.x0, height: lp.rect.y1 - lp.rect.y0 });
+    }
+    return { patch: await loadImage(patchPng), overlayBoxes, keptOriginal: [...keptOriginal, ...missed], notes, bands: bandsAll, localText };
   } catch (e) {
     // 삼키지 않는다 (2026-08-31 실측). 예전엔 여기서 null 로 뭉개서 429·타임아웃·
     // 안전필터 거부가 전부 "GIF 정지 패치 실패"(FAILED)로 굳었다 — 월 한도 초과
@@ -3763,7 +4003,7 @@ async function renderGif(
   data: Buffer,
   boxes: OcrBox[],
   opts: { adminApproved?: boolean } = {},
-): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[]; outsideMaxDiff?: number; outsideChangedFrac?: number }> {
+): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[]; outsideMaxDiff?: number; outsideChangedFrac?: number; localText?: string[] }> {
   const meta = await sharp(data, { animated: true }).metadata();
   const pages = meta.pages ?? 1;
   const width = meta.width ?? 0;
@@ -3858,7 +4098,7 @@ async function renderGif(
     }
   }
   const outsideChangedFrac = total > 0 ? changed / total : 0;
-  return { data: out, mime: "image/gif", keptOriginal: patched.keptOriginal, notes: patched.notes, outsideMaxDiff, outsideChangedFrac };
+  return { data: out, mime: "image/gif", keptOriginal: patched.keptOriginal, notes: patched.notes, outsideMaxDiff, outsideChangedFrac, localText: patched.localText };
 }
 
 /* ── 정지 이미지: 이미지 모델 재생성 ─────────────────────── */
@@ -5486,7 +5726,7 @@ export async function renderTranslatedImage(
    * 자국이 아예 생기지 않는다(실상품 이미지로 확인).
    */
   opts: { regenerate?: boolean; hint?: string } = {},
-): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[]; outsideMaxDiff?: number; outsideChangedFrac?: number }> {
+): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[]; outsideMaxDiff?: number; outsideChangedFrac?: number; localText?: string[] }> {
   // 수동 경로(어드민 문구 수정 재렌더)도 예산 스코프 안에서 돈다 — 지금은 어느
   // 갈래든 호출 1회지만, 그건 REGEN_ATTEMPTS=1 이라는 우연한 상수에 기대는 것이라
   // 루프가 하나만 늘어도 상한이 뚫린다. "장당 이미지 HTTP 1회"를 구조로 못 박는다.
@@ -5499,7 +5739,7 @@ async function renderTranslatedImageInner(
   mime: string,
   boxes: OcrBox[],
   opts: { regenerate?: boolean; hint?: string },
-): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[]; outsideMaxDiff?: number; outsideChangedFrac?: number }> {
+): Promise<{ data: Buffer; mime: string; keptOriginal?: string[]; notes?: string[]; outsideMaxDiff?: number; outsideChangedFrac?: number; localText?: string[] }> {
   ensureFonts();
   // GIF 는 워터마크 지우기를 하지 않는다 — 프레임마다 로컬 지우개를 돌리면
   // 사진 배경에 얼룩이 프레임 단위로 어른거린다. 정지 이미지부터 확실히.
@@ -6376,6 +6616,7 @@ async function translateImageAutoInner(
   let gifNotes: string[] = [];
   let gifOutsideMaxDiff: number | undefined;
   let gifOutsideChangedFrac: number | undefined;
+  let gifLocalText: string[] = [];
   try {
     if (resume?.rendered) {
       // 저장된 모델 출력을 그대로 후보로 쓴다 — 이미지 API 호출 0회.
@@ -6390,6 +6631,7 @@ async function translateImageAutoInner(
       gifNotes = g.notes ?? [];
       gifOutsideMaxDiff = g.outsideMaxDiff;
       gifOutsideChangedFrac = g.outsideChangedFrac;
+      gifLocalText = g.localText ?? [];
     } else {
       // dropRiskyWm 이 빼는 것 = 이웃 글자와 겹쳐 **지움을 포기한** 워터마크.
       // 최종 관문은 이것만 면책한다 — 지우라고 시킨 워터마크가 남으면 실패다.
@@ -6673,6 +6915,8 @@ async function translateImageAutoInner(
     const color = gifNotes.filter((n) => n.includes("글자색"));
     if (small.length > 0) reasons.push({ code: "GIF_SMALL_TEXT", detail: small.join(", ").slice(0, 300) });
     if (color.length > 0) reasons.push({ code: "GIF_TEXT_COLOR", detail: color.join(", ").slice(0, 300) });
+    // 직접 그린 문구 — 서체가 바뀐 자리를 운영자가 보고 승인한다
+    if (gifLocalText.length > 0) reasons.push({ code: "GIF_LOCAL_TEXT", detail: gifLocalText.join(", ").slice(0, 300) });
   }
 
   // 문구별 추적 — 번역 대상인데 상태가 없는 문구가 있으면 조용한 누락이다 (요구 4).
