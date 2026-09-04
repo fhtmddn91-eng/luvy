@@ -461,6 +461,20 @@ describe("regionStaticEnough", () => {
     expect(regionStaticEnough(movedMaskFromFrames(fs2, W, H), W, rect)).toBe(false);
   });
 
+  it("큰 영역에서는 면적 비율로 본다 — 3만 픽셀 제목이 0.3% 흔들려도 통과", () => {
+    // 운영 GIF 95장 조사(2026-09-02): "움직이는 글자" 47개 중 40개는 글자·배경이 정지인데 사각형 안
+    // 0.1~1.6% 픽셀만 팔레트 흔들림으로 튀어 절대값 24px 에 걸려 띠를 못 만들었다(「亲肤硅胶」 379×94, 0.3%).
+    const BW = 300, BH = 100;
+    const big: Uint8Array[] = [];
+    for (let f = 0; f < 3; f++) {
+      const a = new Uint8Array(BW * BH * 4).fill(200);
+      for (let i = 3; i < a.length; i += 4) a[i] = 255;
+      if (f > 0) for (let k = 0; k < 100; k++) { const x = (k * 37) % BW, y = (k * 11) % BH; const i = (y * BW + x) * 4; a[i] = 10; a[i + 1] = 10; a[i + 2] = 10; }
+      big.push(a);
+    }
+    expect(regionStaticEnough(movedMaskFromFrames(big, BW, BH), BW, { x0: 0, y0: 0, x1: BW, y1: BH })).toBe(true);
+  });
+
   it("총량이 크면 막는다 — 진짜 애니메이션", () => {
     const fs2 = frames((f, set) => {
       if (f === 0) return;
@@ -672,6 +686,20 @@ describe("bandGlyphColorShift — 글자색이 원본과 달라졌나 (픽셀, �
     const allBlack = canvas([{ y0: 45, y1: 65, x0: 55, x1: 125, rgb: blk }]);
     const r = bandGlyphColorShift(twoTone, allBlack, W, H, [target], [target], band);
     expect(r[0].delta).toBeGreaterThan(100);
+  });
+
+  it("색 자체는 같고 경계만 옮겨졌으면 '경계 이동'으로 구분해 알린다 — 운영자 판단이 다르다", () => {
+    // 실측 8 「인체공학 설계」: 검정/빨강은 그대로인데 빨강이 시작하는 자리가 옮겨졌다(색 차 122).
+    // 색이 바뀐 것(다시 만들기 필요)과 경계만 옮겨진 것(허용 가능)은 운영자 판단이 다르다.
+    const blk: [number, number, number] = [20, 20, 20];
+    const red: [number, number, number] = [210, 30, 30];
+    const a = canvas([{ y0: 45, y1: 65, x0: 55, x1: 90, rgb: blk }, { y0: 45, y1: 65, x0: 90, x1: 125, rgb: red }]);
+    const b = canvas([{ y0: 45, y1: 65, x0: 55, x1: 110, rgb: blk }, { y0: 45, y1: 65, x0: 110, x1: 125, rgb: red }]);
+    const r = bandGlyphColorShift(a, b, W, H, [target], [target], band);
+    expect(r[0].delta).toBeGreaterThan(75);
+    expect(r[0].boundaryOnly).toBe(true);
+    const c = bandGlyphColorShift(a, canvas([{ y0: 45, y1: 65, x0: 55, x1: 125, rgb: blk }]), W, H, [target], [target], band);
+    expect(c[0].boundaryOnly).toBe(false); // 빨강이 사라졌다 — 색 변화
   });
 
   it("가는 글자의 안티앨리어싱 번짐은 색 변화가 아니다 — 획 중심색으로 비교한다", () => {

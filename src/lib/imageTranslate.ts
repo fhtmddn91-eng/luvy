@@ -2321,11 +2321,18 @@ export function regionStaticEnough(
   moved: Uint8Array,
   W: number,
   rect: { x0: number; y0: number; x1: number; y1: number },
-  maxPx = 24,
+  /**
+   * 흩어진 움직임 허용 총량. 기본은 **24px 과 면적의 1% 중 큰 쪽** — 절대값만 쓰면 큰 제목
+   * (3만 픽셀)이 팔레트 흔들림 0.3% 로 탈락한다. 운영 GIF 95장 조사(2026-09-02): "움직이는
+   * 글자" 47개 중 40개가 이 경우였다(사각형 안 움직임 0.1~1.6%, 글자 획은 97~100% 정지).
+   * 덩어리 상한(maxBlob)이 있어 흩어진 잡티만 통과한다.
+   */
+  maxPx?: number,
   maxBlob = 8,
 ): boolean {
   const w = rect.x1 - rect.x0, h = rect.y1 - rect.y0;
   if (w <= 0 || h <= 0) return false;
+  const limit = maxPx ?? Math.max(24, Math.floor(w * h * 0.01));
   let total = 0;
   const local = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
@@ -2333,7 +2340,7 @@ export function regionStaticEnough(
     for (let x = 0; x < w; x++) {
       if (!moved[row + x]) continue;
       local[y * w + x] = 1;
-      if (++total > maxPx) return false; // 총량 초과 — 더 볼 것 없다
+      if (++total > limit) return false; // 총량 초과 — 더 볼 것 없다
     }
   }
   if (total === 0) return true;
@@ -3519,10 +3526,34 @@ export function bandGlyphColorShift(
   targets: OcrBox[],
   allBoxes: OcrBox[],
   band: BandRect,
-): { zh: string; delta: number }[] {
+): { zh: string; delta: number; /** 색 자체는 같고 색이 바뀌는 자리만 옮겨졌나 */ boundaryOnly: boolean }[] {
   const px = (b: OcrBox): PxBox => {
     const [y1, x1, y2, x2] = b.box;
     return { x0: (x1 / 1000) * W, y0: (y1 / 1000) * H, x1: (x2 / 1000) * W, y1: (y2 / 1000) * H };
+  };
+  /** 글자 픽셀의 색 팔레트 — 32단계로 뭉친 뒤 글자 픽셀의 15% 이상인 색만 (두 색 제목이면 둘) */
+  const inkPalette = (raw: Uint8Array, r: PxBox, exclude: PxBox[]): [number, number, number][] => {
+    const lum: number[] = [], idx: number[] = [];
+    for (let y = r.y0; y < r.y1; y++) for (let x = r.x0; x < r.x1; x++) {
+      if (exclude.some((e) => x >= e.x0 && x < e.x1 && y >= e.y0 && y < e.y1)) continue;
+      const i = (y * W + x) * 4;
+      lum.push(0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2]);
+      idx.push(i);
+    }
+    if (lum.length === 0) return [];
+    const med = [...lum].sort((a, b) => a - b)[lum.length >> 1];
+    const bins = new Map<string, { n: number; r: number; g: number; b: number }>();
+    let n = 0;
+    lum.forEach((v, k) => {
+      if (Math.abs(v - med) <= 40) return;
+      const i = idx[k];
+      const key = `${raw[i] >> 5},${raw[i + 1] >> 5},${raw[i + 2] >> 5}`;
+      const e = bins.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
+      e.n++; e.r += raw[i]; e.g += raw[i + 1]; e.b += raw[i + 2];
+      bins.set(key, e);
+      n++;
+    });
+    return [...bins.values()].filter((e) => e.n >= n * 0.15).map((e) => [e.r / e.n, e.g / e.n, e.b / e.n] as [number, number, number]);
   };
   const inkColor = (raw: Uint8Array, r: PxBox, exclude: PxBox[]): [number, number, number] | null => {
     const lum: number[] = [];
@@ -3552,7 +3583,7 @@ export function bandGlyphColorShift(
     const mid = (a: number[]) => a.sort((x, y) => x - y)[a.length >> 1];
     return [mid(core.map((c) => raw[c.i])), mid(core.map((c) => raw[c.i + 1])), mid(core.map((c) => raw[c.i + 2]))];
   };
-  const out: { zh: string; delta: number }[] = [];
+  const out: { zh: string; delta: number; boundaryOnly: boolean }[] = [];
   for (const b of targets) {
     if (b.solid_bg === false) continue;
     const core = px(b);
@@ -3576,7 +3607,15 @@ export function bandGlyphColorShift(
       if (!a || !c) continue;
       delta = Math.max(delta, Math.abs(a[0] - c[0]), Math.abs(a[1] - c[1]), Math.abs(a[2] - c[2]));
     }
-    if (delta >= 0) out.push({ zh: b.zh, delta });
+    if (delta < 0) continue;
+    // 팔레트가 같은데 부분 색이 다르면 색이 바뀐 게 아니라 **색 경계가 옮겨진** 것 — 실측 8
+    // 「인체공학 설계」: 검정/빨강은 그대로, 빨강 시작 자리만 옮겨졌다(차 122). 운영자 판단이 다르다.
+    const near = (p: [number, number, number], q: [number, number, number]) =>
+      Math.max(Math.abs(p[0] - q[0]), Math.abs(p[1] - q[1]), Math.abs(p[2] - q[2])) <= 40;
+    const pa = inkPalette(origRaw, r, exclude), pc = inkPalette(compRaw, r, exclude);
+    const samePalette =
+      pa.length > 0 && pc.length > 0 && pa.every((p) => pc.some((q) => near(p, q))) && pc.every((q) => pa.some((p) => near(p, q)));
+    out.push({ zh: b.zh, delta, boundaryOnly: delta > 0 && samePalette });
   }
   return out;
 }
@@ -4075,8 +4114,10 @@ async function tryBuildGifPatch(
             if (sh.ratio < BAND_SHRINK_MIN) softNotes.push(`${sh.zh} — 글자가 원문의 ${Math.round(sh.ratio * 100)}% 로 작아졌습니다`);
           }
         } else if (colorBad.length > 0) {
-          problem = `글자색이 달라졌습니다 (${colorBad.map((c) => `「${c.zh}」 차 ${c.delta}`).join(", ").slice(0, 60)})`;
-          for (const c of colorBad) softNotes.push(`${c.zh} — 글자색이 원본과 달라졌습니다`);
+          problem = `글자색이 달라졌습니다 (${colorBad.map((c) => `「${c.zh}」 차 ${c.delta}${c.boundaryOnly ? " 경계 이동" : ""}`).join(", ").slice(0, 60)})`;
+          for (const c of colorBad) {
+            softNotes.push(c.boundaryOnly ? `${c.zh} — 글자 색 경계가 옮겨졌습니다(색 자체는 같음)` : `${c.zh} — 글자색이 원본과 달라졌습니다`);
+          }
         } else if (weightBad.length > 0) {
           problem = `굵기가 달라졌습니다 (${weightBad.map((w) => `「${w.zh}」 ×${w.ratio.toFixed(2)}`).join(", ").slice(0, 60)})`;
           for (const w of weightBad) softNotes.push(`${w.zh} — 획 굵기가 원본의 ${Math.round(w.ratio * 100)}% 입니다`);
@@ -7121,7 +7162,7 @@ async function translateImageAutoInner(
     }
     // 채택은 했지만 글자가 작아지거나 색이 달라진 문구 — 「다시 만들기」로 나아질 수 있음을 알린다
     const small = gifNotes.filter((n) => n.includes("작아졌"));
-    const color = gifNotes.filter((n) => n.includes("글자색"));
+    const color = gifNotes.filter((n) => n.includes("글자색") || n.includes("색 경계"));
     if (small.length > 0) reasons.push({ code: "GIF_SMALL_TEXT", detail: small.join(", ").slice(0, 300) });
     if (color.length > 0) reasons.push({ code: "GIF_TEXT_COLOR", detail: color.join(", ").slice(0, 300) });
     const weight = gifNotes.filter((n) => n.includes("획 굵기"));
