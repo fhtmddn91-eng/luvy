@@ -4088,10 +4088,14 @@ async function tryBuildGifPatch(
         let out: Buffer;
         // 재시도는 **조건을 바꿔서** 한다 — 같은 조건 반복은 확률 재구매일 뿐이다.
         // 1차보다 한 단계 더 확대해 글자 그릴 공간을 넓힌다.
-        // 배율 확대는 뭉개진 획(품질)용이다. 크기가 작아진 문제는 같은 배율로 다시 그린다 —
-        // 실측 13 제목: 배율을 올렸더니 84%→78% 로 더 작아졌다(모델은 큰 그림에서 더 여백을 둔다).
+        // 배율 확대는 뭉개진 획(품질)용이다. 크기가 작아진 문제는 반대로 **배율을 한 단계 낮춰** 다시
+        // 그린다 — 실측 13 제목: 배율을 올렸더니 84%→78% 로 더 작아졌다(모델은 큰 그림에서 여백을
+        // 더 둔다). 단 낮춘 배율에서도 글자가 36px 은 돼야 한다(그 밑은 획이 뭉개진다, 실측 22px 실패).
         const sizeRetry: boolean = attempt > 1 && problem !== null && problem.includes("작아졌");
-        const scale: number = sizeRetry ? Math.min(4, baseScale) : Math.min(4, baseScale + (attempt - 1));
+        const lower = Math.max(1, baseScale - 1);
+        const scale: number = sizeRetry
+          ? (minGlyphPx * lower >= 36 ? lower : Math.min(4, baseScale))
+          : Math.min(4, baseScale + (attempt - 1));
         const sendW = Math.round(band.width * scale);
         const sendH = Math.round(band.height * scale);
         // 직전 사유는 힌트로만 쓰고 비운다 — 안 비우면 2차가 전부 통과해도 1차 사유가 남아
@@ -4172,7 +4176,9 @@ async function tryBuildGifPatch(
         if (worst < BAND_SHRINK_MIN) {
           const w0 = shrunk.reduce((m, s) => (s.ratio < m.ratio ? s : m), shrunk[0]);
           // 절대값은 **보낸 배율 기준**으로 — 모델은 자기가 받은 그림의 픽셀로 잰다
-          problem = `글자가 작아졌습니다 (원문의 ${Math.round(worst * 100)}%, ${Math.round(w0.compH * scale)}px→${Math.round(w0.origH * scale)}px)`;
+          // 띠 높이 대비 비율도 싣는다 — 모델은 픽셀 절대값보다 그림 안 비율을 더 잘 본다
+          const pct = (h: number) => Math.round((h / band.height) * 100);
+          problem = `글자가 작아졌습니다 (원문의 ${Math.round(worst * 100)}%, ${Math.round(w0.compH * scale)}px→${Math.round(w0.origH * scale)}px, 띠 높이의 ${pct(w0.compH)}%→${pct(w0.origH)}%)`;
           for (const sh of shrunk) {
             if (sh.ratio < BAND_SHRINK_MIN) softNotes.push(`${sh.zh} — 글자가 원문의 ${Math.round(sh.ratio * 100)}% 로 작아졌습니다`);
           }
@@ -4548,9 +4554,12 @@ export function bandRetryHint(problem: string): string {
   if (problem.includes("작아졌")) {
     const m = problem.match(/(\d+)%/);
     const px = problem.match(/(\d+)px→(\d+)px/);
-    // 비율만 주면 2차가 더 작아지기도 했다(실측 13 제목: 84%→78%). 지금 몇 px 이고 몇 px 이어야 하는지를 준다.
+    const pr = problem.match(/띠 높이의 (\d+)%→(\d+)%/);
+    // 비율만 주면 2차가 더 작아지기도 했다(실측 13 제목: 84%→78%). 지금 몇 px 이고 몇 px 이어야 하는지,
+    // 그리고 이 그림 높이의 몇 % 여야 하는지를 준다 — 모델은 그림 안 비율을 가장 잘 본다.
     const abs = px ? ` 직전 글자 높이는 ${px[1]}px 였고, ${px[2]}px 이어야 합니다 — 그만큼 더 크게 쓰세요.` : "";
-    return `${head}- 글자가 원문의 ${m ? m[1] : "?"}% 크기로 작아졌습니다.${abs} 글자 높이를 목록에 적힌 픽셀값 그대로 유지하세요. 폭이 모자라면 크기를 줄이지 말고 자간을 좁히거나 글자 폭을 좁혀(장체) 넣으세요.`;
+    const rel = pr ? ` 글자 높이가 이 그림 전체, 즉 띠 높이의 ${pr[2]}% 를 차지해야 합니다(직전은 ${pr[1]}%).` : "";
+    return `${head}- 글자가 원문의 ${m ? m[1] : "?"}% 크기로 작아졌습니다.${abs}${rel} 글자 높이를 목록에 적힌 픽셀값 그대로 유지하세요. 폭이 모자라면 크기를 줄이지 말고 자간을 좁히거나 글자 폭을 좁혀(장체) 넣으세요.`;
   }
   if (problem.includes("굵기")) {
     return `${head}- 글자 굵기가 원문과 달라졌습니다. 획 두께를 원문과 똑같이(가는 글자는 가늘게, 굵은 글자는 굵게) 쓰세요.`;

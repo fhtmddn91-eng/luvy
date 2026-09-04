@@ -161,7 +161,9 @@ const VERIFY_V = 16;
 //     목표 Mpx" 절대값. (2026-09-02)
 // 23: 띠 가로 확장(growWide)을 글자 수 비율이 아니라 **실제 글자 폭 추정**(글자 1.0em·공백 0.4em +
 //     여백 28px)만큼 한다 — 비율로는 12자를 313px 까지만 넓혀 한글이 꽉 찼다(정지 여백은 421px 이상).
-const RENDER_V = 23;
+// 24: 크기 재시도는 글자가 36px 이상이면 배율을 한 단계 **낮춰** 그린다(큰 그림일수록 모델이
+//     여백을 더 둔다: ×2→×3 에서 84%→78%). 힌트에 "띠 높이의 P%(직전 Q%)" 비율을 싣는다.
+const RENDER_V = 24;
 export const PIPELINE_VERSION = `${IMAGE_MODEL}|render:${RENDER_V}|prompt:${PROMPT_V}|patch:${PATCH_V}|verify:${VERIFY_V}`;
 
 export function sha256Of(data: Buffer): string {

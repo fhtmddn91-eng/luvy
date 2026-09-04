@@ -355,6 +355,12 @@ describe("bandRetryHint", () => {
     expect(h).toContain("96px");
   });
 
+  it("띠 높이 대비 비율도 말한다 — 모델은 픽셀보다 그림 안 비율을 더 잘 본다", () => {
+    const h = bandRetryHint("글자가 작아졌습니다 (원문의 84%, 81px→96px, 띠 높이의 38%→45%)");
+    expect(h).toMatch(/띠 높이의 45%/);
+    expect(h).toMatch(/38%/);
+  });
+
   it("모르는 사유는 그대로 전달한다 — 삼키지 않는다", () => {
     expect(bandRetryHint("알 수 없는 사유 XYZ")).toContain("알 수 없는 사유 XYZ");
   });

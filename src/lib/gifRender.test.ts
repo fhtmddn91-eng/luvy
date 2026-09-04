@@ -402,6 +402,68 @@ describe("renderTranslatedImage — GIF", () => {
     expect(sizes[1]).toBe(sizes[0]);
   }, 60_000);
 
+  it("글자가 36px 이상이면 크기 재시도는 배율을 한 단계 낮춘다 — 큰 그림일수록 모델이 여백을 더 둔다(84%→78%)", async () => {
+    // 글자 40px: 기본 배율 2(목표 44px). 재시도는 ×1 — 40px 이면 모델이 또렷이 그리는 하한(36px) 위다.
+    const sizes: number[] = [];
+    stubGemini("shrink");
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (u: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as { contents?: { parts?: { inline_data?: { data?: string } }[] }[]; generationConfig?: { responseModalities?: string[] } };
+      if (body.generationConfig?.responseModalities?.includes("IMAGE")) {
+        const b64 = body.contents?.[0]?.parts?.find((p) => p.inline_data?.data)?.inline_data?.data ?? "";
+        sizes.push((await sharp(Buffer.from(b64, "base64")).metadata()).width ?? 0);
+      }
+      return inner(u as string, init as RequestInit);
+    });
+    const frames: Buffer[] = [];
+    for (let i = 0; i < 3; i++) {
+      const raw = Buffer.alloc(W * H * 3);
+      for (let y = 0; y < H; y++) {
+        const v = y < H / 2 ? 230 : 40 + i * 60;
+        raw.fill(v, y * W * 3, (y + 1) * W * 3);
+        if (y >= 20 && y < 60 && (y - 20) % 10 < 7) raw.fill(20, (y * W + 30) * 3, (y * W + 210) * 3); // 40px 높이 글자(가로 줄무늬)
+      }
+      frames.push(await sharp(raw, { raw: { width: W, height: H, channels: 3 } }).png().toBuffer());
+    }
+    const gif = await sharp(frames, { join: { animated: true } }).gif({ delay: [100, 100, 100] }).toBuffer();
+    const big: OcrBox = { box: [83, 100, 250, 900], zh: "强震", ko: "강력 진동", bg: "#ffffff", fg: "#000000", solid_bg: true }; // y 20~60 = 40px → 기본 배율 2
+    await renderTranslatedImage(gif, "image/gif", [big]);
+    expect(sizes).toHaveLength(2);
+    expect(sizes[1]).toBeLessThan(sizes[0]);
+  }, 60_000);
+
+  it("재시도가 첫 시도보다 더 작아지면 첫 시도를 쓴다 — 재시도는 복권이지 개선이 아니다", async () => {
+    // 실측 13 제목: 1차 84% → 2차 78%. 더 나은 쪽(1차)을 채택해야 한다.
+    imageCalls = 0;
+    let call = 0;
+    vi.stubGlobal("fetch", async (_u: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as { contents?: { parts?: { inline_data?: { data?: string } }[] }[]; generationConfig?: { responseModalities?: string[] } };
+      if (body.generationConfig?.responseModalities?.includes("IMAGE")) {
+        imageCalls++; call++;
+        const b64 = body.contents?.[0]?.parts?.find((p) => p.inline_data?.data)?.inline_data?.data ?? "";
+        const src = sharp(Buffer.from(b64, "base64"));
+        const m = await src.metadata(); const cw = m.width ?? 1, ch = m.height ?? 1;
+        const raw = await src.ensureAlpha().raw().toBuffer();
+        const dark: number[] = [];
+        for (let y = 0; y < ch; y++) { let sum = 0; for (let x = 0; x < cw; x++) sum += raw[(y * cw + x) * 4]; if (sum / cw < 200) dark.push(y); }
+        // 1차: 어두운 행의 위아래 1/8 씩 지움(75%), 2차: 1/4 씩 지움(50%)
+        const cut = call === 1 ? 8 : 4;
+        const keep = new Set(dark.slice(Math.floor(dark.length / cut), Math.ceil((dark.length * (cut - 1)) / cut)));
+        for (const y of dark) { if (keep.has(y)) continue; for (let x = 0; x < cw; x++) { const i = (y * cw + x) * 4; raw[i] = raw[0]; raw[i + 1] = raw[1]; raw[i + 2] = raw[2]; } }
+        const png = await sharp(raw, { raw: { width: cw, height: ch, channels: 4 } }).png().toBuffer();
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: png.toString("base64") } }] } }] }), { status: 200 });
+      }
+      const asked = JSON.stringify(body.contents ?? "");
+      if (asked.includes("글자 부분만 잘라낸 띠")) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ ok: true, issues: [], hard: [] }) }] } }] }), { status: 200 });
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify([{ box: [80, 100, 200, 900], text: "강력 진동" }]) }] } }] }), { status: 200 });
+    });
+    const out = await renderTranslatedImage(await makeGifWithGlyph(), "image/gif", [topBox]);
+    expect(imageCalls).toBe(2);
+    const note = (out.notes ?? []).join(" ");
+    expect(note).toMatch(/[78]\d%/); // 1차(≈75~80%)를 채택 — 2차(≈50~55%)가 아니다
+    expect(note).not.toMatch(/5\d%/);
+  }, 60_000);
+
   it("글자가 제 크기면 재시도하지 않는다 — 크기 관문은 공짜지만 재시도는 돈이다", async () => {
     stubGemini("ok");
     const gif = await makeGifWithGlyph();
