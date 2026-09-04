@@ -1177,6 +1177,29 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 진동");
   });
 
+  it("GIF: 제품 무결성 심사가 '남은 중국어'만 문제 삼으면 PRODUCT_CHANGED 로 올리지 않는다 — 잔류 관문이 따로 잡는다", { timeout: 30_000 }, async () => {
+    // 실측 12·13·14 세 번 다 "남은 중국어" 를 제품 변화로 hard 판정했다 — 요청문에 무시하라고 적어도 낸다(규칙 4).
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    mock.productCheck = [[{ ok: false, issues: ["번역되지 않은 중국어가 남아있음"], hard: ["오른쪽 아래 상자에 번역되지 않은 중국어 텍스트가 남아있음"] }]];
+    const r = await translateImageAuto(gif, "image/gif");
+    if (r.status === "NEEDS_REVIEW") expect(r.reasons.map((x) => x.code)).not.toContain("PRODUCT_CHANGED");
+    else expect(r.status).toBe("NEEDS_REVIEW");
+  });
+
+  it("GIF: 제품 무결성 심사가 진짜 제품 변화를 말하면 PRODUCT_CHANGED 는 그대로", { timeout: 30_000 }, async () => {
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    mock.productCheck = [[{ ok: false, issues: ["제품이 2개→1개"], hard: ["제품이 2개→1개"] }]];
+    const r = await translateImageAuto(gif, "image/gif");
+    expect(r.status).toBe("NEEDS_REVIEW");
+    if (r.status === "NEEDS_REVIEW") expect(r.reasons.map((x) => x.code)).toContain("PRODUCT_CHANGED");
+  });
+
   it("정지 이미지의 줄이기는 그대로다 — 직전 답 되먹임·2차 줄이기는 GIF 전용", async () => {
     mock = happyMock();
     // 정지 이미지 예산 18자. 1차 20자 → 줄이기 1회 14자 → 채택, 2차 없음

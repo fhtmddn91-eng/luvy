@@ -6,7 +6,7 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { gifBandBudgetFor, gifBudgetsOf, gifCharBudget, keptOriginalDetail, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, bandGlyphShrink, bandGlyphColorShift, bandGlyphWeightShift, bandWeightBad, compositeBand, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, staticRoomOf, type OcrBox } from "./imageTranslate";
+import { gifBandBudgetFor, gifBudgetsOf, gifCharBudget, keptOriginalDetail, koTextWidth, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, bandGlyphShrink, bandGlyphColorShift, bandGlyphWeightShift, bandWeightBad, compositeBand, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, staticRoomOf, type OcrBox } from "./imageTranslate";
 import { buildBandQualityPrompt } from "./translateVerify";
 
 const W = 200;
@@ -94,7 +94,7 @@ describe("staticBandsOf", () => {
     const f0 = frame();
     const f1 = move(f0, 0, 0, 50, 200); // 왼쪽 x<50 이 움직인다
     const moved = movedMaskFromFrames([f0, f1], W, H);
-    // 한국어 4자 = 4×20px(글자 높이) + 여백 28px = 108px 가 필요한데 왼쪽은 x50 에서 막힌다
+    // 한국어 4자 = 4×0.85×20px ×1.15 + 여백 36px ≈ 114px 가 필요한데 왼쪽은 x50 에서 막힌다
     const b = { ...box([450, 300, 550, 500], "字"), ko: "글글글글" }; // x 60~100, y 90~110
     const [g] = staticBandsOf([b], f0, moved, W, H);
     expect(g).toBeDefined();
@@ -633,21 +633,30 @@ describe("keptOriginalDetail — 원문 유지 사유 표기", () => {
  * 띠는 589px 로 넓어져 "인체공학 설계"(7자)가 원래 크기로 들어갈 자리였다. 반대로
  * 「多种频率」는 여백이 없어 4자("진동모드")가 진실이다.
  */
+describe("koTextWidth — 한국어 한 줄 폭 추정", () => {
+  it("한글 0.85em·숫자/영문 0.5em·기호 0.35em·공백 0.3em", () => {
+    // 「360°贴合」→"360° 밀착핏"(8자)이 156px 띠(29px 글자)에 잘 들어갔는데 전부 1.0em 으로 세면 243px 이 필요해
+    // 예산이 5자로 떨어져 승인 문구가 잘린다. 숫자·기호는 한글보다 훨씬 좁다.
+    expect(koTextWidth("밀착핏", 10)).toBeCloseTo(25.5, 0);
+    expect(koTextWidth("360", 10)).toBeCloseTo(15, 0);
+    expect(koTextWidth("360° 밀착핏", 29)).toBeLessThan(156 - 16);
+  });
+});
+
 describe("gifCharBudget — 띠에 실제로 들어가는 글자 수", () => {
-  it("(폭 − 여백 28px) ÷ (0.95 × 글자 높이) — 한국어 글자 1.0em·공백 0.4em 의 평균", () => {
-    // 실측 13 「大头爆震」: 0.85em 으로 세니 글자가 띠를 꽉 채워 가장자리에 닿았다(모델의 한글은 1em 에 가깝다)
+  it("(폭 − 여백 28px) ÷ (0.8 × 글자 높이) — 한글 0.85em·공백 0.3em 의 평균", () => {
     expect(gifCharBudget(113, 30, 4)).toBe(4); // 「多种频率」 자리 그대로 → "진동모드"
-    expect(gifCharBudget(174, 30, 4)).toBe(5); // 정지 여백으로 넓힌 띠 → "진동 모드"
-    expect(gifCharBudget(701, 95, 4)).toBe(7); // 「人体进阶」 제목 띠(넓힌 폭) → "인체공학 설계"
-    expect(gifCharBudget(313, 23, 10)).toBe(13); // 「大头爆震」 → 17자 승인 문구는 줄여야 들어간다
+    expect(gifCharBudget(174, 30, 4)).toBe(6); // 정지 여백으로 넓힌 띠 → "다양한 진동"
+    expect(gifCharBudget(701, 95, 4)).toBe(8); // 「人体进阶」 제목 띠(넓힌 폭) → "인체공학 설계" 여유
+    expect(gifCharBudget(313, 23, 10)).toBe(15); // 「大头爆震」 → 17자 승인 문구는 줄여야 들어간다
   });
   it("아무리 좁아도 4자 — 그 밑으론 뜻을 담을 수 없다", () => {
     expect(gifCharBudget(20, 30, 4)).toBe(4);
   });
 
   it("좌우 여백 28px 을 뺀다 — 폭을 꽉 채운 예산은 글자가 가장자리에 닿는다", () => {
-    expect(gifCharBudget(28 + 23 * 0.95 * 10, 23, 10)).toBe(10);
-    expect(gifCharBudget(23 * 0.95 * 10, 23, 10)).toBeLessThan(10);
+    expect(gifCharBudget(28 + 23 * 0.8 * 10, 23, 10)).toBe(10);
+    expect(gifCharBudget(23 * 0.8 * 10, 23, 10)).toBeLessThan(10);
   });
 });
 

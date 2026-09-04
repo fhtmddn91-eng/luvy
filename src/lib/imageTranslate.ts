@@ -528,18 +528,28 @@ export function charBudget(
  * "인체공학 설계"(7자)가 원래 크기로 들어갈 자리였고, 「多种频率」는 여백이 없어
  * 4자("진동모드")가 진실이다. 자리에 맞는 수치를 줘야 뜻도 크기도 산다(규칙 4).
  */
-/** 한국어 한 줄의 폭 추정(px) — 글자 1.0em·공백 0.4em (모델이 그리는 한글 고딕 실측에 맞춤) */
+/**
+ * 한국어 한 줄의 폭 추정(px) — 한글 0.9em·숫자/영문 0.55em·기호 0.45em·공백 0.35em.
+ * 실측: 「大头爆震」 12자(공백 5)가 23px 글자로 313px 를 꽉 채웠고(한글 ≈0.9em), 「360°贴合」→
+ * "360° 밀착핏"은 156px 띠(29px)에 잘 들어갔다 — 전부 1.0em 으로 세면 243px 이 필요해 예산이
+ * 5자로 떨어져 승인 문구가 잘린다. 숫자·기호는 한글보다 훨씬 좁다.
+ */
 export function koTextWidth(ko: string, glyphH: number): number {
-  const chars = [...ko].filter((c) => c.trim().length > 0).length;
-  const spaces = [...ko].length - chars;
-  return (chars * 1.0 + spaces * 0.4) * glyphH;
+  let em = 0;
+  for (const c of [...ko]) {
+    if (c.trim().length === 0) em += 0.3;
+    else if (/[가-힣ㄱ-ㅎㅏ-ㅣ\u4e00-\u9fff]/.test(c)) em += 0.85;
+    else if (/[0-9A-Za-z]/.test(c)) em += 0.5;
+    else em += 0.35;
+  }
+  return em * glyphH;
 }
 
 export function gifCharBudget(availableW: number, glyphH: number, zhLen: number): number {
-  // 좌우 여백 28px 을 빼고 한 글자를 0.95em 으로 센다(글자 1.0em·공백 0.4em 의 평균, koTextWidth 와 같은
-  // 기준). 실측 13 「大头爆震」: 0.85em·여백 12px 로 세니 띠 313px 에 17자가 그대로 들어가 글자가 양
-  // 끝에 닿았고 이음매에 두 번 걸렸다 — 모델이 그리는 한글은 1em 에 가깝다.
-  const cap = glyphH > 0 ? Math.floor((availableW - 28) / (0.95 * glyphH)) : 0;
+  // 좌우 여백 28px 을 빼고 공백 포함 한 글자를 0.8em 으로 센다(한글 0.85em·공백 0.3em, 공백 비율
+  // 20% 가정 — koTextWidth 와 같은 기준). 실측 13 「大头爆震」: 여백 12px 로 세니 띠 313px 에 17자가
+  // 그대로 들어가 글자가 양 끝에 닿았고 이음매에 두 번 걸렸다.
+  const cap = glyphH > 0 ? Math.floor((availableW - 28) / (0.8 * glyphH)) : 0;
   void zhLen; // 원문 길이는 상한을 늘리지 않는다 — 자리가 진실이다
   return Math.max(4, cap);
 }
@@ -2902,6 +2912,10 @@ export function staticBandsOf(
   // 색상 팔레트 잡음은 tol 32 가 흡수하므로 진짜 정지 영역은 0 으로도 통과한다.
   const isStill = (b: BandRect) =>
     regionStaticEnough(moved, W, { x0: b.left, y0: b.top, x1: b.left + b.width, y1: b.top + b.height });
+  // 평탄도(사진 회피) 휴리스틱은 넣었다가 뺐다(2026-09-02): 실측 14 「大头爆震」의 이음매는 왼쪽 제품
+  // 음영(열 sd 4~8)과 오른쪽 두 색 경계를 띠가 품은 탓인데, 같은 통계의 음영(M19 「强悍震感」 sd 7~11)은
+  // 모델이 멀쩡히 그렸다. 픽셀 통계로 갈리지 않는 것을 규칙으로 두면 정상 띠의 여백만 깎는다 —
+  // 이음매 관문이 결과로 거르는 편이 낫다.
 
   // 문구마다 **실제 글자 범위**를 재둔다. 판독 박스는 획 끝을 자주 자르고
   // (실측 오버슈트 0~5px), 그만큼이 패치 밖에 남으면 원문 조각이 그대로 보인다
@@ -3014,7 +3028,8 @@ export function staticBandsOf(
     const need = Math.max(
       ...bs.map((b) => {
         const glyphH = ((b.box[2] - b.box[0]) / 1000) * H;
-        return koTextWidth(b.ko, glyphH) + 36;
+        // 모델은 추정보다 넓게 그리기도 한다(실측 「大头爆震」 ≈1.0em) — 넓힐 때는 15% 넉넉히
+        return koTextWidth(b.ko, glyphH) * 1.15 + 36;
       }),
     );
     if (need <= band.width) return band;
@@ -6598,6 +6613,19 @@ async function verifyProductIntegrity(
   return v;
 }
 
+/**
+ * 제품 무결성 심사 결과에서 **글자만 문제 삼은 항목**을 거른다(GIF 전용).
+ * 글자 낱말(중국어·한자·글자·텍스트·문구·번역)만 있고 제품 낱말(제품·개수·형태·모양·색상·배경·
+ * 구성·로고·배지·아이콘·사라·생김)이 없는 지적은 제품 변화가 아니다.
+ */
+export function dropTextOnlyIntegrityIssues(v: { ok: boolean; issues: string[]; hard: string[] }): { ok: boolean; issues: string[]; hard: string[] } {
+  const textOnly = (s: string) =>
+    /중국어|한자|글자|텍스트|문구|번역|외국어/.test(s) && !/제품|개수|형태|모양|부품|색상|배경|구성|로고|배지|아이콘|사라|생김|손|모델/.test(s);
+  const hard = v.hard.filter((s) => !textOnly(s));
+  const issues = v.issues.filter((s) => !textOnly(s));
+  return { ok: v.ok || (hard.length === 0 && issues.length === 0 && v.hard.length > 0), issues, hard };
+}
+
 /** 검수용 정지 이미지 — GIF 는 첫 프레임 PNG 로 (판독·픽셀 비교 공용) */
 async function stillOf(data: Buffer, mime: string): Promise<{ data: Buffer; mime: string }> {
   if (mime !== "image/gif") return { data, mime };
@@ -7122,11 +7150,14 @@ async function translateImageAutoInner(
     // 않았다 — 국소 편집이라 위험이 작을 뿐 0 은 아니다. 텍스트 모델 1회(사실상
     // 공짜)로 막을 수 있는 구멍을 열어둘 이유가 없다.
     if (fullAdopt || mime === "image/gif") {
-      const pi = await verifyProductIntegrity(
+      const pi0 = await verifyProductIntegrity(
         { data: origStill.data, mime: origStill.mime },
         { data: outStill.data, mime: outStill.mime },
         { leftoverTextIsNotChange: mime === "image/gif" },
       );
+      // GIF: "남은 중국어" 같은 글자 지적은 제품 변화가 아니다 — 잔류 관문(LEFTOVER)이 따로 잡는다.
+      // 요청문에 무시하라고 적어도 실측 12·13·14 세 번 다 hard 로 냈다(규칙 4) → 결과에서 거른다.
+      const pi = mime === "image/gif" ? dropTextOnlyIntegrityIssues(pi0) : pi0;
       if (!pi.ok || pi.hard.length > 0) {
         reasons.push({ code: "PRODUCT_CHANGED", detail: (pi.hard[0] ?? pi.issues[0] ?? "제품 모습 상이").slice(0, 300) });
       }
