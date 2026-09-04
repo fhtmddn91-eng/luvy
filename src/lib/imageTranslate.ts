@@ -528,8 +528,18 @@ export function charBudget(
  * "인체공학 설계"(7자)가 원래 크기로 들어갈 자리였고, 「多种频率」는 여백이 없어
  * 4자("진동모드")가 진실이다. 자리에 맞는 수치를 줘야 뜻도 크기도 산다(규칙 4).
  */
+/** 한국어 한 줄의 폭 추정(px) — 글자 1.0em·공백 0.4em (모델이 그리는 한글 고딕 실측에 맞춤) */
+export function koTextWidth(ko: string, glyphH: number): number {
+  const chars = [...ko].filter((c) => c.trim().length > 0).length;
+  const spaces = [...ko].length - chars;
+  return (chars * 1.0 + spaces * 0.4) * glyphH;
+}
+
 export function gifCharBudget(availableW: number, glyphH: number, zhLen: number): number {
-  const cap = glyphH > 0 ? Math.floor(availableW / (0.85 * glyphH)) : 0;
+  // 좌우 여백 28px 을 빼고 한 글자를 0.95em 으로 센다(글자 1.0em·공백 0.4em 의 평균, koTextWidth 와 같은
+  // 기준). 실측 13 「大头爆震」: 0.85em·여백 12px 로 세니 띠 313px 에 17자가 그대로 들어가 글자가 양
+  // 끝에 닿았고 이음매에 두 번 걸렸다 — 모델이 그리는 한글은 1em 에 가깝다.
+  const cap = glyphH > 0 ? Math.floor((availableW - 28) / (0.95 * glyphH)) : 0;
   void zhLen; // 원문 길이는 상한을 늘리지 않는다 — 자리가 진실이다
   return Math.max(4, cap);
 }
@@ -595,27 +605,50 @@ const boxKey = (b: OcrBox): string => `${b.zh}|${b.box.join(",")}`;
  * GIF 문구별 띠 기준 예산. 프레임을 읽어 정지 여백을 재므로 GIF 에서만 쓴다.
  * 너무 큰 GIF(렌더도 거부되는 크기)는 박스 기준(tight)으로 돌아간다.
  */
-async function gifBudgetsFor(data: Buffer, W: number, H: number, boxes: OcrBox[]): Promise<number[]> {
+async function gifBudgetsFor(data: Buffer, W: number, H: number, boxes: OcrBox[], knownKo?: Map<string, string>): Promise<number[]> {
   const fallback = () => boxes.map((b) => charBudget(b.box, W, H, [...b.zh].length, true));
   const meta = await sharp(data, { animated: true }).metadata();
   const pages = meta.pages ?? 1;
   if (pages > GIF_PATCH_MAX_PAGES || pages * W * H > MAX_GIF_TOTAL_PIXELS) return fallback();
   const { frame0, moved } = await movedMaskOf(data, W, H, pages);
-  const glyphs = boxes.map((b) => {
-    const [y1, x1, y2, x2] = b.box;
-    return glyphExtent(frame0, W, H, { x0: (x1 / 1000) * W, y0: (y1 / 1000) * H, x1: (x2 / 1000) * W, y1: (y2 / 1000) * H });
-  });
-  return boxes.map((b, i) => {
-    const g = glyphs[i];
+  return gifBudgetsOf(frame0, moved, W, H, boxes, knownKo);
+}
+
+/**
+ * 문구별 띠 예산 — **띠 선택 코드를 그대로 돌려** 나온 띠 폭에서 잡는다.
+ *
+ * 글자 행의 정지 여백만 세면 실제 띠와 어긋난다: 띠는 위아래로도 넓어지고(growFlat) 그 행들이
+ * 움직임에 걸려 가로로 덜 넓어진다. 실측 13 「大头爆震」: 여백으로 센 폭 360px → 17자를 줬는데
+ * 실제 띠는 313px 라 글자가 양 끝에 닿아 이음매에 두 번 걸렸다. 번역문 길이를 아직 모르므로
+ * 가장 긴 경우(원문의 1.8배 = growWide 상한)를 가정해 띠를 만들어 본다 — 그보다 짧은 번역은
+ * 그 안에 들어간다. 띠를 못 만드는 문구(움직이는 화면 위)는 박스 기준(tight)으로 돌아간다.
+ */
+export function gifBudgetsOf(
+  frame0: Uint8Array,
+  moved: Uint8Array,
+  W: number,
+  H: number,
+  boxes: OcrBox[],
+  /** 이미 아는 번역(승인 문구) — 이웃 문구의 실제 길이로 띠 병합·클립 조건을 재현한다 */
+  knownKo: Map<string, string> = new Map(),
+): number[] {
+  const guess = (b: OcrBox, k: number) => "가".repeat(Math.max(1, Math.ceil([...b.zh].length * k)));
+  return boxes.map((target, i) => {
+    const [y1, x1, y2, x2] = target.box;
+    const g = glyphExtent(frame0, W, H, { x0: (x1 / 1000) * W, y0: (y1 / 1000) * H, x1: (x2 / 1000) * W, y1: (y2 / 1000) * H });
     const bw = g.x1 - g.x0, bh = g.y1 - g.y0;
-    if (bh > bw * 2.5) return charBudget(b.box, W, H, [...b.zh].length, true); // 세로쓰기
-    // growWide 상한(1.8배)과 같은 폭까지만 — 그 이상은 띠가 넓어지지 않는다.
-    // 행 범위는 글자 ±8px(띠 여백 사다리의 마지막 단) — 글자 행 ±2 로 재면 글자 바로 위를 지나가는
-    // 움직임을 못 봐서 실제 띠보다 넓게 세다. 실측 13 「大头爆震」: 여백 140px 로 17자를 줬는데 띠는
-    // 313px 까지만 넓어져 글자가 양 가장자리에 닿아 이음매에 두 번 걸렸다.
-    const strip = { y0: Math.max(0, Math.floor(g.y0) - 8), y1: Math.min(H, Math.ceil(g.y1) + 8) };
-    const room = staticRoomOf(moved, W, H, g, glyphs.filter((_, j) => j !== i), Math.round(bw * 0.4), strip);
-    return gifCharBudget(bw + room.left + room.right, bh, [...b.zh].length);
+    if (bh > bw * 2.5) return charBudget(target.box, W, H, [...target.zh].length, true); // 세로쓰기
+    // 문구 하나씩 재본다 — 대상만 가장 긴 번역(원문 1.8배)으로 두고, 이웃은 **실제 렌더 조건**으로:
+    // 승인 문구가 있으면 그 길이, 없으면 중앙값 1.3배. 이웃 길이가 띠 병합·이웃 회피 클립을 바꿔
+    // 대상 띠 폭이 달라진다 — 실측 13 「大头爆震」: 이웃을 원문 길이로 두면 400px(20자)로 세는데
+    // 실제 띠는 313px(15자) 였다. 전부 1.8배로 두면 반대로 부풀어 합쳐진다(「回味无穷」 701px → 20자).
+    const probe = boxes.map((b, j) => ({
+      ...b,
+      ko: j === i ? guess(b, 1.8) : (knownKo.get(b.zh) ?? guess(b, 1.3)),
+    }));
+    const band = staticBandsOf(probe, frame0, moved, W, H).find((q) => q.boxes.includes(probe[i]))?.band;
+    if (!band) return charBudget(target.box, W, H, [...target.zh].length, true);
+    return gifCharBudget(band.width, bh, [...target.zh].length);
   });
 }
 
@@ -1074,7 +1107,7 @@ async function translateExtracted(
   // 단계에서부터 잡는다 — 프레임을 읽어 정지 여백까지 잰다(gifBudgetsFor).
   const tight = mime === "image/gif";
   const budgets = tight
-    ? await gifBudgetsFor(data, W, H, solid)
+    ? await gifBudgetsFor(data, W, H, solid, phraseMemory)
     : solid.map((b) => charBudget(b.box, W, H, [...b.zh].length, false));
 
   // 승인 문구가 있으면 그 문구는 번역하지 않는다 — 실측(2026-09-02): 재렌더가 매번 처음부터
@@ -2974,10 +3007,18 @@ export function staticBandsOf(
    * 모델이 원래 크기로 쓸 공간을 준다.
    */
   const growWide = (band: BandRect, bs: OcrBox[]): BandRect => {
-    const zh = bs.reduce((n, b) => n + b.zh.replace(/\s/g, "").length, 0);
-    const ko = bs.reduce((n, b) => n + b.ko.replace(/\s/g, "").length, 0);
-    if (zh === 0 || ko <= zh * 1.15) return band;
-    const want = Math.round(band.width * Math.min(1.8, ko / zh));
+    // 글자 수 비율이 아니라 **실제 글자 폭 추정**만큼 넓힌다 — 실측 13 「大头爆震」: 12자(공백 5)를
+    // 비율(12/9)로 313px 까지만 넓혔더니 한글(1em)·공백이 띠를 꽉 채워 가장자리에 닿았다. 정지
+    // 여백은 421px 이상 있었다. 한 줄 문구마다 폭을 추정해 가장 넓은 것 + 좌우 여백 18px(예산의
+    // 14px 보다 넉넉히 — 모델은 추정보다 넓게 그리기도 한다).
+    const need = Math.max(
+      ...bs.map((b) => {
+        const glyphH = ((b.box[2] - b.box[0]) / 1000) * H;
+        return koTextWidth(b.ko, glyphH) + 36;
+      }),
+    );
+    if (need <= band.width) return band;
+    const want = Math.min(Math.round(need), Math.round(band.width * 2));
     let b = band;
     const step = (dl: number, dr: number): BandRect | null => {
       const left = Math.max(0, b.left - dl);
@@ -3479,12 +3520,12 @@ export function bandGlyphShrink(
   /** 그림의 모든 문구 — 이웃 제외용 */
   allBoxes: OcrBox[],
   band: BandRect,
-): { zh: string; ratio: number }[] {
+): { zh: string; ratio: number; origH: number; compH: number }[] {
   const px = (b: OcrBox): PxBox => {
     const [y1, x1, y2, x2] = b.box;
     return { x0: (x1 / 1000) * W, y0: (y1 / 1000) * H, x1: (x2 / 1000) * W, y1: (y2 / 1000) * H };
   };
-  const out: { zh: string; ratio: number }[] = [];
+  const out: { zh: string; ratio: number; origH: number; compH: number }[] = [];
   for (const b of targets) {
     if (b.solid_bg === false) continue; // 사진·무늬 배경은 중앙값이 배경이 아니다
     const core = px(b);
@@ -3505,7 +3546,7 @@ export function bandGlyphShrink(
     if (oh === null || oh < bh * 0.4 || oh > bh * 1.7) continue;
     const ch = inkRowsIn(compRaw, W, r, exclude);
     if (ch === null) continue;
-    out.push({ zh: b.zh, ratio: ch / oh });
+    out.push({ zh: b.zh, ratio: ch / oh, origH: oh, compH: ch });
   }
   return out;
 }
@@ -4047,7 +4088,10 @@ async function tryBuildGifPatch(
         let out: Buffer;
         // 재시도는 **조건을 바꿔서** 한다 — 같은 조건 반복은 확률 재구매일 뿐이다.
         // 1차보다 한 단계 더 확대해 글자 그릴 공간을 넓힌다.
-        const scale = Math.min(4, baseScale + (attempt - 1));
+        // 배율 확대는 뭉개진 획(품질)용이다. 크기가 작아진 문제는 같은 배율로 다시 그린다 —
+        // 실측 13 제목: 배율을 올렸더니 84%→78% 로 더 작아졌다(모델은 큰 그림에서 더 여백을 둔다).
+        const sizeRetry: boolean = attempt > 1 && problem !== null && problem.includes("작아졌");
+        const scale: number = sizeRetry ? Math.min(4, baseScale) : Math.min(4, baseScale + (attempt - 1));
         const sendW = Math.round(band.width * scale);
         const sendH = Math.round(band.height * scale);
         // 직전 사유는 힌트로만 쓰고 비운다 — 안 비우면 2차가 전부 통과해도 1차 사유가 남아
@@ -4126,7 +4170,9 @@ async function tryBuildGifPatch(
         const colorBad = bandGlyphColorShift(frame0, compRaw, W, H, inBand, boxes, band).filter((c) => c.delta > BAND_COLOR_MAX);
         const weightBad = bandGlyphWeightShift(frame0, compRaw, W, H, inBand, boxes, band).filter(bandWeightBad);
         if (worst < BAND_SHRINK_MIN) {
-          problem = `글자가 작아졌습니다 (원문의 ${Math.round(worst * 100)}%)`;
+          const w0 = shrunk.reduce((m, s) => (s.ratio < m.ratio ? s : m), shrunk[0]);
+          // 절대값은 **보낸 배율 기준**으로 — 모델은 자기가 받은 그림의 픽셀로 잰다
+          problem = `글자가 작아졌습니다 (원문의 ${Math.round(worst * 100)}%, ${Math.round(w0.compH * scale)}px→${Math.round(w0.origH * scale)}px)`;
           for (const sh of shrunk) {
             if (sh.ratio < BAND_SHRINK_MIN) softNotes.push(`${sh.zh} — 글자가 원문의 ${Math.round(sh.ratio * 100)}% 로 작아졌습니다`);
           }
@@ -4501,7 +4547,10 @@ export function bandRetryHint(problem: string): string {
   }
   if (problem.includes("작아졌")) {
     const m = problem.match(/(\d+)%/);
-    return `${head}- 글자가 원문의 ${m ? m[1] : "?"}% 크기로 작아졌습니다. 글자 높이를 목록에 적힌 픽셀값 그대로 유지하세요. 폭이 모자라면 크기를 줄이지 말고 자간을 좁히거나 글자 폭을 좁혀(장체) 넣으세요.`;
+    const px = problem.match(/(\d+)px→(\d+)px/);
+    // 비율만 주면 2차가 더 작아지기도 했다(실측 13 제목: 84%→78%). 지금 몇 px 이고 몇 px 이어야 하는지를 준다.
+    const abs = px ? ` 직전 글자 높이는 ${px[1]}px 였고, ${px[2]}px 이어야 합니다 — 그만큼 더 크게 쓰세요.` : "";
+    return `${head}- 글자가 원문의 ${m ? m[1] : "?"}% 크기로 작아졌습니다.${abs} 글자 높이를 목록에 적힌 픽셀값 그대로 유지하세요. 폭이 모자라면 크기를 줄이지 말고 자간을 좁히거나 글자 폭을 좁혀(장체) 넣으세요.`;
   }
   if (problem.includes("굵기")) {
     return `${head}- 글자 굵기가 원문과 달라졌습니다. 획 두께를 원문과 똑같이(가는 글자는 가늘게, 굵은 글자는 굵게) 쓰세요.`;

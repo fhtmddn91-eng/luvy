@@ -384,6 +384,24 @@ describe("renderTranslatedImage — GIF", () => {
     expect(raw[(34 * W + 120) * 4]).toBeLessThan(100);
   }, 60_000);
 
+  it("작아진 띠의 재시도는 같은 배율로 한다 — 배율을 올렸더니 더 작아졌다(실측 13: 84%→78%)", async () => {
+    // 배율 확대는 뭉개진 획(품질)용이지 크기용이 아니다. 크기 문제는 힌트만 바꿔 같은 조건으로.
+    const sizes: number[] = [];
+    stubGemini("shrink");
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (u: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as { contents?: { parts?: { inline_data?: { data?: string } }[] }[]; generationConfig?: { responseModalities?: string[] } };
+      if (body.generationConfig?.responseModalities?.includes("IMAGE")) {
+        const b64 = body.contents?.[0]?.parts?.find((p) => p.inline_data?.data)?.inline_data?.data ?? "";
+        sizes.push((await sharp(Buffer.from(b64, "base64")).metadata()).width ?? 0);
+      }
+      return inner(u as string, init as RequestInit);
+    });
+    await renderTranslatedImage(await makeGifWithGlyph(), "image/gif", [topBox]);
+    expect(sizes).toHaveLength(2);
+    expect(sizes[1]).toBe(sizes[0]);
+  }, 60_000);
+
   it("글자가 제 크기면 재시도하지 않는다 — 크기 관문은 공짜지만 재시도는 돈이다", async () => {
     stubGemini("ok");
     const gif = await makeGifWithGlyph();

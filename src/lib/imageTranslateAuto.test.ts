@@ -986,9 +986,9 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     mock = happyMock();
     mock.image = ["echo"];
     mock.transcribe = gifTranscribe();
-    mock.translate = [["강렬하고 깊은 진동"]]; // 줄이기 응답 (예산 안, 너무 짧지 않음)
-    mock.transcribe[1] = [{ box: BOX, text: "강렬하고 깊은 진동" }];
-    mock.transcribe[2] = [{ box: BOX, text: "강렬하고 깊은 진동" }];
+    mock.translate = [["강렬한 깊은 진동"]]; // 줄이기 응답 (예산 9자 안, 너무 짧지 않음)
+    mock.transcribe[1] = [{ box: BOX, text: "강렬한 깊은 진동" }];
+    mock.transcribe[2] = [{ box: BOX, text: "강렬한 깊은 진동" }];
     const r = await translateImageAuto(gif, "image/gif", {
       phraseMemory: new Map([["强震深处", "아주 강렬하고 깊숙한 진동 자극 느낌"]]),
     });
@@ -996,7 +996,7 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     expect(asks).toHaveLength(1);
     expect(asks[0]).toContain("직전 답");
     expect(asks[0]).toContain("아주 강렬하고 깊숙한 진동 자극 느낌");
-    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬하고 깊은 진동");
+    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 깊은 진동");
   });
 
   it("정지 이미지는 기억 문구를 쓰지 않는다 — 정지 이미지 경로는 그대로", async () => {
@@ -1062,15 +1062,15 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     mock = happyMock();
     mock.image = ["echo"];
     mock.transcribe = gifTranscribe();
-    mock.translate = [["아주 강렬하고 깊숙한 진동 자극 느낌"], ["강한 진동"], ["강렬하고 깊은 진동"]];
-    mock.transcribe[1] = [{ box: BOX, text: "강렬하고 깊은 진동" }];
-    mock.transcribe[2] = [{ box: BOX, text: "강렬하고 깊은 진동" }];
+    mock.translate = [["아주 강렬하고 깊숙한 진동 자극 느낌"], ["강한 진동"], ["강렬한 깊은 진동"]];
+    mock.transcribe[1] = [{ box: BOX, text: "강렬한 깊은 진동" }];
+    mock.transcribe[2] = [{ box: BOX, text: "강렬한 깊은 진동" }];
     const r = await translateImageAuto(gif, "image/gif");
     const asks = textPrompts.filter((p) => p.includes("한국어로 번역하세요"));
     expect(asks).toHaveLength(3);
     expect(asks[2]).toMatch(/너무 짧/);
     expect(asks[2]).toContain("강한 진동");
-    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬하고 깊은 진동");
+    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 깊은 진동");
   });
 
   it("GIF: 직접 그린 문구는 GIF_LOCAL_TEXT 사유로 알린다 — 서체가 바뀐 자리를 운영자가 본다", { timeout: 30_000 }, async () => {
@@ -1145,14 +1145,15 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     expect(ask).not.toContain("후보 3개");
   });
 
-  it("GIF 띠 예산은 여백을 띠 두께(글자 위아래 8px)로 잰다 — 글자 바로 위를 지나가는 움직임이 여백을 막는다", { timeout: 30_000 }, async () => {
-    // 실측 13 「大头爆震」: 글자 행 ±2px 로 잰 여백 140px 로 17자를 줬는데 실제 띠는 313px 까지만 넓어져
-    // 글자가 양 가장자리에 닿아 이음매에 두 번 걸렸다. 띠는 글자보다 위아래로 두껍다.
+  it("GIF 띠 예산은 실제로 만들어질 띠 폭에서 나온다 — 띠가 위아래로 넓어진 행에 걸린 움직임이 가로 폭을 막는다", { timeout: 30_000 }, async () => {
+    // 실측 13 「大头爆震」: 글자 행의 정지 여백으로 센 폭 360px 로 17자를 줬는데 실제 띠는 313px —
+    // 띠가 위아래로 넓어지면서(growFlat) 그 행들이 옆 움직임에 걸려 가로로 덜 넓어졌다. 글자가 양
+    // 가장자리에 닿아 이음매에 두 번 걸렸다.
     const still = await sharp(ORIG_PNG).gif().toBuffer();
-    // 글자(y40~80) 위 y33~36 을 가로로 지나가는 움직임이 있는 2프레임 GIF
+    // 글자(y40~80) 오른쪽 위 x370~380·y15~25 에 움직이는 덩어리 — 글자 행 여백은 못 보지만 띠는 걸린다
     const c2 = createCanvas(W, H); const x2 = c2.getContext("2d");
     x2.drawImage(await (async () => { const { loadImage } = await import("@napi-rs/canvas"); return loadImage(ORIG_PNG); })(), 0, 0);
-    x2.fillStyle = "#ff0000"; x2.fillRect(0, 33, W, 3);
+    x2.fillStyle = "#ff0000"; x2.fillRect(370, 15, 10, 10);
     const moving = await sharp([ORIG_PNG, c2.toBuffer("image/png")], { join: { animated: true } }).gif({ delay: [100, 100] }).toBuffer();
     const budgetOf = async (gif: Buffer) => {
       mock = happyMock(); mock.image = ["echo"]; mock.transcribe = gifTranscribe(); textPrompts = [];

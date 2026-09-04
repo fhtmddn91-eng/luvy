@@ -6,7 +6,7 @@
  * 띠가 움직이면 붙어 있던 이웃 때문에 통째로 버리지 않고 박스별로 다시 본다.
  */
 import { describe, it, expect } from "vitest";
-import { gifBandBudgetFor, gifCharBudget, keptOriginalDetail, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, bandGlyphShrink, bandGlyphColorShift, bandGlyphWeightShift, bandWeightBad, compositeBand, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, staticRoomOf, type OcrBox } from "./imageTranslate";
+import { gifBandBudgetFor, gifBudgetsOf, gifCharBudget, keptOriginalDetail, movedMaskFromFrames, bandRegenPrompt, bandRetryHint, bandSeamProblem, bandGlyphShrink, bandGlyphColorShift, bandGlyphWeightShift, bandWeightBad, compositeBand, glyphExtent, regionStaticEnough, resolveBandOverlaps, seamSidesOf, staticBandsOf, staticRoomOf, type OcrBox } from "./imageTranslate";
 import { buildBandQualityPrompt } from "./translateVerify";
 
 const W = 200;
@@ -94,11 +94,13 @@ describe("staticBandsOf", () => {
     const f0 = frame();
     const f1 = move(f0, 0, 0, 50, 200); // 왼쪽 x<50 이 움직인다
     const moved = movedMaskFromFrames([f0, f1], W, H);
-    const b = { ...box([450, 300, 550, 500], "字"), ko: "글글" }; // x 60~100, y 90~110
+    // 한국어 4자 = 4×20px(글자 높이) + 여백 28px = 108px 가 필요한데 왼쪽은 x50 에서 막힌다
+    const b = { ...box([450, 300, 550, 500], "字"), ko: "글글글글" }; // x 60~100, y 90~110
     const [g] = staticBandsOf([b], f0, moved, W, H);
     expect(g).toBeDefined();
     expect(g.band.left).toBeGreaterThanOrEqual(50);
-    expect(g.band.left + g.band.width).toBeGreaterThanOrEqual(130); // 오른쪽으로 넓혔다
+    expect(g.band.width).toBeGreaterThanOrEqual(104); // 글자 폭 추정만큼 넓혔다
+    expect(g.band.left + g.band.width).toBeGreaterThanOrEqual(150); // 오른쪽으로
   });
 
   it("납작한 띠는 막히지 않은 쪽으로 두껍게 한다 — 위가 움직이면 아래로", () => {
@@ -347,6 +349,12 @@ describe("bandRetryHint", () => {
     expect(h).toMatch(/장체|자간/);
   });
 
+  it("작아진 실패에 픽셀 절대값이 있으면 '지금 Npx → 목표 Mpx' 로 말한다 — 비율만으론 2차가 더 작아졌다(84%→78%)", () => {
+    const h = bandRetryHint("글자가 작아졌습니다 (원문의 84%, 81px→96px)");
+    expect(h).toContain("81px");
+    expect(h).toContain("96px");
+  });
+
   it("모르는 사유는 그대로 전달한다 — 삼키지 않는다", () => {
     expect(bandRetryHint("알 수 없는 사유 XYZ")).toContain("알 수 없는 사유 XYZ");
   });
@@ -546,7 +554,10 @@ describe("bandGlyphShrink — 글자가 원문보다 작게 그려졌나 (픽셀
   });
 
   it("높이가 60% 로 줄면 비율 0.6 — 재시도 사유가 된다", () => {
-    expect(bandGlyphShrink(canvas([origBar]), canvas([smallBar]), W, H, [target], [target], band)[0].ratio).toBeCloseTo(0.6, 1);
+    const r = bandGlyphShrink(canvas([origBar]), canvas([smallBar]), W, H, [target], [target], band)[0];
+    expect(r.ratio).toBeCloseTo(0.6, 1);
+    expect(r.origH).toBe(20); // 힌트에 절대값을 싣기 위해 높이도 돌려준다
+    expect(r.compH).toBe(12);
   });
 
   it("여백에 걸친 이웃 문구의 획은 세지 않는다 — 세면 줄어든 것이 가려진다", () => {
@@ -617,13 +628,20 @@ describe("keptOriginalDetail — 원문 유지 사유 표기", () => {
  * 「多种频率」는 여백이 없어 4자("진동모드")가 진실이다.
  */
 describe("gifCharBudget — 띠에 실제로 들어가는 글자 수", () => {
-  it("폭 ÷ (0.85 × 글자 높이) — 공백 포함 한국어 한 글자 평균 0.85em", () => {
+  it("(폭 − 여백 28px) ÷ (0.95 × 글자 높이) — 한국어 글자 1.0em·공백 0.4em 의 평균", () => {
+    // 실측 13 「大头爆震」: 0.85em 으로 세니 글자가 띠를 꽉 채워 가장자리에 닿았다(모델의 한글은 1em 에 가깝다)
     expect(gifCharBudget(113, 30, 4)).toBe(4); // 「多种频率」 자리 그대로 → "진동모드"
-    expect(gifCharBudget(174, 30, 4)).toBe(6); // 정지 여백으로 넓힌 띠 → "다양한 진동"
-    expect(gifCharBudget(589, 95, 4)).toBe(7); // 「人体进阶」 제목 띠 → "인체공학 설계"
+    expect(gifCharBudget(174, 30, 4)).toBe(5); // 정지 여백으로 넓힌 띠 → "진동 모드"
+    expect(gifCharBudget(701, 95, 4)).toBe(7); // 「人体进阶」 제목 띠(넓힌 폭) → "인체공학 설계"
+    expect(gifCharBudget(313, 23, 10)).toBe(13); // 「大头爆震」 → 17자 승인 문구는 줄여야 들어간다
   });
   it("아무리 좁아도 4자 — 그 밑으론 뜻을 담을 수 없다", () => {
     expect(gifCharBudget(20, 30, 4)).toBe(4);
+  });
+
+  it("좌우 여백 28px 을 뺀다 — 폭을 꽉 채운 예산은 글자가 가장자리에 닿는다", () => {
+    expect(gifCharBudget(28 + 23 * 0.95 * 10, 23, 10)).toBe(10);
+    expect(gifCharBudget(23 * 0.95 * 10, 23, 10)).toBeLessThan(10);
   });
 });
 
@@ -785,5 +803,26 @@ describe("bandGlyphWeightShift — 획 굵기가 원문과 달라졌나 (픽셀,
     // 고칠 수 없는 차이를 잡으면 띠마다 재시도 비용만 나간다. 진짜 사고(실측 10 부제 1.89)는 굵어진 쪽.
     expect(bandWeightBad({ ratio: 0.5, delta: -5 })).toBe(false);
     expect(bandWeightBad({ ratio: 1.89, delta: 2.7 })).toBe(true);
+  });
+});
+
+describe("gifBudgetsOf — 예산은 실제로 만들어질 띠 폭에서 나온다", () => {
+  // 실측 13 「大头爆震」: 글자 행 여백으로 센 폭(360px)과 실제 띠(313px)가 달랐다 — 띠는 위아래로도
+  // 넓어지면서(growFlat) 그 행들이 움직임에 걸려 가로로 덜 넓어진다. 띠 선택 코드를 그대로 돌려
+  // 나온 띠 폭으로 예산을 잡아야 어긋나지 않는다.
+  const box: OcrBox = { box: [450, 300, 550, 500], zh: "強震蜜豆", ko: "", bg: "#fff", fg: "#000", solid_bg: true }; // x 60~100, y 90~110
+  it("오른쪽에 움직임이 있으면 띠가 덜 넓어지고 예산도 준다", () => {
+    const f0 = frame();
+    const free = gifBudgetsOf(f0, movedMaskFromFrames([f0, f0], W, H), W, H, [box])[0];
+    const f1 = move(f0, 112, 0, 118, 200); // 글자 오른쪽 12px 에 세로 움직임
+    const blocked = gifBudgetsOf(f0, movedMaskFromFrames([f0, f1], W, H), W, H, [box])[0];
+    expect(blocked).toBeLessThan(free);
+    expect(blocked).toBeGreaterThanOrEqual(4);
+  });
+  it("띠를 못 만드는 문구는 박스 기준(tight)으로 돌아간다", () => {
+    const f0 = frame();
+    const f1 = move(f0, 55, 85, 105, 115); // 글자 자리 자체가 움직임
+    const b = gifBudgetsOf(f0, movedMaskFromFrames([f0, f1], W, H), W, H, [box])[0];
+    expect(b).toBeGreaterThanOrEqual(4);
   });
 });
