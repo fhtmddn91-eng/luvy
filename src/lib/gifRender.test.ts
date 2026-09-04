@@ -304,6 +304,45 @@ describe("renderTranslatedImage — GIF", () => {
     expect(imageCalls).toBe(2); // 재시도 1회까지만
   }, 60_000);
 
+  it("1차가 이음매로 떨어지고 2차가 깨끗하면 '합격'이다 — 직전 사유가 다음 시도에 새면 안 된다", async () => {
+    // 실측 13 「360°贴合」: 2차가 모든 관문을 통과했는데 1차의 "덧댄 자국" 사유가 남아 있어
+    // soft 후보(점수 0.90)로 채택됐다고 기록됐다. 결과는 같았지만 기록과 분류가 틀렸다.
+    imageCalls = 0;
+    let call = 0;
+    vi.stubGlobal("fetch", async (_u: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body ?? "{}") as {
+        contents?: { parts?: { inline_data?: { data?: string } }[] }[];
+        generationConfig?: { responseModalities?: string[] };
+      };
+      if (body.generationConfig?.responseModalities?.includes("IMAGE")) {
+        imageCalls++; call++;
+        const b64 = body.contents?.[0]?.parts?.find((p) => p.inline_data?.data)?.inline_data?.data ?? "";
+        if (call === 1) {
+          const m = await sharp(Buffer.from(b64, "base64")).metadata();
+          const png = await sharp({ create: { width: m.width ?? 8, height: m.height ?? 8, channels: 3, background: { r: 90, g: 90, b: 90 } } }).png().toBuffer();
+          return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: png.toString("base64") } }] } }] }), { status: 200 });
+        }
+        const png = await sharp(Buffer.from(b64, "base64")).png().toBuffer(); // 2차: 받은 그대로 = 깨끗
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: png.toString("base64") } }] } }] }), { status: 200 });
+      }
+      const asked = JSON.stringify(body.contents ?? "");
+      if (asked.includes("글자 부분만 잘라낸 띠")) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ ok: true, issues: [], hard: [] }) }] } }] }), { status: 200 });
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify([{ box: [80, 100, 200, 900], text: "강력 진동" }]) }] } }] }), { status: 200 });
+    });
+    const gif = await makeGifWithGlyph();
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => { logs.push(a.join(" ")); });
+    try {
+      const out = await renderTranslatedImage(gif, "image/gif", [topBox]);
+      expect(imageCalls).toBe(2);
+      expect(out.notes ?? []).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(logs.some((l) => l.includes("시도 2: 합격"))).toBe(true);
+    expect(logs.some((l) => l.includes("soft 후보 채택"))).toBe(false);
+  }, 60_000);
+
   it("띠 여백에 이웃 문구가 걸쳐 읽혀도 거부하지 않는다 — 헛글자와 구분한다", async () => {
     // 실측(2026-09-01 재생 감사): 운영 결과물 4장 중 3장이 이웃 문구를 헛글자로
     // 세는 바람에 통째로 거부됐다. 띠는 글자 주위 여백까지 자르므로 이웃이 들어온다.

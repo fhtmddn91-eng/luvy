@@ -642,6 +642,17 @@ describe("staticRoomOf — 문구 좌우로 넓힐 수 있는 정지 여백", ()
     const r = staticRoomOf(moved, W, H, { x0: 100, y0: 90, x1: 120, y1: 110 }, [], 30);
     expect(r).toEqual({ left: 30, right: 30 });
   });
+
+  it("행 범위를 넓게 주면 글자 위아래로 지나가는 움직임도 여백을 막는다 — 띠는 글자보다 위아래로 두껍다", () => {
+    // 실측 13 「大头爆震」: 예산은 글자 행 ±2px 로 여백 140px 을 세어 17자를 줬는데, 실제 띠(위아래 여백
+    // 포함)는 313px 까지만 넓어져 글자가 양 가장자리에 닿아 이음매에 두 번 걸렸다.
+    const f0 = frame();
+    const f1 = move(f0, 0, 84, 200, 87); // 글자(y90~110) 위 3~6px 에 가로로 지나가는 움직임
+    const moved = movedMaskFromFrames([f0, f1], W, H);
+    const core = { x0: 60, y0: 90, x1: 100, y1: 110 };
+    expect(staticRoomOf(moved, W, H, core, [], 80).left).toBe(60); // 글자 행 ±2 로는 안 걸린다
+    expect(staticRoomOf(moved, W, H, core, [], 80, { y0: 82, y1: 118 }).left).toBe(0); // 띠 두께로 재면 막힌다
+  });
 });
 
 describe("bandGlyphColorShift — 글자색이 원본과 달라졌나 (픽셀, 호출 0회)", () => {

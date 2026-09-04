@@ -609,8 +609,12 @@ async function gifBudgetsFor(data: Buffer, W: number, H: number, boxes: OcrBox[]
     const g = glyphs[i];
     const bw = g.x1 - g.x0, bh = g.y1 - g.y0;
     if (bh > bw * 2.5) return charBudget(b.box, W, H, [...b.zh].length, true); // 세로쓰기
-    // growWide 상한(1.8배)과 같은 폭까지만 — 그 이상은 띠가 넓어지지 않는다
-    const room = staticRoomOf(moved, W, H, g, glyphs.filter((_, j) => j !== i), Math.round(bw * 0.4));
+    // growWide 상한(1.8배)과 같은 폭까지만 — 그 이상은 띠가 넓어지지 않는다.
+    // 행 범위는 글자 ±8px(띠 여백 사다리의 마지막 단) — 글자 행 ±2 로 재면 글자 바로 위를 지나가는
+    // 움직임을 못 봐서 실제 띠보다 넓게 세다. 실측 13 「大头爆震」: 여백 140px 로 17자를 줬는데 띠는
+    // 313px 까지만 넓어져 글자가 양 가장자리에 닿아 이음매에 두 번 걸렸다.
+    const strip = { y0: Math.max(0, Math.floor(g.y0) - 8), y1: Math.min(H, Math.ceil(g.y1) + 8) };
+    const room = staticRoomOf(moved, W, H, g, glyphs.filter((_, j) => j !== i), Math.round(bw * 0.4), strip);
     return gifCharBudget(bw + room.left + room.right, bh, [...b.zh].length);
   });
 }
@@ -695,6 +699,16 @@ ${
 ${list}`;
 }
 
+/**
+ * 원문에 숫자가 없는데 번역이 숫자를 둘 이상 나열하면("1스틱 2용도") 어색한 축약이다.
+ * 실측 12·13: 「一棒两用」 줄이기가 두 번 다 이 꼴을 냈다 — 요청문에 금지 예시로 적어도 낸다(규칙 4).
+ * 원문에 숫자가 있으면(7频, 3.7V) 당연히 허용.
+ */
+export function isDigitListing(zh: string, ko: string): boolean {
+  if (/\d/.test(zh)) return false;
+  return (ko.match(/\d+/g)?.length ?? 0) >= 2;
+}
+
 /** 항목마다 후보 여러 개 — 응답이 문자열이면 후보 1개로 받는다 */
 async function translateCandidates(items: string[], opts: TranslateOpts & { candidates: number }): Promise<string[][]> {
   const parts = await callGemini(MODEL, [{ text: translatePrompt(items, opts) }], {
@@ -719,7 +733,7 @@ async function pickCandidates(
   items: { zh: string; budget: number }[],
   cands: string[][],
 ): Promise<string[]> {
-  const usable = cands.map((cs, i) => cs.filter((c) => c && c !== items[i].zh && !hasHanzi(c)));
+  const usable = cands.map((cs, i) => cs.filter((c) => c && c !== items[i].zh && !hasHanzi(c) && !isDigitListing(items[i].zh, c)));
   const fallback = (i: number): string => {
     const cs = usable[i];
     if (cs.length === 0) return cands[i][0] ?? "";
@@ -1102,7 +1116,7 @@ async function translateExtracted(
   const adoptShorter = (idx: number[], shorter: string[], allowLonger = false) => {
     idx.forEach((orig, j) => {
       const s = shorter[j];
-      if (!s || hasHanzi(s)) return;
+      if (!s || hasHanzi(s) || isDigitListing(solid[orig].zh, s)) return;
       const len = [...s].length, cur = [...koList[orig]].length;
       // 더 짧아졌을 때 채택 — 아니면 원래 번역이 낫다. "너무 짧게 깎은 답"을 되묻는 2차는
       // 예산 안에서 길어진 답도 받는다.
@@ -4036,6 +4050,10 @@ async function tryBuildGifPatch(
         const scale = Math.min(4, baseScale + (attempt - 1));
         const sendW = Math.round(band.width * scale);
         const sendH = Math.round(band.height * scale);
+        // 직전 사유는 힌트로만 쓰고 비운다 — 안 비우면 2차가 전부 통과해도 1차 사유가 남아
+        // soft 후보로 잘못 분류된다(실측 13 「360°贴合」: 깨끗한 2차가 "덧댄 자국" 점수 0.90 으로 기록).
+        const retryHint = attempt > 1 && problem ? bandRetryHint(problem) : "";
+        problem = null;
         try {
           const sendCrop =
             scale === 1 ? crop : await sharp(crop).resize(sendW, sendH, { kernel: "lanczos3" }).png().toBuffer();
@@ -4051,8 +4069,7 @@ async function tryBuildGifPatch(
           out = await callImageEdit(
             sendCrop,
             "image/png",
-            bandRegenPrompt(mapped, { width: sendW, height: sendH }, { margins }) +
-              (attempt === 1 || !problem ? "" : bandRetryHint(problem)),
+            bandRegenPrompt(mapped, { width: sendW, height: sendH }, { margins }) + retryHint,
             sendW,
             sendH,
           );

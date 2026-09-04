@@ -1145,6 +1145,37 @@ describe("translateImageAuto — 이미지 HTTP 최대 1회 계약", () => {
     expect(ask).not.toContain("후보 3개");
   });
 
+  it("GIF 띠 예산은 여백을 띠 두께(글자 위아래 8px)로 잰다 — 글자 바로 위를 지나가는 움직임이 여백을 막는다", { timeout: 30_000 }, async () => {
+    // 실측 13 「大头爆震」: 글자 행 ±2px 로 잰 여백 140px 로 17자를 줬는데 실제 띠는 313px 까지만 넓어져
+    // 글자가 양 가장자리에 닿아 이음매에 두 번 걸렸다. 띠는 글자보다 위아래로 두껍다.
+    const still = await sharp(ORIG_PNG).gif().toBuffer();
+    // 글자(y40~80) 위 y33~36 을 가로로 지나가는 움직임이 있는 2프레임 GIF
+    const c2 = createCanvas(W, H); const x2 = c2.getContext("2d");
+    x2.drawImage(await (async () => { const { loadImage } = await import("@napi-rs/canvas"); return loadImage(ORIG_PNG); })(), 0, 0);
+    x2.fillStyle = "#ff0000"; x2.fillRect(0, 33, W, 3);
+    const moving = await sharp([ORIG_PNG, c2.toBuffer("image/png")], { join: { animated: true } }).gif({ delay: [100, 100] }).toBuffer();
+    const budgetOf = async (gif: Buffer) => {
+      mock = happyMock(); mock.image = ["echo"]; mock.transcribe = gifTranscribe(); textPrompts = [];
+      await translateImageAuto(gif, "image/gif");
+      const ask = textPrompts.find((p) => p.includes("한국어로 번역하세요"))!;
+      return Number(ask.match(/최대 (\d+)자/)![1]);
+    };
+    const a = await budgetOf(still);
+    const b = await budgetOf(moving);
+    expect(b).toBeLessThan(a);
+  });
+
+  it("GIF: 원문에 숫자가 없는데 숫자를 나열한 답('1스틱 2용도')은 받지 않는다", { timeout: 30_000 }, async () => {
+    // 실측 12·13: 「一棒两用」 줄이기가 두 번 다 "1스틱 2용도"를 냈다 — 요청문에 금지 예시로 적어도 낸다(규칙 4).
+    const gif = await sharp(ORIG_PNG).gif().toBuffer();
+    mock = happyMock();
+    mock.image = ["echo"];
+    mock.transcribe = gifTranscribe();
+    mock.translate = [["1스틱 2용도 아주 긴 답변입니다"], ["1스틱 2용도 기능"], ["강렬한 진동"]];
+    const r = await translateImageAuto(gif, "image/gif");
+    expect("boxes" in r && r.boxes[0]?.ko).toBe("강렬한 진동");
+  });
+
   it("정지 이미지의 줄이기는 그대로다 — 직전 답 되먹임·2차 줄이기는 GIF 전용", async () => {
     mock = happyMock();
     // 정지 이미지 예산 18자. 1차 20자 → 줄이기 1회 14자 → 채택, 2차 없음
