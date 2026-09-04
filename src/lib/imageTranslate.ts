@@ -3348,18 +3348,29 @@ export function bandSeamProblem(
   // 경계 검사를 통과했는데 띠 자리에 밝은 사각형 자국이 남았다.
   // 띠는 대부분 배경이고 글자는 소수라 **중앙값**이 배경을 대표한다.
   // 실측 분리: 정상 띠 10개 중 8개가 0.1~3.3, 자국이 보인 2개가 12.4·13.7.
-  const median = (buf: Uint8Array) => {
-    const v: number[] = [];
-    for (let y = band.top; y < band.top + band.height; y++) {
-      for (let x = band.left; x < band.left + band.width; x++) {
-        const i = (y * W + x) * 4;
-        v.push(0.299 * buf[i] + 0.587 * buf[i + 1] + 0.114 * buf[i + 2]);
-      }
+  // 배경은 **원본·합성본 둘 다 글자가 아닌 픽셀**로만 잰다. 띠 전체 중앙값은 글자가 띠의
+  // 30~45% 를 차지하면 글자 쪽으로 넘어간다 — 재생 검증(실측 산출물 5회분): 깨끗했던
+  // 「全面覆盖」(글자 28~36%)가 5회 전부 "배경 밝기 차 25" 로 오탐됐다.
+  const lumOf = (buf: Uint8Array, i: number) => 0.299 * buf[i] + 0.587 * buf[i + 1] + 0.114 * buf[i + 2];
+  const all: number[] = [];
+  for (let y = band.top; y < band.top + band.height; y++) {
+    for (let x = band.left; x < band.left + band.width; x++) all.push(lumOf(origRaw, (y * W + x) * 4));
+  }
+  all.sort((a, b) => a - b);
+  const ref = all[all.length >> 1];
+  const bgO: number[] = [], bgC: number[] = [];
+  for (let y = band.top; y < band.top + band.height; y++) {
+    for (let x = band.left; x < band.left + band.width; x++) {
+      const i = (y * W + x) * 4;
+      const lo = lumOf(origRaw, i), lc = lumOf(comp, i);
+      if (Math.abs(lo - ref) <= 40 && Math.abs(lc - ref) <= 40) { bgO.push(lo); bgC.push(lc); }
     }
-    v.sort((a, b) => a - b);
-    return v[v.length >> 1];
-  };
-  const inner = Math.abs(median(comp) - median(origRaw));
+  }
+  // 둘 다 배경인 픽셀이 띠의 1/5 도 안 되면 배경을 잴 수 없다 — 경계 검사(위)가 이미 통과했으니 넘긴다
+  if (bgO.length < all.length * 0.2) return null;
+  bgO.sort((a, b) => a - b);
+  bgC.sort((a, b) => a - b);
+  const inner = Math.abs(bgC[bgC.length >> 1] - bgO[bgO.length >> 1]);
   if (inner > BAND_INNER_MAX) return `덧댄 자국이 보입니다 (배경 밝기 차 ${inner.toFixed(0)})`;
   return null;
 }
@@ -3588,29 +3599,50 @@ export function bandGlyphWeightShift(
     const [y1, x1, y2, x2] = b.box;
     return { x0: (x1 / 1000) * W, y0: (y1 / 1000) * H, x1: (x2 / 1000) * W, y1: (y2 / 1000) * H };
   };
+  // 획 두께 = 잉크 픽셀마다 **가로 연속 길이와 세로 연속 길이 중 짧은 쪽**, 그 평균.
+  // 가로 길이만 재면 一 처럼 긴 가로획이 많은 한자는 길고 세로획 위주 한글은 짧아, 굵기가
+  // 아니라 문자 체계 차이를 잰다 — 재생 검증(실측 산출물 5회분): 「一棒两用」 0.47,
+  // 「全面覆盖」 0.6 이 전부 오탐이었다. 짧은 쪽은 획의 방향과 무관하게 두께다.
   const stroke = (raw: Uint8Array, r: PxBox, exclude: PxBox[]): number | null => {
+    const w = r.x1 - r.x0, h = r.y1 - r.y0;
+    const ink = new Uint8Array(w * h);
     const lum: number[] = [];
-    for (let y = r.y0; y < r.y1; y++) for (let x = r.x0; x < r.x1; x++) {
-      if (exclude.some((e) => x >= e.x0 && x < e.x1 && y >= e.y0 && y < e.y1)) continue;
-      const i = (y * W + x) * 4;
-      lum.push(0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2]);
+    const lumAt = (x: number, y: number) => { const i = (y * W + x) * 4; return 0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2]; };
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const X = r.x0 + x, Y = r.y0 + y;
+      if (exclude.some((e) => X >= e.x0 && X < e.x1 && Y >= e.y0 && Y < e.y1)) continue;
+      lum.push(lumAt(X, Y));
     }
     if (lum.length === 0) return null;
     const med = [...lum].sort((a, b) => a - b)[lum.length >> 1];
-    const runs: number[] = [];
-    for (let y = r.y0; y < r.y1; y++) {
-      let run = 0;
-      for (let x = r.x0; x <= r.x1; x++) {
-        const inside = x < r.x1 && !exclude.some((e) => x >= e.x0 && x < e.x1 && y >= e.y0 && y < e.y1);
-        let ink = false;
-        if (inside) { const i = (y * W + x) * 4; ink = Math.abs(0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2] - med) > 40; }
-        if (ink) run++;
-        else if (run > 0) { runs.push(run); run = 0; }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const X = r.x0 + x, Y = r.y0 + y;
+      if (exclude.some((e) => X >= e.x0 && X < e.x1 && Y >= e.y0 && Y < e.y1)) continue;
+      if (Math.abs(lumAt(X, Y) - med) > 40) ink[y * w + x] = 1;
+    }
+    const hr = new Uint16Array(w * h), vr = new Uint16Array(w * h);
+    for (let y = 0; y < h; y++) {
+      let x = 0;
+      while (x < w) {
+        if (!ink[y * w + x]) { x++; continue; }
+        let e = x; while (e < w && ink[y * w + e]) e++;
+        for (let k = x; k < e; k++) hr[y * w + k] = e - x;
+        x = e;
       }
     }
-    if (runs.length < 4) return null;
-    // 평균(실수) — 중앙값은 정수라 가는 글자에서 2→3px 가 그대로 ×1.5 로 튄다
-    return runs.reduce((a, b) => a + b, 0) / runs.length;
+    for (let x = 0; x < w; x++) {
+      let y = 0;
+      while (y < h) {
+        if (!ink[y * w + x]) { y++; continue; }
+        let e = y; while (e < h && ink[e * w + x]) e++;
+        for (let k = y; k < e; k++) vr[k * w + x] = e - y;
+        y = e;
+      }
+    }
+    let sum = 0, n = 0;
+    for (let k = 0; k < w * h; k++) if (ink[k]) { sum += Math.min(hr[k], vr[k]); n++; }
+    if (n < 16) return null;
+    return sum / n;
   };
   const out: { zh: string; ratio: number; delta: number }[] = [];
   for (const b of targets) {
@@ -3640,8 +3672,11 @@ export function bandGlyphWeightShift(
  * 한 픽셀 차이는 안티앨리어싱·재표본화 수준이고, 진짜 굵기 변화는 3px 이상 벌어진다.
  */
 export function bandWeightBad(w: { ratio: number; delta: number }): boolean {
-  // 재생 검증 2차: 가는 글자 3px 가 4.7px 로도 그려진다(한국어 고딕이 중국어 가는 획보다 굵다) — 2px 까지 봐준다
-  return (w.ratio < 0.7 || w.ratio > 1.4) && Math.abs(w.delta) > 2;
+  // 재생 검증 2차: 가는 글자 3px 가 4.7px 로도 그려진다(한국어 고딕이 중국어 가는 획보다 굵다) — 2px 까지 봐준다.
+  // 재생 검증 3차(실측 산출물 7회분): 얇아지는 쪽은 전부 서체 차이였다 — 한자 굵은 제목(「一棒两用」)을
+  // 한글 굵은 고딕으로 옮겨도 획은 0.35~0.66 배다. 모델이 고칠 수 없는 차이를 잡으면 재시도 비용만
+  // 나간다. 진짜 사고(실측 10 부제가 1.89 로 굵어짐)는 굵어지는 쪽이라 그쪽만 본다.
+  return w.ratio > 1.4 && w.delta > 2;
 }
 
 /**
@@ -6428,13 +6463,15 @@ async function canvasRawOf(buf: Buffer): Promise<{ raw: Uint8ClampedArray; w: nu
 async function verifyProductIntegrity(
   orig: { data: Buffer; mime: string },
   out: { data: Buffer; mime: string },
+  /** GIF: 원문 그대로 둔 문구가 정상이므로 남은 외국어 글자를 제품 변화로 보지 말라고 말한다 */
+  opts: { leftoverTextIsNotChange?: boolean } = {},
 ): Promise<{ ok: boolean; issues: string[]; hard: string[] }> {
   const parts = await callGemini(
     MODEL,
     [
       { inline_data: { mime_type: orig.mime, data: orig.data.toString("base64") } },
       { inline_data: { mime_type: out.mime, data: out.data.toString("base64") } },
-      { text: buildProductIntegrityPrompt() },
+      { text: buildProductIntegrityPrompt(opts) },
     ],
     { maxOutputTokens: 2000, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "minimal" } },
   );
@@ -6972,6 +7009,7 @@ async function translateImageAutoInner(
       const pi = await verifyProductIntegrity(
         { data: origStill.data, mime: origStill.mime },
         { data: outStill.data, mime: outStill.mime },
+        { leftoverTextIsNotChange: mime === "image/gif" },
       );
       if (!pi.ok || pi.hard.length > 0) {
         reasons.push({ code: "PRODUCT_CHANGED", detail: (pi.hard[0] ?? pi.issues[0] ?? "제품 모습 상이").slice(0, 300) });

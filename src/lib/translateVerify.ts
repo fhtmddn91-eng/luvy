@@ -851,10 +851,16 @@ export function unexpectedOutputLines(
  * 상품 정보 수준에서 같은지 심사시킨다. 글자는 번역돼 다른 게 정상이므로 무시.
  * 판 재배치(문구 위치·줄바꿈 변화)는 허용 — 상품이 달라 보이는 변화만 실격.
  */
-export function buildProductIntegrityPrompt(): string {
+export function buildProductIntegrityPrompt(opts: { leftoverTextIsNotChange?: boolean } = {}): string {
+  // GIF 는 일부 문구를 원문 그대로 두는 일이 정상이다(움직이는 화면 위 등). 실측(2026-09-02 exp12):
+  // 남은 중국어를 "제품 사진 내부의 미번역 텍스트"로 hard 판정해 PRODUCT_CHANGED 가 붙었다 —
+  // 남은 글자는 잔류 관문(LEFTOVER)이 따로 잡으니 여기서는 글자를 전부 무시해야 한다.
+  const leftover = opts.leftoverTextIsNotChange
+    ? "\n번역되지 않고 **남은 외국어 글자**도 글자입니다 — 제품 변화가 아니므로 무시하세요(다른 검사가 잡습니다).\n"
+    : "";
   return `같은 상품 상세 이미지의 원본(첫째 장)과 번역본(둘째 장)입니다. 두 장의 **제품 사진**을 비교하세요.
 
-글자는 한국어로 번역되어 다른 것이 정상입니다 — 글자 내용·위치·줄바꿈 차이는 전부 무시하세요.
+글자는 한국어로 번역되어 다른 것이 정상입니다 — 글자 내용·위치·줄바꿈 차이는 전부 무시하세요.${leftover}
 
 hard (하나라도 있으면 ok:false — 상품이 달라 보이는 변화):
 1. 제품의 **개수**가 다름 (사라지거나 늘어남)

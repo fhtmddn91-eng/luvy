@@ -222,6 +222,26 @@ describe("bandSeamProblem", () => {
     expect(bandSeamProblem(orig, patchOf(196), band, W, H)).toBeNull();
   });
 
+  it("글자가 띠의 절반 가까이 차도 배경 판정이 흔들리지 않는다 — 실측 12 의 깨끗한 「全面覆盖」가 5회 전부 오탐", () => {
+    // 원본: 왼쪽 45% 가 글자(어둠), 결과: 오른쪽 55% 가 글자(한국어가 더 넓음). 배경은 둘 다 200.
+    // 단순 중앙값은 원본 200 · 결과 20 으로 갈라져 "배경 밝기 차 180" 을 낸다.
+    const inset = 4; // 가장자리 4px 은 배경 — 이음매 관문이 아니라 안쪽 배경 관문을 재는 픽스처
+    const origText = new Uint8Array(orig);
+    for (let y = band.top + inset; y < band.top + band.height - inset; y++) {
+      for (let x = band.left + inset; x < band.left + Math.round(band.width * 0.5); x++) {
+        const i = (y * W + x) * 4; origText[i] = 20; origText[i + 1] = 20; origText[i + 2] = 20;
+      }
+    }
+    const p = Buffer.alloc(band.width * band.height * 4);
+    for (let i = 0; i < band.width * band.height; i++) {
+      const x = i % band.width, y = (i / band.width) | 0;
+      const inside = y >= inset && y < band.height - inset && x >= Math.round(band.width * 0.4) && x < band.width - inset;
+      const v = inside ? 20 : 200;
+      p[i * 4] = v; p[i * 4 + 1] = v; p[i * 4 + 2] = v; p[i * 4 + 3] = 255;
+    }
+    expect(bandSeamProblem(origText, p, band, W, H)).toBeNull();
+  });
+
   it("경계는 맞는데 안쪽만 밝게 그린 패치를 잡는다 — 사각 자국", () => {
     // 실측(2026-09-01 M19 「눈으로 보는 강력 진동」): 경계 검사를 통과했는데
     // 띠 자리에 밝은 사각형이 남았다. 정상 띠는 배경 밝기 차 0.1~3.3, 이건 13.7.
@@ -698,11 +718,33 @@ describe("bandGlyphWeightShift — 획 굵기가 원문과 달라졌나 (픽셀,
     expect(bandGlyphWeightShift(stripes(0), stripes(0), W, H, [target], [target], band)).toEqual([]);
   });
 
+  it("가로획이 긴 한자(一)와 세로획 위주 한글은 굵기가 같으면 비율 1 — 가로 연속 길이는 문자 체계 차이를 잰다", () => {
+    // 실측 산출물 5회분: 「一棒两用」 0.47, 「全面覆盖」 0.6 — 전부 오탐. 진짜 굵기 변화(실측 10 「强震蜜豆」 2.04)는 맞았다.
+    const bars = (horizontal: boolean) => {
+      const a = new Uint8Array(W * H * 4).fill(230);
+      for (let i = 0; i < W * H; i++) a[i * 4 + 3] = 255;
+      for (let y = 45; y < 65; y++) for (let x = 55; x < 125; x++) {
+        const ink = horizontal ? (y - 45) % 8 < 3 : (x - 55) % 8 < 3; // 획 두께 3px
+        if (ink) { const i = (y * W + x) * 4; a[i] = a[i + 1] = a[i + 2] = 20; }
+      }
+      return a;
+    };
+    const r = bandGlyphWeightShift(bars(true), bars(false), W, H, [target], [target], band)[0];
+    expect(r.ratio).toBeGreaterThan(0.8);
+    expect(r.ratio).toBeLessThan(1.25);
+  });
+
   it("가는 글자의 한 픽셀 차이(2→3px)는 굵기 변화가 아니다 — 재생 검증에서 띠 4개가 전부 ×1.5 로 오탐됐다", () => {
     const r = bandGlyphWeightShift(stripes(2), stripes(3), W, H, [target], [target], band)[0];
     expect(r.ratio).toBeCloseTo(1.5, 1);
     expect(bandWeightBad(r)).toBe(false);
     expect(bandWeightBad({ ratio: 2, delta: 3 })).toBe(true);
-    expect(bandWeightBad({ ratio: 0.5, delta: -5 })).toBe(true);
+  });
+
+  it("얇아지는 쪽은 잡지 않는다 — 한자 굵은 제목을 한글로 옮기면 획이 얇아지는 건 서체 차이", () => {
+    // 재생 검증(실측 산출물 7회분): 깨끗한 「一棒两用」이 0.35~0.66 으로 매번 얇게 잡혔다. 모델이
+    // 고칠 수 없는 차이를 잡으면 띠마다 재시도 비용만 나간다. 진짜 사고(실측 10 부제 1.89)는 굵어진 쪽.
+    expect(bandWeightBad({ ratio: 0.5, delta: -5 })).toBe(false);
+    expect(bandWeightBad({ ratio: 1.89, delta: 2.7 })).toBe(true);
   });
 });

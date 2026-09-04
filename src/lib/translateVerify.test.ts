@@ -27,6 +27,7 @@ import {
   matchExpectedSegments,
   type NormBox,
 } from "./translateVerify";
+import { buildProductIntegrityPrompt } from "./translateVerify";
 
 describe("extraTextInBox — 박스 안 추가 문구 환각 (양방향)", () => {
   it("기대 문구 그대로면 통과", () => {
@@ -599,5 +600,12 @@ describe("mergeOcrPasses — 복원본 동작 동등성 (live10 fixture)", () =>
     const { merged, unconfirmed } = mergeOcrPasses([a], [c]);
     expect(merged).toEqual([a, c]);
     expect(unconfirmed).toEqual([a, c]);
+  });
+});
+
+describe("buildProductIntegrityPrompt — 남은 외국어 글자", () => {
+  it("GIF 에만 '남은 외국어 글자는 제품 변화가 아니다'를 말한다 — 실측 12: 남은 중국어를 PRODUCT_CHANGED 로 오판", () => {
+    expect(buildProductIntegrityPrompt({ leftoverTextIsNotChange: true })).toMatch(/남은 외국어/);
+    expect(buildProductIntegrityPrompt()).not.toMatch(/남은 외국어/);
   });
 });
