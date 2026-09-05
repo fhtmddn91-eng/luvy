@@ -4,6 +4,7 @@ import { useActionState, useState, startTransition } from "react";
 import Link from "next/link";
 import type { ProductFormState } from "@/lib/actions/admin-products";
 import { Panel, btnPrimary } from "@/components/ui/Panel";
+import { Icon } from "@/components/ui/Icon";
 import { fieldCls, areaCls, labelCls, helpCls, errorCls } from "@/components/ui/form";
 
 export interface ProductFormData {
@@ -45,10 +46,13 @@ export function ProductForm({
  action,
  product,
  categories,
+ backHref = "/admin/products",
 }: {
  action: Action;
  product?: ProductFormData;
  categories: CategoryChoice[];
+ /** 저장·취소 뒤 돌아갈 목록 주소 (페이지·검색 유지). 서버에서 이미 걸러진 값만 온다 */
+ backHref?: string;
 }) {
  const [state, formAction, pending] = useActionState<ProductFormState, FormData>(action, {});
  // 첨부한 썸네일 미리보기 — "첨부가 됐는지" 눈으로 확인할 수 있게
@@ -88,6 +92,19 @@ export function ProductForm({
  const tops = categories.filter((c) => c.parentSlug === null);
  const childrenOf = (slug: string) => categories.filter((c) => c.parentSlug === slug);
  const nameOf = (slug: string) => categories.find((c) => c.slug === slug)?.name ?? slug;
+ /** 세부 카테고리가 속한 대분류 (대분류 자신이면 그대로) */
+ const topOf = (slug: string) => categories.find((c) => c.slug === slug)?.parentSlug ?? slug;
+
+ // 추가 카테고리는 대분류별로 접어 둔다 — 세부 체크박스를 전부 펼쳐 놓으면 13px 글자가
+ // 수십 개 늘어서 노안으로 읽을 수 없다는 제보(2026-09-05 요청서 7번). 대표 카테고리가
+ // 속한 대분류만 처음부터 펼친다 — 같은 매대의 이웃 칸이 가장 자주 고르는 곳이다.
+ const [openTops, setOpenTops] = useState<string[]>(primary ? [topOf(primary)] : []);
+ const toggleOpen = (slug: string) =>
+ setOpenTops((cur) => (cur.includes(slug) ? cur.filter((s) => s !== slug) : [...cur, slug]));
+ const choosePrimary = (slug: string) => {
+ setPrimary(slug);
+ if (slug) setOpenTops((cur) => (cur.includes(topOf(slug)) ? cur : [...cur, topOf(slug)]));
+ };
 
  // form action={} 대신 직접 dispatch — React 19는 <form action> 제출이 끝나면
  // 폼을 자동 리셋해서, 검증 에러가 떠도 입력값과 첨부 파일이 전부 사라진다.
@@ -115,7 +132,7 @@ export function ProductForm({
  <select
  name="categorySlug"
  value={primary}
- onChange={(e) => setPrimary(e.target.value)}
+ onChange={(e) => choosePrimary(e.target.value)}
  className={fieldCls}
  >
  <option value="" disabled>
@@ -212,19 +229,41 @@ export function ProductForm({
  한 상품을 여러 매대에 함께 올릴 때 씁니다. 대표 카테고리
  {primary ? ` (${nameOf(primary)})` : ""}는 자동으로 포함되므로 고르지 않아도 됩니다.
  </p>
- <div className="space-y-2.5">
+ <div className="divide-y divide-hairline border border-hairline">
  {tops.map((top) => {
  const group = [top, ...childrenOf(top.slug)].filter((c) => c.slug !== primary);
  if (group.length === 0) return null;
+ const picked = group.filter((c) => extras.includes(c.slug)).length;
+ const open = openTops.includes(top.slug);
  return (
- <div key={top.slug} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
- <span className="w-[92px] shrink-0 text-[12px] font-semibold text-ink-soft">
- {top.name}
+ <div key={top.slug}>
+ <button
+ type="button"
+ aria-expanded={open}
+ onClick={() => toggleOpen(top.slug)}
+ className="flex h-12 w-full items-center justify-between px-4 text-left text-[15px] font-bold text-ink-deep transition-colors hover:bg-canvas"
+ >
+ <span>{top.name}</span>
+ <span className="flex items-center gap-2.5">
+ {/* 접혀 있어도 뭘 골랐는지 보이게 */}
+ {picked > 0 && (
+ <span className="rounded-pill bg-ink-deep px-2.5 py-0.5 text-[12px] font-bold text-white">
+ {picked}개 선택
  </span>
+ )}
+ <Icon
+ name="chevronDown"
+ className={`h-4.5 w-4.5 h-[18px] w-[18px] text-muted transition-transform ${open ? "rotate-180" : ""}`}
+ strokeWidth={2}
+ />
+ </span>
+ </button>
+ {open && (
+ <div className="grid gap-x-5 gap-y-3 border-t border-hairline-soft bg-canvas/60 px-4 py-3.5 sm:grid-cols-2 md:grid-cols-3">
  {group.map((c) => (
  <label
  key={c.slug}
- className="flex cursor-pointer items-center gap-1.5 text-[13px] text-ink-deep"
+ className="flex cursor-pointer items-center gap-2.5 text-[15px] text-ink-deep"
  >
  <input
  type="checkbox"
@@ -232,11 +271,13 @@ export function ProductForm({
  value={c.slug}
  checked={extras.includes(c.slug)}
  onChange={() => toggleExtra(c.slug)}
- className="h-3.5 w-3.5 accent-ink-deep"
+ className="h-4.5 w-4.5 h-[18px] w-[18px] shrink-0 accent-ink-deep"
  />
  {c.slug === top.slug ? `${c.name} (전체)` : c.name}
  </label>
  ))}
+ </div>
+ )}
  </div>
  );
  })}
@@ -440,10 +481,12 @@ export function ProductForm({
 
  {state.error && <p className={errorCls}>{state.error}</p>}
 
+ {/* 저장 뒤 돌아갈 목록 주소 — 서버 액션이 다시 걸러서 redirect 한다 */}
+ <input type="hidden" name="back" value={backHref} />
  <div className="flex items-center gap-4 pt-1">
  <SaveButton pending={pending} />
  <Link
- href="/admin/products"
+ href={backHref}
  className="text-[13.5px] text-muted transition-colors hover:text-ink-deep"
  >
  취소

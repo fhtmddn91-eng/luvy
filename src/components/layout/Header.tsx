@@ -4,11 +4,9 @@ import { Gnb } from "./Gnb";
 import { SearchBar } from "./SearchBar";
 import { Icon } from "@/components/ui/Icon";
 import { getCartCount } from "@/lib/actions/cart";
-import { getTopCategories } from "@/lib/categories";
 
 export async function Header() {
-  // 대분류만 — 세부 카테고리까지 한 줄에 늘어놓으면 모바일에서 다시 잘린다
-  const [cartCount, cats] = await Promise.all([getCartCount(), getTopCategories()]);
+  const cartCount = await getCartCount();
 
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-white/95 backdrop-blur">
@@ -17,7 +15,7 @@ export async function Header() {
         <Logo />
 
         <div className="order-3 flex w-full min-w-0 justify-center lg:order-none lg:w-auto lg:flex-1">
-          <SearchBar categories={cats.map((c) => ({ slug: c.slug, name: c.name }))} />
+          <SearchBar />
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">

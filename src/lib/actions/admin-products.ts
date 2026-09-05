@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { safeAdminReturnPath } from "@/lib/adminReturnPath";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
@@ -289,7 +290,8 @@ export async function updateProduct(id: string, _prev: ProductFormState, formDat
   revalidatePath("/admin/products");
   revalidatePath(`/products/${id}`);
   revalidatePath("/");
-  redirect("/admin/products");
+  // 열었던 목록 페이지로 돌아간다 — 폼 값은 주소창에서 온 것이라 여기서 다시 거른다
+  redirect(safeAdminReturnPath(String(formData.get("back") ?? ""), "/admin/products"));
 }
 
 /**

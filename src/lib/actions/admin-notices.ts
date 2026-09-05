@@ -15,6 +15,7 @@ function parse(formData: FormData) {
     body: String(formData.get("body") ?? "").trim(),
     sortOrder: parseInt(String(formData.get("sortOrder") ?? "0"), 10) || 0,
     active: formData.get("active") === "on",
+    popup: formData.get("popup") === "on",
   };
 }
 

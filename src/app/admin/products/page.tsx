@@ -77,6 +77,10 @@ export default async function AdminProductsPage({
  });
  const blockedByProduct = new Map(blockedRows.map((r) => [r.productId, r._count._all]));
 
+ // 수정 화면이 저장 뒤 돌아올 자리 — 5페이지에서 열었으면 5페이지로 (2026-09-05 요청서 5번).
+ // 예전엔 저장마다 1페이지로 떨어져 매번 다시 넘겨야 했다.
+ const editHref = (id: string) => `/admin/products/${id}?back=${encodeURIComponent(pageHref(pg.page))}`;
+
  return (
  <div>
  <PageHeader
@@ -137,7 +141,7 @@ export default async function AdminProductsPage({
  >
  <td className="px-5 py-3 sm:px-6">
  <Link
- href={`/admin/products/${p.id}`}
+ href={editHref(p.id)}
  className="flex items-center gap-3 font-semibold text-ink-deep hover:text-ink-deep"
  >
  <ProductThumb
@@ -224,7 +228,7 @@ export default async function AdminProductsPage({
  </form>
  <span aria-hidden className="h-3 w-px bg-hairline" />
  <Link
- href={`/admin/products/${p.id}`}
+ href={editHref(p.id)}
  className="text-ink-soft transition-colors hover:text-ink-deep"
  >
  수정

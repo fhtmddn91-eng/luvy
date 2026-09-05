@@ -7,15 +7,22 @@ import { QuickMenu } from "@/components/home/QuickMenu";
 import { NewProducts } from "@/components/home/NewProducts";
 import { ProductTabs } from "@/components/home/ProductTabs";
 import { NoticeStrip } from "@/components/home/NoticeStrip";
+import { NoticePopup } from "@/components/home/NoticePopup";
 import { FeatureGrid } from "@/components/home/FeatureGrid";
 import { getHomeTabs } from "@/lib/homeTabs";
 import { getCategoryTree } from "@/lib/categories";
 import { CategoryColumns } from "@/components/layout/CategoryMenu";
 
 export default async function HomePage() {
-  const [banners, notices, user, stats, tabs, tree] = await Promise.all([
+  const [banners, notices, popupNotices, user, stats, tabs, tree] = await Promise.all([
     db.banner.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" } }),
     db.notice.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" }, take: 3 }),
+    // 진입 팝업 — 어드민에서 켠 공지만. 숨긴(active=false) 공지는 팝업으로도 안 나간다
+    db.notice.findMany({
+      where: { active: true, popup: true },
+      orderBy: { sortOrder: "asc" },
+      select: { id: true, tag: true, text: true, body: true },
+    }),
     getSession(),
     getHomeStats(),
     getHomeTabs(),
@@ -45,6 +52,7 @@ export default async function HomePage() {
       <NewProducts />
       <NoticeStrip notices={notices} />
       <FeatureGrid />
+      <NoticePopup notices={popupNotices} />
     </>
   );
 }

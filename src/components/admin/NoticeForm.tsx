@@ -15,6 +15,8 @@ export interface NoticeFormData {
  body?: string;
  sortOrder: number;
  active: boolean;
+ /** 메인 진입 팝업으로 띄울지 */
+ popup?: boolean;
 }
 
 type Action = (prev: NoticeFormState, formData: FormData) => Promise<NoticeFormState>;
@@ -81,7 +83,15 @@ export function NoticeForm({ action, notice }: { action: Action; notice?: Notice
  <input name="active" type="checkbox" defaultChecked={notice?.active ?? true} className="h-4 w-4 accent-brand-500" />
  노출
  </label>
+ <label className="flex h-11 items-center gap-2 text-[14px] text-ink-deep">
+ <input name="popup" type="checkbox" defaultChecked={notice?.popup ?? false} className="h-4 w-4 accent-brand-500" />
+ 메인 팝업으로 띄우기
+ </label>
  </div>
+ <p className="-mt-3 text-[12px] leading-relaxed text-muted">
+ 팝업은 손님이 메인에 들어올 때 화면 가운데 큰 창으로 뜹니다. 「노출」이 꺼져 있으면 팝업도 뜨지 않습니다.
+ 손님은 「오늘 하루 보지 않기」로 하루 동안 끌 수 있습니다.
+ </p>
 
  {state.error && <p className="text-[13px] font-medium text-brand-600">{state.error}</p>}
 

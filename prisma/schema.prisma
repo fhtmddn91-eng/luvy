@@ -375,6 +375,11 @@ model Notice {
   tag       String
   text      String
   body      String   @default("") // 공지 상세 본문 (비어 있으면 목록에서 상세 링크 없이 표시)
+  /**
+   * 메인 진입 시 팝업 창으로 띄울지. 하단 스트립은 한 줄이라 눈에 안 띈다는
+   * 운영자 요청(2026-09-05)으로 추가. active 가 꺼져 있으면 팝업도 안 뜬다.
+   */
+  popup     Boolean  @default(false)
   sortOrder Int      @default(0)
   active    Boolean  @default(true)
   createdAt DateTime @default(now())

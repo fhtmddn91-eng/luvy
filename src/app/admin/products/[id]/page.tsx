@@ -6,18 +6,23 @@ import { updateProduct } from "@/lib/actions/admin-products";
 import { PageHeader, Panel } from "@/components/ui/Panel";
 import { getAllCategories } from "@/lib/categories";
 import { ProductAssetsManager } from "@/components/admin/ProductAssetsManager";
+import { safeAdminReturnPath } from "@/lib/adminReturnPath";
 
 export default async function EditProductPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  /** editAsset: 검수함 "문구 수정 열기" 딥링크 — 해당 이미지의 편집기를 바로 연다 */
-  searchParams: Promise<{ editAsset?: string }>;
+  /**
+   * editAsset: 검수함 "문구 수정 열기" 딥링크 — 해당 이미지의 편집기를 바로 연다
+   * back: 목록이 실어 보낸 "돌아갈 목록 주소" (페이지·검색 포함). 저장·취소 뒤 그리로 간다
+   */
+  searchParams: Promise<{ editAsset?: string; back?: string }>;
 }) {
   await requireAdmin();
   const { id } = await params;
-  const { editAsset } = await searchParams;
+  const { editAsset, back } = await searchParams;
+  const backHref = safeAdminReturnPath(back, "/admin/products");
   const product = await db.product.findUnique({
     where: { id },
     include: {
@@ -36,6 +41,7 @@ export default async function EditProductPage({
       <PageHeader eyebrow="Catalog" title="상품 수정" description={product.name} />
       <ProductForm
         action={boundAction}
+        backHref={backHref}
         categories={await getAllCategories()}
         product={{
           id: product.id,

@@ -71,8 +71,12 @@ export default async function AdminNoticesPage() {
                       >
                         {n.text}
                       </Link>
-                      {n.body && (
-                        <span className="mt-0.5 block text-[12px] text-muted">상세 본문 있음</span>
+                      {(n.body || n.popup) && (
+                        <span className="mt-0.5 block text-[12px] text-muted">
+                          {[n.popup ? "메인 팝업" : null, n.body ? "상세 본문 있음" : null]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
                       )}
                     </td>
                     <td className="px-5 py-3.5 text-center sm:px-6">
