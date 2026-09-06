@@ -6,6 +6,74 @@ import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { generateTempPassword } from "@/lib/tempPassword";
 import { audit } from "@/lib/audit";
+import { GRADE_CODES, adjustPoints, getGrades, gradeName } from "@/lib/memberPoints";
+
+export type GradeFormState = { error?: string; ok?: boolean };
+
+/** 회원 등급 지정 (운영자 요청서 2번). 등급은 관리자가 수동으로 정한다 */
+export async function setMemberGrade(
+  id: string,
+  _prev: GradeFormState,
+  formData: FormData,
+): Promise<GradeFormState> {
+  await requireAdmin();
+  const code = String(formData.get("gradeCode") ?? "").trim();
+  if (!(GRADE_CODES as readonly string[]).includes(code)) return { error: "등급을 선택해주세요." };
+  const target = await db.user.findUnique({ where: { id }, select: { companyName: true, gradeCode: true } });
+  if (!target) return { error: "회원을 찾을 수 없습니다." };
+  if (target.gradeCode === code) return { ok: true };
+
+  await db.user.update({ where: { id }, data: { gradeCode: code } });
+  const grades = await getGrades();
+  await audit({
+    action: "MEMBER_GRADE",
+    target: "member",
+    targetId: id,
+    summary: `${target.companyName} 등급 ${gradeName(grades, target.gradeCode)} → ${gradeName(grades, code)}`,
+    meta: { from: target.gradeCode, to: code },
+  });
+  revalidatePath("/admin/members");
+  revalidatePath(`/admin/members/${id}`);
+  revalidatePath("/account");
+  return { ok: true };
+}
+
+export type PointFormState = { error?: string; ok?: boolean; balance?: number };
+
+/**
+ * 포인트 수동 지급/차감 (운영자 요청서 3번). 사유는 필수 — 원장에 남는 유일한 설명이다.
+ * 금액은 양수만 받고 지급/차감 선택으로 부호를 정한다 — 운영자가 마이너스 기호를 빠뜨려
+ * 차감이 지급으로 나가는 사고를 막는다.
+ */
+export async function adjustMemberPoints(
+  id: string,
+  _prev: PointFormState,
+  formData: FormData,
+): Promise<PointFormState> {
+  const admin = await requireAdmin();
+  const direction = String(formData.get("direction") ?? "add");
+  const raw = Number(String(formData.get("amount") ?? "").replace(/,/g, "").trim());
+  const reason = String(formData.get("reason") ?? "").trim();
+  if (!Number.isInteger(raw) || raw <= 0) return { error: "금액은 1 이상의 정수로 입력해주세요." };
+  if (!reason) return { error: "사유를 입력해주세요. (회원 포인트 내역에 그대로 표시됩니다)" };
+  const amount = direction === "subtract" ? -raw : raw;
+
+  const result = await adjustPoints({ userId: id, amount, reason, adminId: admin.id });
+  if (result.error) return { error: result.error };
+
+  const target = await db.user.findUnique({ where: { id }, select: { companyName: true } });
+  await audit({
+    action: "POINT_ADJUST",
+    target: "member",
+    targetId: id,
+    summary: `${target?.companyName ?? id} ${amount > 0 ? "+" : ""}${amount.toLocaleString("ko-KR")}P — ${reason}`,
+    meta: { amount, reason, balance: result.balance },
+  });
+  revalidatePath("/admin/members");
+  revalidatePath(`/admin/members/${id}`);
+  revalidatePath("/account");
+  return { ok: true, balance: result.balance };
+}
 
 export async function setMemberStatus(id: string, status: "APPROVED" | "PENDING" | "REJECTED"): Promise<void> {
   const admin = await requireAdmin();

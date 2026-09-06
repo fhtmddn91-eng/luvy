@@ -9,6 +9,7 @@ import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
 import { AccountShell } from "@/components/account/AccountShell";
 import { Panel, StatusPill, EmptyState } from "@/components/ui/Panel";
 import { Icon } from "@/components/ui/Icon";
+import { getGrades, gradeName } from "@/lib/memberPoints";
 
 const dateFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
@@ -29,7 +30,7 @@ export default async function AccountPage() {
   const session = await requireUser();
   const company = await getCompany();
 
-  const [user, orders, inProgress, spent, openInquiries] = await Promise.all([
+  const [user, orders, inProgress, spent, openInquiries, ledger, grades] = await Promise.all([
     db.user.findUnique({
       where: { id: session.id },
       select: {
@@ -40,6 +41,8 @@ export default async function AccountPage() {
         businessNumber: true,
         status: true,
         createdAt: true,
+        gradeCode: true,
+        pointBalance: true,
       },
     }),
     db.order.findMany({
@@ -57,6 +60,8 @@ export default async function AccountPage() {
       _count: true,
     }),
     db.inquiry.count({ where: { userId: session.id, status: "OPEN" } }),
+    db.pointLedger.findMany({ where: { userId: session.id }, orderBy: { createdAt: "desc" }, take: 10 }),
+    getGrades(),
   ]);
 
   if (!user) return null;
@@ -81,11 +86,17 @@ export default async function AccountPage() {
                 {user.ownerName} · {bizFmt(user.businessNumber)}
               </p>
             </div>
-            <StatusPill
-              tone={approved ? "bg-white text-ink-deep" : "bg-white/15 text-white"}
-            >
-              {memberStatusLabel(user.status)}
-            </StatusPill>
+            <div className="flex items-center gap-2">
+              {/* 등급·포인트 — 운영자 요청서 2·3번 */}
+              <StatusPill tone="border border-white/40 text-white">
+                {gradeName(grades, user.gradeCode)} 등급
+              </StatusPill>
+              <StatusPill
+                tone={approved ? "bg-white text-ink-deep" : "bg-white/15 text-white"}
+              >
+                {memberStatusLabel(user.status)}
+              </StatusPill>
+            </div>
           </div>
 
           {/* 라벨이 접히면 3열 정렬이 흐트러지므로 짧은 단어만 사용 */}
@@ -106,7 +117,32 @@ export default async function AccountPage() {
               </p>
             </div>
           </div>
+          <p className="mt-4 border-t border-white/10 pt-4 text-[13.5px] text-white/70">
+            보유 포인트{" "}
+            <b className="font-display text-[18px] text-white">{user.pointBalance.toLocaleString("ko-KR")}</b>P
+            <span className="ml-2 text-[12px] text-white/45">주문이 배송완료되면 등급 적립률로 쌓입니다</span>
+          </p>
         </div>
+
+        {ledger.length > 0 && (
+          <div className="rise rise-2">
+            <Panel title="포인트 내역">
+              <ul className="divide-y divide-line text-[13px]">
+                {ledger.map((l) => (
+                  <li key={l.id} className="flex items-start justify-between gap-3 py-2.5">
+                    <div className="min-w-0">
+                      <span className="text-ink-soft">{l.reason}</span>
+                      <span className="block text-[11.5px] text-muted">{dateFmt(l.createdAt)}</span>
+                    </div>
+                    <span className={`shrink-0 font-display text-[15px] ${l.amount < 0 ? "text-brand-600" : "text-ink-deep"}`}>
+                      {l.amount > 0 ? "+" : ""}{l.amount.toLocaleString("ko-KR")}P
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          </div>
+        )}
 
         {!approved && (
           <div className="rise rise-2 border border-[#f0dfc0] bg-[#fdf8ef] px-5 py-4 text-[13px] leading-relaxed text-[#7a5514]">

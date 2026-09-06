@@ -3,6 +3,7 @@ import "server-only";
 import { db } from "@/lib/db";
 import { cancelPortOnePayment } from "@/lib/portone";
 import { restoreStock, linesFromOrderItems, STOCK_LINE_SELECT, type TxClient } from "@/lib/stockOps";
+import { reversePointsForOrder } from "@/lib/memberPoints";
 
 export class RefundFailedError extends Error {
   constructor(cause: string) {
@@ -37,6 +38,8 @@ async function claimCancel(tx: TxClient, orderId: string, meta: CancelMeta): Pro
 
   const items = await tx.orderItem.findMany({ where: { orderId }, select: STOCK_LINE_SELECT });
   await restoreStock(tx, linesFromOrderItems(items));
+  // 배송완료 뒤 취소된 주문이면 적립 포인트도 같은 트랜잭션에서 회수한다
+  await reversePointsForOrder(tx, orderId);
 }
 
 /**

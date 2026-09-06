@@ -7,17 +7,20 @@ import {
   LogoForm,
   CompanyInfoForm,
   BankAccountForm,
+  MemberGradesForm,
 } from "@/components/admin/SettingsForms";
+import { getGrades } from "@/lib/memberPoints";
 import { getBankAccount } from "@/lib/bankAccountInfo";
 import { PageHeader, Panel } from "@/components/ui/Panel";
 
 export default async function AdminSettingsPage() {
   await requireAdmin();
-  const [policy, logo, company, bank] = await Promise.all([
+  const [policy, logo, company, bank, grades] = await Promise.all([
     getShippingPolicy(),
     getLogoUrl(),
     getCompany(),
     getBankAccount(),
+    getGrades(),
   ]);
 
   return (
@@ -25,7 +28,7 @@ export default async function AdminSettingsPage() {
       <PageHeader
         eyebrow="System"
         title="설정"
-        description="로고 · 사업자 정보 · 입금 계좌 · 배송비 정책 · 관리자 계정"
+        description="로고 · 사업자 정보 · 입금 계좌 · 배송비 정책 · 회원 등급 · 관리자 계정"
       />
 
       <div className="space-y-4">
@@ -58,6 +61,12 @@ export default async function AdminSettingsPage() {
         <div className="rise rise-3">
           <Panel title="배송비">
             <ShippingSettingsForm fee={policy.fee} freeThreshold={policy.freeThreshold} />
+          </Panel>
+        </div>
+
+        <div className="rise rise-3">
+          <Panel title="회원 등급 · 포인트 적립률">
+            <MemberGradesForm grades={grades} />
           </Panel>
         </div>
 

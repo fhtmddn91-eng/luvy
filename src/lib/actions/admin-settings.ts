@@ -11,8 +11,45 @@ import { COMPANY_FIELDS } from "@/lib/company";
 import { saveCompany, resetCompany } from "@/lib/companyInfo";
 import { BANK_FIELDS } from "@/lib/bankAccount";
 import { saveBankAccount } from "@/lib/bankAccountInfo";
+import { GRADE_CODES } from "@/lib/memberPoints";
+import { parseRatePercent, formatRatePercent } from "@/lib/points";
 
 export type SettingsFormState = { error?: string; ok?: boolean };
+
+/**
+ * 회원 등급 이름·적립률 (운영자 요청서 2·3번). 코드 3개는 고정이고 이름과 적립률만 바꾼다.
+ * 적립률은 % 로 받아 만분율로 저장 — 소수 둘째 자리까지. 이미 쌓인 포인트는 건드리지 않는다.
+ */
+export async function updateMemberGrades(
+  _prev: SettingsFormState,
+  formData: FormData,
+): Promise<SettingsFormState> {
+  await requireAdmin();
+  const rows: { code: string; name: string; pointRateBp: number }[] = [];
+  for (const code of GRADE_CODES) {
+    const name = String(formData.get(`name-${code}`) ?? "").trim();
+    const rateBp = parseRatePercent(String(formData.get(`rate-${code}`) ?? ""));
+    if (!name || name.length > 20) return { error: `${code} 등급 이름은 1~20자로 입력해주세요.` };
+    if (rateBp === null) return { error: `${name} 등급의 적립률은 0 ~ 100 사이, 소수 둘째 자리까지만 가능합니다.` };
+    rows.push({ code, name, pointRateBp: rateBp });
+  }
+  await db.$transaction(
+    rows.map((r) =>
+      db.memberGrade.update({ where: { code: r.code }, data: { name: r.name, pointRateBp: r.pointRateBp } }),
+    ),
+  );
+  await audit({
+    action: "SETTING_GRADES",
+    target: "setting",
+    targetId: "grades",
+    summary: rows.map((r) => `${r.name} ${formatRatePercent(r.pointRateBp)}%`).join(" · "),
+    meta: { grades: rows },
+  });
+  revalidatePath("/admin/settings");
+  revalidatePath("/admin/members");
+  revalidatePath("/account");
+  return { ok: true };
+}
 
 export async function updateShippingSettings(
   _prev: SettingsFormState,

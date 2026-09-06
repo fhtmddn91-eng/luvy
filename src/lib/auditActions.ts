@@ -11,6 +11,8 @@ export const AUDIT_ACTIONS = {
   MEMBER_REJECT: "회원 반려",
   MEMBER_PENDING: "회원 대기 전환",
   MEMBER_TEMP_PASSWORD: "임시 비밀번호 발급",
+  MEMBER_GRADE: "회원 등급 변경",
+  POINT_ADJUST: "포인트 수동 지급/차감",
 
   // 주문
   ORDER_STATUS: "주문 상태 변경",
@@ -38,6 +40,7 @@ export const AUDIT_ACTIONS = {
   // 설정·시스템
   SETTING_SHIPPING: "배송비 정책 변경",
   SETTING_BANK: "입금 계좌 변경",
+  SETTING_GRADES: "회원 등급·적립률 변경",
   NAV_UPDATE: "상단 메뉴 변경",
   BRANDING_UPDATE: "로고 변경",
   HOME_UPDATE: "메인 상품 탭 변경",
@@ -58,7 +61,7 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
   {
     key: "member",
     label: "회원",
-    actions: ["MEMBER_APPROVE", "MEMBER_REJECT", "MEMBER_PENDING", "MEMBER_TEMP_PASSWORD"],
+    actions: ["MEMBER_APPROVE", "MEMBER_REJECT", "MEMBER_PENDING", "MEMBER_TEMP_PASSWORD", "MEMBER_GRADE", "POINT_ADJUST"],
   },
   {
     key: "order",
@@ -81,7 +84,7 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
     key: "system",
     label: "설정·인증",
     actions: [
-      "SETTING_SHIPPING", "SETTING_BANK", "NAV_UPDATE", "BRANDING_UPDATE", "HOME_UPDATE",
+      "SETTING_SHIPPING", "SETTING_BANK", "SETTING_GRADES", "NAV_UPDATE", "BRANDING_UPDATE", "HOME_UPDATE",
       "COMPANY_UPDATE", "ADMIN_PASSWORD", "LOGIN_BLOCKED",
     ],
   },

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { statusChangeRejection, orderStatusLabel } from "@/lib/orderStatus";
+import { accruePointsForOrder } from "@/lib/memberPoints";
 import { cancelOrderCore, RefundFailedError } from "@/lib/orderCancel";
 import { parseDepositInput, depositGapLabel } from "@/lib/deposit";
 import { audit, shortId } from "@/lib/audit";
@@ -70,6 +71,17 @@ export async function setOrderStatus(
   if (status === before.status) return { ok: true };
 
   await db.order.update({ where: { id }, data: { status } });
+
+  // 배송완료가 곧 "거래가 끝났다"는 신호다 — 이때 등급 적립률로 포인트를 쌓는다.
+  // 적립 실패가 상태 변경을 되돌리면 운영자는 "왜 배송완료가 안 되지?"만 겪으므로
+  // 예외는 삼키고 서버 로그로만 남긴다. 같은 주문 재적립은 원장 unique 가 막는다.
+  if (status === "DELIVERED") {
+    try {
+      await accruePointsForOrder(id);
+    } catch (e) {
+      console.error(`[points] 적립 실패 order=${id}`, e);
+    }
+  }
 
   await audit({
     action: "ORDER_STATUS",

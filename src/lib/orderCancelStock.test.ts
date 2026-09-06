@@ -24,12 +24,23 @@ interface ItemRow {
   optionId: string;
 }
 
+interface LedgerRow {
+  userId: string;
+  orderId?: string;
+  kind: string;
+  amount: number;
+  reason: string;
+  createdBy: string;
+}
+
 const state = {
   products: [] as Row[],
   options: [] as Row[],
   items: [] as ItemRow[],
   orders: [] as { id: string; status: string }[],
   payment: null as { orderId: string; paymentId: string; status: string } | null,
+  ledger: [] as LedgerRow[],
+  balance: 0,
 };
 
 /** where 의 id/trackStock/stock.gte/status.notIn 만 해석하는 최소 구현 */
@@ -78,6 +89,21 @@ const fakeDb = {
     findUnique: async () => state.payment,
     update: async () => state.payment,
   },
+  // 취소 트랜잭션이 포인트 회수까지 하므로(2026-09-05 등급·포인트) 원장·잔액도 가짜로 둔다
+  pointLedger: {
+    findUnique: async ({ where }: { where: { orderId_kind: { orderId: string; kind: string } } }) =>
+      state.ledger.find((l) => l.orderId === where.orderId_kind.orderId && l.kind === where.orderId_kind.kind) ?? null,
+    create: async ({ data }: { data: LedgerRow }) => {
+      state.ledger.push(data);
+      return data;
+    },
+  },
+  user: {
+    update: async ({ data }: { data: { pointBalance: { increment: number } } }) => {
+      state.balance += data.pointBalance.increment;
+      return { pointBalance: state.balance };
+    },
+  },
   $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakeDb),
 };
 
@@ -94,6 +120,35 @@ beforeEach(() => {
   state.items = [];
   state.products = [];
   state.options = [];
+  state.ledger = [];
+  state.balance = 0;
+});
+
+describe("cancelOrderCore — 포인트 회수", () => {
+  it("배송완료 적립이 있는 주문을 취소하면 같은 액수를 회수한다", async () => {
+    state.orders = [{ id: "ord1", status: "DELIVERED" }];
+    state.ledger = [{ userId: "u1", orderId: "ord1", kind: "ACCRUE", amount: 500, reason: "", createdBy: "SYSTEM" }];
+    state.balance = 500;
+    await cancelOrderCore("ord1", META);
+    const reverse = state.ledger.find((l) => l.kind === "REVERSE");
+    expect(reverse).toMatchObject({ userId: "u1", orderId: "ord1", amount: -500 });
+    expect(state.balance).toBe(0);
+  });
+
+  it("적립 기록이 없는 주문 취소는 포인트를 건드리지 않는다", async () => {
+    await cancelOrderCore("ord1", META);
+    expect(state.ledger).toEqual([]);
+    expect(state.balance).toBe(0);
+  });
+
+  it("이미 취소된 주문을 다시 취소해도 두 번 회수하지 않는다", async () => {
+    state.orders = [{ id: "ord1", status: "CANCELED" }];
+    state.ledger = [{ userId: "u1", orderId: "ord1", kind: "ACCRUE", amount: 500, reason: "", createdBy: "SYSTEM" }];
+    state.balance = 500;
+    await cancelOrderCore("ord1", META);
+    expect(state.ledger.filter((l) => l.kind === "REVERSE")).toHaveLength(0);
+    expect(state.balance).toBe(500);
+  });
 });
 
 describe("cancelOrderCore — 옵션 재고 복원", () => {

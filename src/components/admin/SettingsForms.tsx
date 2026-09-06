@@ -14,6 +14,8 @@ import {
 import { COMPANY_FIELDS, type CompanyInfo } from "@/lib/company";
 import { BANK_FIELDS, type BankAccount } from "@/lib/bankAccount";
 import { fieldCls, labelCls, helpCls, errorCls } from "@/components/ui/form";
+import { updateMemberGrades } from "@/lib/actions/admin-settings";
+import { formatRatePercent } from "@/lib/points";
 import { btnPrimary } from "@/components/ui/Panel";
 
 function SubmitButton({ label }: { label: string }) {
@@ -270,6 +272,55 @@ export function BankAccountForm({ current }: { current: BankAccount }) {
 
       <Result state={state} okText="저장되었습니다. 주문서와 주문 완료 화면에 바로 반영됩니다." />
       <SubmitButton label="입금 계좌 저장" />
+    </form>
+  );
+}
+
+/**
+ * 회원 등급 이름·적립률 (운영자 요청서 2·3번). 등급 코드 3개는 고정, 이름과 %만 편집한다.
+ * 적립은 배송완료 시점에 상품금액 × 적립률로 쌓이므로, 여기 숫자를 바꾸면 그 뒤 배송완료
+ * 건부터 새 비율이 적용된다 — 이미 쌓인 포인트는 그대로다.
+ */
+export function MemberGradesForm({
+  grades,
+}: {
+  grades: { code: string; name: string; pointRateBp: number }[];
+}) {
+  const [state, formAction] = useActionState<SettingsFormState, FormData>(updateMemberGrades, {});
+  return (
+    <form action={formAction} className="space-y-3.5">
+      <div className="grid grid-cols-[1fr_120px] gap-x-3 gap-y-2 text-[12px] font-semibold text-muted">
+        <span>등급 이름</span>
+        <span>적립률 (%)</span>
+      </div>
+      {grades.map((g) => (
+        <div key={g.code} className="grid grid-cols-[1fr_120px] gap-x-3">
+          <input
+            name={`name-${g.code}`}
+            defaultValue={g.name}
+            maxLength={20}
+            aria-label={`${g.code} 등급 이름`}
+            className={fieldCls}
+          />
+          <input
+            name={`rate-${g.code}`}
+            type="number"
+            min={0}
+            max={100}
+            step={0.01}
+            inputMode="decimal"
+            defaultValue={formatRatePercent(g.pointRateBp)}
+            aria-label={`${g.name} 적립률 (%)`}
+            className={fieldCls}
+          />
+        </div>
+      ))}
+      <p className={helpCls}>
+        회원마다 등급은 「회원 관리」 상세에서 지정합니다. 적립은 주문이 배송완료로 바뀔 때
+        상품금액(배송비 제외) × 적립률로 쌓이고, 취소되면 회수됩니다.
+      </p>
+      <Result state={state} okText="저장되었습니다. 다음 배송완료 건부터 새 적립률이 적용됩니다." />
+      <SubmitButton label="등급·적립률 저장" />
     </form>
   );
 }

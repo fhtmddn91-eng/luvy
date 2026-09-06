@@ -24,11 +24,53 @@ model User {
   phone          String
   status         String     @default("APPROVED")
   role           String     @default("MEMBER")
+  /**
+   * 회원 등급 — 관리자가 수동으로 정한다(운영자 요청서 2번, 2026-09-05).
+   * 등급의 역할은 포인트 적립률 하나다. 자동 승급·할인은 넣지 않았다.
+   */
+  gradeCode      String     @default("BASIC")
+  grade          MemberGrade @relation(fields: [gradeCode], references: [code])
+  /** 포인트 잔액 — PointLedger 합계의 캐시. 원장 기록과 같은 트랜잭션에서만 바꾼다 */
+  pointBalance   Int        @default(0)
   createdAt      DateTime   @default(now())
   cartItems      CartItem[]
   orders         Order[]
   inquiries      Inquiry[]
   wishlists      Wishlist[]
+  pointLedger    PointLedger[]
+}
+
+model MemberGrade {
+  /** BASIC | SILVER | GOLD — 코드는 고정, 이름·적립률은 어드민 설정에서 편집 */
+  code        String @id
+  name        String
+  /** 적립률 만분율 (100 = 1%). 소수 % 를 정수로 안전하게 — lib/points.ts */
+  pointRateBp Int    @default(0)
+  sortOrder   Int    @default(0)
+  users       User[]
+}
+
+/**
+ * 포인트 원장. 잔액은 User.pointBalance 에 캐시하지만 근거는 여기다 —
+ * 잔액 숫자만 있으면 "왜 이 액수인지"를 나중에 설명할 수 없다.
+ */
+model PointLedger {
+  id        String   @id @default(cuid())
+  userId    String
+  /** +적립 / −회수·차감 */
+  amount    Int
+  /** ACCRUE(배송완료 적립) | REVERSE(취소 회수) | ADJUST(관리자 수동) */
+  kind      String
+  reason    String   @default("")
+  orderId   String?
+  /** SYSTEM 또는 처리한 관리자 id */
+  createdBy String   @default("")
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /** 주문당 적립 1회·회수 1회 — 배송완료→되돌림→다시 배송완료 해도 두 번 쌓이지 않는다 */
+  @@unique([orderId, kind])
+  @@index([userId, createdAt])
 }
 
 model Product {
