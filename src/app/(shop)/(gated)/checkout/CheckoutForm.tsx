@@ -5,8 +5,18 @@ import { placeOrder, type OrderState } from "@/lib/actions/order";
 import { AuthField } from "@/components/auth/AuthField";
 import { SubmitButton } from "@/components/auth/SubmitButton";
 import { PaymentMethodPicker } from "@/components/checkout/PaymentMethodPicker";
+import { PointUseField } from "@/components/checkout/PointUseField";
 
-export function CheckoutForm({ bankAccount }: { bankAccount: string }) {
+export interface PointUseProps {
+  balance: number;
+  expiringSoon: number;
+  subtotal: number;
+  shippingFee: number;
+  minUse: number;
+  unit: number;
+}
+
+export function CheckoutForm({ bankAccount, points }: { bankAccount: string; points: PointUseProps }) {
   const [state, action] = useActionState<OrderState, FormData>(placeOrder, {});
   return (
     <form action={action} className="space-y-4 rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-soft)]">
@@ -23,6 +33,7 @@ export function CheckoutForm({ bankAccount }: { bankAccount: string }) {
           placeholder="예) 부재 시 문 앞에 놓아주세요"
         />
       </label>
+      <PointUseField {...points} />
       <div className="border-t border-line pt-4">
         <PaymentMethodPicker bankAccount={bankAccount} />
       </div>

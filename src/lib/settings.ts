@@ -67,3 +67,45 @@ export async function saveLogoUrl(url: string): Promise<void> {
     update: { value: url },
   });
 }
+
+/* ── 포인트 정책 (2026-09-05) ─────────────────────────────────────────────
+ * 최소 사용량·사용 단위·만료 개월. 값이 없거나 깨져 있으면 코드 기본값으로 동작한다 —
+ * 설정이 잘못 저장돼도 주문서가 멈추지는 않아야 한다.
+ */
+const KEY_POINT_MIN = "point_min_use";
+const KEY_POINT_UNIT = "point_use_unit";
+const KEY_POINT_EXPIRY = "point_expiry_months";
+
+export interface PointPolicy {
+  /** 이 액수 이상부터 사용 (0 = 제한 없음) */
+  minUse: number;
+  /** 이 단위의 배수로만 사용 (1 = 제한 없음) */
+  unit: number;
+  /** 적립일로부터 만료까지 개월 (0 = 만료 없음) */
+  expiryMonths: number;
+}
+
+export const POINT_POLICY_DEFAULT: PointPolicy = { minUse: 1000, unit: 100, expiryMonths: 12 };
+
+export const getPointPolicy = cache(async (): Promise<PointPolicy> => {
+  const rows = await db.setting.findMany({ where: { key: { in: [KEY_POINT_MIN, KEY_POINT_UNIT, KEY_POINT_EXPIRY] } } });
+  const map = new Map(rows.map((r) => [r.key, r.value]));
+  return {
+    minUse: toNonNegativeInt(map.get(KEY_POINT_MIN), POINT_POLICY_DEFAULT.minUse),
+    unit: Math.max(1, toNonNegativeInt(map.get(KEY_POINT_UNIT), POINT_POLICY_DEFAULT.unit)),
+    expiryMonths: toNonNegativeInt(map.get(KEY_POINT_EXPIRY), POINT_POLICY_DEFAULT.expiryMonths),
+  };
+});
+
+export async function savePointPolicy(policy: PointPolicy): Promise<void> {
+  const pairs: [string, number][] = [
+    [KEY_POINT_MIN, policy.minUse],
+    [KEY_POINT_UNIT, policy.unit],
+    [KEY_POINT_EXPIRY, policy.expiryMonths],
+  ];
+  await db.$transaction(
+    pairs.map(([key, v]) =>
+      db.setting.upsert({ where: { key }, create: { key, value: String(v) }, update: { value: String(v) } }),
+    ),
+  );
+}

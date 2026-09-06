@@ -15,8 +15,34 @@ import {
   orderStatusLabel,
 } from "@/lib/orderStatus";
 import { isSelectableMethod } from "@/lib/paymentMethods";
+import { getPointPolicy } from "@/lib/settings";
+import { validatePointUse, orderTotalAfterPoints } from "@/lib/points";
+import { pointSummary, usePointsForOrder, InsufficientPointsError } from "@/lib/memberPoints";
 
 export type OrderState = { error?: string };
+
+/**
+ * 주문서의 포인트 사용량. 폼 값은 조작할 수 있으므로 정책·잔액·총액으로 다시 검사한다.
+ * 잔액은 만료 정리 뒤의 값이다 — 화면에 보인 잔액과 같은 기준.
+ */
+async function parsePointsUsed(
+  formData: FormData,
+  userId: string,
+  orderTotal: number,
+): Promise<{ ok: true; amount: number } | { ok: false; error: string }> {
+  const raw = String(formData.get("pointsUsed") ?? "0").replace(/,/g, "").trim();
+  const requested = raw === "" ? 0 : Number(raw);
+  const [policy, summary] = await Promise.all([getPointPolicy(), pointSummary(userId)]);
+  return validatePointUse({ requested, balance: summary.balance, orderTotal, minUse: policy.minUse, unit: policy.unit });
+}
+
+/**
+ * 포인트로 총액이 0원이 된 주문은 결제 절차가 없다 — 바로 배송준비로 두고
+ * 입금 확인 칸에 "POINTS" 를 남겨 누가·왜 넘겼는지 대사할 수 있게 한다.
+ */
+function zeroPaidData(now: Date) {
+  return { status: "PREPARING", depositConfirmedAt: now, depositConfirmedBy: "POINTS", depositAmount: 0 } as const;
+}
 
 function parseShipping(formData: FormData) {
   return {
@@ -56,10 +82,14 @@ export async function placeOrder(_prev: OrderState, formData: FormData): Promise
   if (!draftResult.ok) return { error: draftResult.error };
   const draft = draftResult.draft;
 
+  const points = await parsePointsUsed(formData, user.id, draft.total);
+  if (!points.ok) return { error: points.error };
+  const total = orderTotalAfterPoints(draft.subtotal, draft.shippingFee, points.amount);
+
   let order;
   try {
     order = await db.$transaction(async (tx) => {
-      // 재고 차감을 주문 생성과 같은 트랜잭션에 묶는다.
+      // 재고 차감·포인트 차감을 주문 생성과 같은 트랜잭션에 묶는다.
       // 부족하면 예외가 나면서 주문·장바구니 변경까지 전부 롤백된다.
       await reserveStock(tx, linesFromOrderItems(draft.items));
       const created = await tx.order.create({
@@ -73,15 +103,19 @@ export async function placeOrder(_prev: OrderState, formData: FormData): Promise
           paymentMethod,
           subtotal: draft.subtotal,
           shippingFee: draft.shippingFee,
-          total: draft.total,
+          pointsUsed: points.amount,
+          total,
           items: { create: draft.items },
+          ...(total === 0 ? zeroPaidData(new Date()) : {}),
         },
       });
+      await usePointsForOrder(tx, { userId: user.id, orderId: created.id, amount: points.amount });
       await tx.cartItem.deleteMany({ where: { userId: user.id } });
       return created;
     });
   } catch (e) {
     if (e instanceof InsufficientStockError) return { error: e.message };
+    if (e instanceof InsufficientPointsError) return { error: e.message };
     throw e;
   }
 
@@ -90,7 +124,8 @@ export async function placeOrder(_prev: OrderState, formData: FormData): Promise
 }
 
 export type PendingOrderResult =
-  | { ok: true; orderId: string; paymentId: string; orderName: string; amount: number }
+  /** paid: 포인트로 총액이 0원이라 결제창 없이 이미 접수된 주문 — 완료 화면으로 바로 간다 */
+  | { ok: true; orderId: string; paymentId: string; orderName: string; amount: number; paid?: boolean }
   | { ok: false; error: string };
 
 /**
@@ -109,15 +144,20 @@ export async function createPendingOrder(formData: FormData): Promise<PendingOrd
   if (!draftResult.ok) return { ok: false, error: draftResult.error };
   const draft = draftResult.draft;
 
-  // 결제창을 띄우기 전에 재고를 선점한다.
+  const points = await parsePointsUsed(formData, user.id, draft.total);
+  if (!points.ok) return { ok: false, error: points.error };
+  const total = orderTotalAfterPoints(draft.subtotal, draft.shippingFee, points.amount);
+  const zeroPaid = total === 0;
+
+  // 결제창을 띄우기 전에 재고와 포인트를 선점한다.
   // 결제가 끝난 뒤에 차감하면, 마지막 재고를 두 명이 동시에 결제해
   // "돈은 받았지만 보낼 물건이 없는" 상황이 생긴다.
-  // 결제 실패·취소 시에는 restoreStock 으로 되돌린다.
+  // 결제 실패·취소 시에는 restoreStock·refundPointsForOrder 로 되돌린다.
   let order;
   try {
     order = await db.$transaction(async (tx) => {
       await reserveStock(tx, linesFromOrderItems(draft.items));
-      return tx.order.create({
+      const created = await tx.order.create({
         data: {
           userId: user.id,
           status: "PENDING_PAYMENT",
@@ -127,22 +167,33 @@ export async function createPendingOrder(formData: FormData): Promise<PendingOrd
           memo: s.memo,
           subtotal: draft.subtotal,
           shippingFee: draft.shippingFee,
-          total: draft.total,
+          pointsUsed: points.amount,
+          total,
           items: { create: draft.items },
+          // 0원이면 결제창을 거치지 않으므로 여기서 바로 접수·장바구니 비움까지 끝낸다
+          ...(zeroPaid ? zeroPaidData(new Date()) : {}),
         },
       });
+      await usePointsForOrder(tx, { userId: user.id, orderId: created.id, amount: points.amount });
+      if (zeroPaid) await tx.cartItem.deleteMany({ where: { userId: user.id } });
+      return created;
     });
   } catch (e) {
     if (e instanceof InsufficientStockError) return { ok: false, error: e.message };
+    if (e instanceof InsufficientPointsError) return { ok: false, error: e.message };
     throw e;
   }
 
   const paymentId = `luvy-${order.id}`;
+  if (zeroPaid) {
+    revalidatePath("/", "layout");
+    return { ok: true, orderId: order.id, paymentId, orderName: draft.orderName, amount: 0, paid: true };
+  }
   await db.payment.create({
-    data: { orderId: order.id, paymentId, amount: draft.total, status: "READY" },
+    data: { orderId: order.id, paymentId, amount: total, status: "READY" },
   });
 
-  return { ok: true, orderId: order.id, paymentId, orderName: draft.orderName, amount: draft.total };
+  return { ok: true, orderId: order.id, paymentId, orderName: draft.orderName, amount: total };
 }
 
 export type CancelState = { error?: string };

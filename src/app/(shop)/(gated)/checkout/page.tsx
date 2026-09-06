@@ -10,6 +10,8 @@ import { optionUnitPrice } from "@/lib/options";
 import { getShippingPolicy } from "@/lib/settings";
 import { getBankAccount } from "@/lib/bankAccountInfo";
 import { formatBankAccount } from "@/lib/bankAccount";
+import { getPointPolicy } from "@/lib/settings";
+import { pointSummary } from "@/lib/memberPoints";
 
 export default async function CheckoutPage() {
   const user = await requireApprovedUser();
@@ -32,6 +34,9 @@ export default async function CheckoutPage() {
   });
   const subtotal = lines.reduce((s, l) => s + l.lineTotal, 0);
   const shippingFee = shippingFor(subtotal, await getShippingPolicy());
+  // 포인트 잔액은 만료 정리 뒤의 값 — 주문 액션이 같은 기준으로 다시 검사한다
+  const [policy, summary] = await Promise.all([getPointPolicy(), pointSummary(user.id)]);
+  const points = { balance: summary.balance, expiringSoon: summary.expiringSoon, subtotal, shippingFee, minUse: policy.minUse, unit: policy.unit };
 
   return (
     <div className="mx-auto max-w-[1080px] px-6 py-10">
@@ -43,9 +48,10 @@ export default async function CheckoutPage() {
             channelKey={PORTONE_CHANNEL_KEY_KCP}
             customerName={user.companyName}
             customerEmail={user.email}
+            points={points}
           />
         ) : (
-          <CheckoutForm bankAccount={formatBankAccount(await getBankAccount())} />
+          <CheckoutForm bankAccount={formatBankAccount(await getBankAccount())} points={points} />
         )}
         <div className="rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-soft)]">
           <h2 className="text-[16px] font-bold text-ink">주문 상품</h2>

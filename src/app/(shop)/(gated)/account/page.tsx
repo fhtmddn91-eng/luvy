@@ -9,7 +9,7 @@ import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
 import { AccountShell } from "@/components/account/AccountShell";
 import { Panel, StatusPill, EmptyState } from "@/components/ui/Panel";
 import { Icon } from "@/components/ui/Icon";
-import { getGrades, gradeName } from "@/lib/memberPoints";
+import { getGrades, gradeName, pointSummary } from "@/lib/memberPoints";
 
 const dateFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
@@ -30,6 +30,8 @@ export default async function AccountPage() {
   const session = await requireUser();
   const company = await getCompany();
 
+  // 만료 정리를 먼저 — 화면의 잔액이 곧 쓸 수 있는 잔액이어야 한다
+  const points = await pointSummary(session.id);
   const [user, orders, inProgress, spent, openInquiries, ledger, grades] = await Promise.all([
     db.user.findUnique({
       where: { id: session.id },
@@ -119,8 +121,13 @@ export default async function AccountPage() {
           </div>
           <p className="mt-4 border-t border-white/10 pt-4 text-[13.5px] text-white/70">
             보유 포인트{" "}
-            <b className="font-display text-[18px] text-white">{user.pointBalance.toLocaleString("ko-KR")}</b>P
-            <span className="ml-2 text-[12px] text-white/45">주문이 배송완료되면 등급 적립률로 쌓입니다</span>
+            <b className="font-display text-[18px] text-white">{points.balance.toLocaleString("ko-KR")}</b>P
+            {points.expiringSoon > 0 && (
+              <span className="ml-2 text-[12px] font-semibold text-brand-200">
+                30일 내 {points.expiringSoon.toLocaleString("ko-KR")}P 소멸 예정
+              </span>
+            )}
+            <span className="ml-2 text-[12px] text-white/45">주문 결제에 쓸 수 있고, 배송완료되면 등급 적립률로 쌓입니다</span>
           </p>
         </div>
 

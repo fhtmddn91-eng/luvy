@@ -5,6 +5,7 @@ import { optionUnitPrice } from "@/lib/options";
 import { getShippingPolicy } from "@/lib/settings";
 import { fetchPortOnePayment } from "@/lib/portone";
 import { restoreStock, linesFromOrderItems, STOCK_LINE_SELECT } from "@/lib/stockOps";
+import { refundPointsForOrder } from "@/lib/memberPoints";
 import { partitionCart, blockedCartMessage } from "@/lib/orderDraft";
 
 export interface OrderDraft {
@@ -123,6 +124,8 @@ export async function finalizePayment(paymentId: string): Promise<FinalizeResult
           select: STOCK_LINE_SELECT,
         });
         await restoreStock(tx, linesFromOrderItems(items));
+        // 결제창에서 실패한 주문의 사용 포인트도 재고와 같은 조건으로 돌려준다
+        await refundPointsForOrder(tx, payment.orderId);
       }
     });
     return { ok: false, reason: "결제가 완료되지 않았거나 금액이 일치하지 않습니다.", orderId: payment.orderId };

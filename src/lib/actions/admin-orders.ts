@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { statusChangeRejection, orderStatusLabel } from "@/lib/orderStatus";
-import { accruePointsForOrder } from "@/lib/memberPoints";
+import { accruePointsForOrder, evaluateGradeFor, getGrades, gradeName } from "@/lib/memberPoints";
 import { cancelOrderCore, RefundFailedError } from "@/lib/orderCancel";
 import { parseDepositInput, depositGapLabel } from "@/lib/deposit";
 import { audit, shortId } from "@/lib/audit";
@@ -78,8 +78,21 @@ export async function setOrderStatus(
   if (status === "DELIVERED") {
     try {
       await accruePointsForOrder(id);
+      // 구매금액이 합산되는 순간이 승급 평가 시점이다 (올라가기만 한다)
+      const order = await db.order.findUnique({ where: { id }, select: { userId: true, user: { select: { companyName: true } } } });
+      const promoted = order ? await evaluateGradeFor(order.userId) : null;
+      if (order && promoted) {
+        const grades = await getGrades();
+        await audit({
+          action: "MEMBER_GRADE",
+          target: "member",
+          targetId: order.userId,
+          summary: `${order.user.companyName} 자동 승급 ${gradeName(grades, promoted.from)} → ${gradeName(grades, promoted.to)}`,
+          meta: { ...promoted, auto: true, orderId: id },
+        });
+      }
     } catch (e) {
-      console.error(`[points] 적립 실패 order=${id}`, e);
+      console.error(`[points] 적립·승급 실패 order=${id}`, e);
     }
   }
 

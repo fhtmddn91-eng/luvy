@@ -91,6 +91,12 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
                 <dt>배송비</dt>
                 <dd>{order.shippingFee === 0 ? "무료" : won(order.shippingFee)}</dd>
               </div>
+              {order.pointsUsed > 0 && (
+                <div className="flex justify-between text-ink-soft">
+                  <dt>포인트 사용</dt>
+                  <dd>−{won(order.pointsUsed)}</dd>
+                </div>
+              )}
               <div className="flex justify-between border-t border-hairline pt-2">
                 <dt className="font-bold text-ink-deep">합계</dt>
                 <dd className="text-[17px] font-extrabold text-brand-600">{won(order.total)}</dd>

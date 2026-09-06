@@ -41,6 +41,7 @@ export const AUDIT_ACTIONS = {
   SETTING_SHIPPING: "배송비 정책 변경",
   SETTING_BANK: "입금 계좌 변경",
   SETTING_GRADES: "회원 등급·적립률 변경",
+  SETTING_POINTS: "포인트 정책 변경",
   NAV_UPDATE: "상단 메뉴 변경",
   BRANDING_UPDATE: "로고 변경",
   HOME_UPDATE: "메인 상품 탭 변경",
@@ -84,7 +85,7 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
     key: "system",
     label: "설정·인증",
     actions: [
-      "SETTING_SHIPPING", "SETTING_BANK", "SETTING_GRADES", "NAV_UPDATE", "BRANDING_UPDATE", "HOME_UPDATE",
+      "SETTING_SHIPPING", "SETTING_BANK", "SETTING_GRADES", "SETTING_POINTS", "NAV_UPDATE", "BRANDING_UPDATE", "HOME_UPDATE",
       "COMPANY_UPDATE", "ADMIN_PASSWORD", "LOGIN_BLOCKED",
     ],
   },

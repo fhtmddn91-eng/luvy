@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import * as PortOne from "@portone/browser-sdk/v2";
 import { createPendingOrder } from "@/lib/actions/order";
 import { AuthField } from "@/components/auth/AuthField";
+import { PointUseField } from "@/components/checkout/PointUseField";
 
 const PAY_METHODS = [
   { value: "CARD", label: "신용카드" },
@@ -17,9 +18,10 @@ interface Props {
   channelKey: string;
   customerName: string;
   customerEmail: string;
+  points: { balance: number; expiringSoon: number; subtotal: number; shippingFee: number; minUse: number; unit: number };
 }
 
-export function PortOneCheckout({ storeId, channelKey, customerName, customerEmail }: Props) {
+export function PortOneCheckout({ storeId, channelKey, customerName, customerEmail, points }: Props) {
   const [payMethod, setPayMethod] = useState<(typeof PAY_METHODS)[number]["value"]>("CARD");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -35,6 +37,12 @@ export function PortOneCheckout({ storeId, channelKey, customerName, customerEma
       const pending = await createPendingOrder(formData);
       if (!pending.ok) {
         setError(pending.error);
+        return;
+      }
+      // 포인트로 총액이 0원이면 결제창 없이 이미 접수됐다
+      if (pending.paid) {
+        router.push(`/checkout/complete?order=${pending.orderId}`);
+        router.refresh();
         return;
       }
 
@@ -76,6 +84,7 @@ export function PortOneCheckout({ storeId, channelKey, customerName, customerEma
       <AuthField label="수령인" name="recipient" />
       <AuthField label="연락처" name="phone" placeholder="010-0000-0000" autoComplete="tel" />
       <AuthField label="주소" name="address" placeholder="도로명 주소 + 상세주소" />
+      <PointUseField {...points} />
       <label className="block">
         <span className="mb-1.5 block text-[13px] font-semibold text-ink-soft">배송 메모 (선택)</span>
         <textarea

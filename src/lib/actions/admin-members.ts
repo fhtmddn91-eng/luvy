@@ -18,19 +18,20 @@ export async function setMemberGrade(
 ): Promise<GradeFormState> {
   await requireAdmin();
   const code = String(formData.get("gradeCode") ?? "").trim();
+  const gradeLocked = formData.get("gradeLocked") === "on";
   if (!(GRADE_CODES as readonly string[]).includes(code)) return { error: "등급을 선택해주세요." };
-  const target = await db.user.findUnique({ where: { id }, select: { companyName: true, gradeCode: true } });
+  const target = await db.user.findUnique({ where: { id }, select: { companyName: true, gradeCode: true, gradeLocked: true } });
   if (!target) return { error: "회원을 찾을 수 없습니다." };
-  if (target.gradeCode === code) return { ok: true };
+  if (target.gradeCode === code && target.gradeLocked === gradeLocked) return { ok: true };
 
-  await db.user.update({ where: { id }, data: { gradeCode: code } });
+  await db.user.update({ where: { id }, data: { gradeCode: code, gradeLocked } });
   const grades = await getGrades();
   await audit({
     action: "MEMBER_GRADE",
     target: "member",
     targetId: id,
-    summary: `${target.companyName} 등급 ${gradeName(grades, target.gradeCode)} → ${gradeName(grades, code)}`,
-    meta: { from: target.gradeCode, to: code },
+    summary: `${target.companyName} 등급 ${gradeName(grades, target.gradeCode)} → ${gradeName(grades, code)}${gradeLocked ? " (수동 고정)" : ""}`,
+    meta: { from: target.gradeCode, to: code, gradeLocked },
   });
   revalidatePath("/admin/members");
   revalidatePath(`/admin/members/${id}`);

@@ -25,12 +25,16 @@ interface ItemRow {
 }
 
 interface LedgerRow {
+  id?: string;
   userId: string;
-  orderId?: string;
+  orderId?: string | null;
   kind: string;
   amount: number;
   reason: string;
   createdBy: string;
+  remaining: number;
+  expiresAt?: Date | null;
+  createdAt?: Date;
 }
 
 const state = {
@@ -89,21 +93,39 @@ const fakeDb = {
     findUnique: async () => state.payment,
     update: async () => state.payment,
   },
-  // 취소 트랜잭션이 포인트 회수까지 하므로(2026-09-05 등급·포인트) 원장·잔액도 가짜로 둔다
+  // 취소 트랜잭션이 포인트 회수·환급까지 하므로(2026-09-05 등급·포인트) 원장·잔액도 가짜로 둔다
   pointLedger: {
     findUnique: async ({ where }: { where: { orderId_kind: { orderId: string; kind: string } } }) =>
       state.ledger.find((l) => l.orderId === where.orderId_kind.orderId && l.kind === where.orderId_kind.kind) ?? null,
+    findMany: async ({ where }: { where: { userId: string; remaining: { gt: number } } }) =>
+      state.ledger.filter((l) => l.userId === where.userId && l.remaining > where.remaining.gt),
     create: async ({ data }: { data: LedgerRow }) => {
-      state.ledger.push(data);
-      return data;
+      const row = { id: `l${state.ledger.length + 1}`, createdAt: new Date(), ...data };
+      state.ledger.push(row);
+      return row;
+    },
+    updateMany: async ({ where, data }: { where: { id: string; remaining?: number | { gte: number } }; data: { remaining: number | { decrement: number } } }) => {
+      const row = state.ledger.find((l) => l.id === where.id);
+      if (!row) return { count: 0 };
+      if (typeof where.remaining === "number" && row.remaining !== where.remaining) return { count: 0 };
+      if (typeof where.remaining === "object" && row.remaining < where.remaining.gte) return { count: 0 };
+      row.remaining = typeof data.remaining === "number" ? data.remaining : row.remaining - data.remaining.decrement;
+      return { count: 1 };
     },
   },
   user: {
-    update: async ({ data }: { data: { pointBalance: { increment: number } } }) => {
-      state.balance += data.pointBalance.increment;
+    update: async ({ data }: { data: { pointBalance: { increment?: number; decrement?: number } } }) => {
+      state.balance += (data.pointBalance.increment ?? 0) - (data.pointBalance.decrement ?? 0);
       return { pointBalance: state.balance };
     },
+    updateMany: async ({ where, data }: { where: { pointBalance?: { gte: number } }; data: { pointBalance: { decrement: number } } }) => {
+      if (where.pointBalance && state.balance < where.pointBalance.gte) return { count: 0 };
+      state.balance -= data.pointBalance.decrement;
+      return { count: 1 };
+    },
   },
+  // grantPoints 가 만료 정책을 읽는다 — 값이 없으면 코드 기본값(12개월)
+  setting: { findMany: async () => [] },
   $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakeDb),
 };
 
@@ -127,12 +149,34 @@ beforeEach(() => {
 describe("cancelOrderCore — 포인트 회수", () => {
   it("배송완료 적립이 있는 주문을 취소하면 같은 액수를 회수한다", async () => {
     state.orders = [{ id: "ord1", status: "DELIVERED" }];
-    state.ledger = [{ userId: "u1", orderId: "ord1", kind: "ACCRUE", amount: 500, reason: "", createdBy: "SYSTEM" }];
+    state.ledger = [{ id: "l1", userId: "u1", orderId: "ord1", kind: "ACCRUE", amount: 500, reason: "", createdBy: "SYSTEM", remaining: 500, expiresAt: null }];
     state.balance = 500;
     await cancelOrderCore("ord1", META);
     const reverse = state.ledger.find((l) => l.kind === "REVERSE");
     expect(reverse).toMatchObject({ userId: "u1", orderId: "ord1", amount: -500 });
+    expect(state.ledger[0].remaining).toBe(0);
     expect(state.balance).toBe(0);
+  });
+
+  it("결제에 쓴 포인트는 새 묶음으로 돌려받는다 (환급일 + 12개월 만료)", async () => {
+    state.ledger = [{ id: "l1", userId: "u1", orderId: "ord1", kind: "USE", amount: -3000, reason: "", createdBy: "u1", remaining: 0, expiresAt: null }];
+    state.balance = 0;
+    await cancelOrderCore("ord1", META);
+    const refund = state.ledger.find((l) => l.kind === "REFUND");
+    expect(refund).toMatchObject({ userId: "u1", orderId: "ord1", amount: 3000, remaining: 3000 });
+    expect(refund?.expiresAt).toBeInstanceOf(Date);
+    expect(state.balance).toBe(3000);
+  });
+
+  it("환급은 주문당 한 번 — 취소가 두 번 들어와도 두 번 돌려주지 않는다", async () => {
+    state.ledger = [
+      { id: "l1", userId: "u1", orderId: "ord1", kind: "USE", amount: -3000, reason: "", createdBy: "u1", remaining: 0, expiresAt: null },
+      { id: "l2", userId: "u1", orderId: "ord1", kind: "REFUND", amount: 3000, reason: "", createdBy: "SYSTEM", remaining: 3000, expiresAt: null },
+    ];
+    state.balance = 3000;
+    await cancelOrderCore("ord1", META);
+    expect(state.ledger.filter((l) => l.kind === "REFUND")).toHaveLength(1);
+    expect(state.balance).toBe(3000);
   });
 
   it("적립 기록이 없는 주문 취소는 포인트를 건드리지 않는다", async () => {
@@ -143,7 +187,7 @@ describe("cancelOrderCore — 포인트 회수", () => {
 
   it("이미 취소된 주문을 다시 취소해도 두 번 회수하지 않는다", async () => {
     state.orders = [{ id: "ord1", status: "CANCELED" }];
-    state.ledger = [{ userId: "u1", orderId: "ord1", kind: "ACCRUE", amount: 500, reason: "", createdBy: "SYSTEM" }];
+    state.ledger = [{ id: "l1", userId: "u1", orderId: "ord1", kind: "ACCRUE", amount: 500, reason: "", createdBy: "SYSTEM", remaining: 500, expiresAt: null }];
     state.balance = 500;
     await cancelOrderCore("ord1", META);
     expect(state.ledger.filter((l) => l.kind === "REVERSE")).toHaveLength(0);

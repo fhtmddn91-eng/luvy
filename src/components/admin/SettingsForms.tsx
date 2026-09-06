@@ -14,8 +14,14 @@ import {
 import { COMPANY_FIELDS, type CompanyInfo } from "@/lib/company";
 import { BANK_FIELDS, type BankAccount } from "@/lib/bankAccount";
 import { fieldCls, labelCls, helpCls, errorCls } from "@/components/ui/form";
-import { updateMemberGrades } from "@/lib/actions/admin-settings";
+import {
+  updateMemberGrades,
+  updatePointPolicy,
+  reevaluateAllGrades,
+  type ReevaluateState,
+} from "@/lib/actions/admin-settings";
 import { formatRatePercent } from "@/lib/points";
+import type { PointPolicy } from "@/lib/settings";
 import { btnPrimary } from "@/components/ui/Panel";
 
 function SubmitButton({ label }: { label: string }) {
@@ -284,17 +290,18 @@ export function BankAccountForm({ current }: { current: BankAccount }) {
 export function MemberGradesForm({
   grades,
 }: {
-  grades: { code: string; name: string; pointRateBp: number }[];
+  grades: { code: string; name: string; pointRateBp: number; threshold: number }[];
 }) {
   const [state, formAction] = useActionState<SettingsFormState, FormData>(updateMemberGrades, {});
   return (
     <form action={formAction} className="space-y-3.5">
-      <div className="grid grid-cols-[1fr_120px] gap-x-3 gap-y-2 text-[12px] font-semibold text-muted">
+      <div className="grid grid-cols-[1fr_96px_150px] gap-x-3 gap-y-2 text-[12px] font-semibold text-muted">
         <span>등급 이름</span>
         <span>적립률 (%)</span>
+        <span>승급 기준 (누적 구매, 원)</span>
       </div>
-      {grades.map((g) => (
-        <div key={g.code} className="grid grid-cols-[1fr_120px] gap-x-3">
+      {grades.map((g, i) => (
+        <div key={g.code} className="grid grid-cols-[1fr_96px_150px] gap-x-3">
           <input
             name={`name-${g.code}`}
             defaultValue={g.name}
@@ -313,14 +320,81 @@ export function MemberGradesForm({
             aria-label={`${g.name} 적립률 (%)`}
             className={fieldCls}
           />
+          {i === 0 ? (
+            <span className="flex h-11 items-center text-[12.5px] text-muted">기본 등급</span>
+          ) : (
+            <input
+              name={`threshold-${g.code}`}
+              type="number"
+              min={0}
+              step={10000}
+              inputMode="numeric"
+              defaultValue={g.threshold}
+              aria-label={`${g.name} 승급 기준 금액`}
+              className={fieldCls}
+            />
+          )}
         </div>
       ))}
       <p className={helpCls}>
-        회원마다 등급은 「회원 관리」 상세에서 지정합니다. 적립은 주문이 배송완료로 바뀔 때
-        상품금액(배송비 제외) × 적립률로 쌓이고, 취소되면 회수됩니다.
+        적립은 주문이 배송완료로 바뀔 때 (상품금액 − 사용 포인트) × 적립률로 쌓이고, 취소되면 회수됩니다.
+        승급 기준은 결제가 확인된 주문의 누적 금액이며, 배송완료 시점에 자동으로 <b>올라가기만</b> 합니다
+        (내려가지 않음). 0 이면 그 등급은 수동 지정으로만 줍니다.
       </p>
-      <Result state={state} okText="저장되었습니다. 다음 배송완료 건부터 새 적립률이 적용됩니다." />
-      <SubmitButton label="등급·적립률 저장" />
+      <Result state={state} okText="저장되었습니다. 다음 배송완료 건부터 새 적립률·기준이 적용됩니다." />
+      <SubmitButton label="등급·적립률·기준 저장" />
+    </form>
+  );
+}
+
+/** 전체 회원을 지금 기준으로 다시 본다 — 기준을 낮췄을 때 기다리지 않게 */
+export function ReevaluateGradesForm() {
+  const [state, formAction] = useActionState<ReevaluateState, FormData>(reevaluateAllGrades, {});
+  return (
+    <form action={formAction} className="mt-4 border-t border-hairline-soft pt-4">
+      <Result
+        state={state}
+        okText={`재평가가 끝났습니다. ${state.changed ?? 0}명의 등급이 올라갔습니다.`}
+      />
+      <button
+        type="submit"
+        className="h-11 border border-hairline bg-white px-5 text-[13px] font-bold text-ink-soft hover:border-ink-deep hover:text-ink-deep"
+      >
+        전체 회원 지금 재평가
+      </button>
+      <p className={helpCls}>수동 고정한 회원은 건너뜁니다. 올라가는 경우만 바뀌고, 바뀐 회원은 감사 로그에 남습니다.</p>
+    </form>
+  );
+}
+
+/** 포인트 사용 규칙·만료 — 마이페이지와 주문서 안내문이 이 숫자를 그대로 쓴다 */
+export function PointPolicyForm({ policy }: { policy: PointPolicy }) {
+  const [state, formAction] = useActionState<SettingsFormState, FormData>(updatePointPolicy, {});
+  return (
+    <form action={formAction} className="space-y-3.5">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <label htmlFor="pp-min" className={labelCls}>최소 사용 (P)</label>
+          <input id="pp-min" name="minUse" type="number" min={0} step={100} defaultValue={policy.minUse} className={fieldCls} />
+          <p className={helpCls}>0 이면 제한 없음</p>
+        </div>
+        <div>
+          <label htmlFor="pp-unit" className={labelCls}>사용 단위 (P)</label>
+          <input id="pp-unit" name="unit" type="number" min={1} step={1} defaultValue={policy.unit} className={fieldCls} />
+          <p className={helpCls}>1 이면 제한 없음</p>
+        </div>
+        <div>
+          <label htmlFor="pp-exp" className={labelCls}>만료 (개월)</label>
+          <input id="pp-exp" name="expiryMonths" type="number" min={0} max={120} step={1} defaultValue={policy.expiryMonths} className={fieldCls} />
+          <p className={helpCls}>0 이면 만료 없음</p>
+        </div>
+      </div>
+      <p className={helpCls}>
+        만료는 적립일 기준이며 <b>먼저 만료되는 포인트부터</b> 쓰입니다. 취소로 돌려받은 포인트는 돌려받은 날부터 다시 셉니다.
+        개월 수를 바꾸면 그 뒤에 적립되는 포인트부터 적용됩니다.
+      </p>
+      <Result state={state} okText="저장되었습니다. 주문서와 마이페이지 안내에 바로 반영됩니다." />
+      <SubmitButton label="포인트 정책 저장" />
     </form>
   );
 }

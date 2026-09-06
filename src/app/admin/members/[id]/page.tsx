@@ -10,7 +10,7 @@ import { TempPasswordForm } from "@/components/admin/TempPasswordForm";
 import { MemberGradeForm } from "@/components/admin/MemberGradeForm";
 import { PointAdjustForm } from "@/components/admin/PointAdjustForm";
 import { PAID_STATUSES, bucketOrders, type BucketView } from "@/lib/purchaseStats";
-import { getGrades, gradeName } from "@/lib/memberPoints";
+import { getGrades, gradeName, pointSummary } from "@/lib/memberPoints";
 
 const dateFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium" }).format(d);
@@ -31,6 +31,9 @@ const LEDGER_KIND: Record<string, string> = {
   ACCRUE: "적립",
   REVERSE: "회수",
   ADJUST: "관리자 조정",
+  USE: "사용",
+  REFUND: "환급",
+  EXPIRE: "만료",
 };
 
 export default async function AdminMemberDetailPage({
@@ -48,6 +51,8 @@ export default async function AdminMemberDetailPage({
   // 월별 12개월이 가장 긴 범위 — 그 시작부터 한 번만 읽고 세 표를 전부 만든다
   const since = new Date(now.getFullYear(), now.getMonth() - 11, 1);
 
+  // 만료 정리를 먼저 — 화면의 잔액이 곧 쓸 수 있는 잔액이어야 한다
+  const summary = await pointSummary(id, now);
   const [member, paidOrders, paidTotal, ledger, grades] = await Promise.all([
     db.user.findUnique({
       where: { id },
@@ -82,8 +87,14 @@ export default async function AdminMemberDetailPage({
           {gradeName(grades, member.gradeCode)} 등급
         </span>
         <span className="text-[13px] text-ink-soft">
-          포인트 <b className="font-display text-[15px] text-ink-deep">{member.pointBalance.toLocaleString("ko-KR")}</b>P
+          포인트 <b className="font-display text-[15px] text-ink-deep">{summary.balance.toLocaleString("ko-KR")}</b>P
+          {summary.expiringSoon > 0 && (
+            <span className="ml-2 text-[12px] text-brand-600">30일 내 {summary.expiringSoon.toLocaleString("ko-KR")}P 소멸 예정</span>
+          )}
         </span>
+        {member.gradeLocked && (
+          <span className="bg-hairline-soft px-2 py-1 text-[11px] font-bold text-ink-soft">등급 수동 고정</span>
+        )}
       </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-[1fr_300px]">
@@ -261,15 +272,15 @@ export default async function AdminMemberDetailPage({
           {/* 등급·포인트 — 운영자 요청서 2·3번 */}
           <section className="h-fit border border-hairline bg-white p-6">
             <h2 className="mb-3 text-[15px] font-bold text-ink-deep">회원 등급</h2>
-            <MemberGradeForm memberId={member.id} current={member.gradeCode} grades={grades} />
+            <MemberGradeForm memberId={member.id} current={member.gradeCode} locked={member.gradeLocked} grades={grades} />
             <p className="mt-2 text-[12px] leading-relaxed text-muted">
-              적립률은 「설정 › 회원 등급」에서 바꿉니다.
+              적립률·자동 승급 기준은 「설정 › 회원 등급」에서 바꿉니다. 자동 승급은 올라가기만 하며, 수동 고정을 켜면 건드리지 않습니다.
             </p>
 
             <div className="mt-6 border-t border-hairline pt-5">
               <h2 className="mb-1 text-[15px] font-bold text-ink-deep">포인트</h2>
               <p className="mb-3 text-[13px] text-ink-soft">
-                잔액 <b className="font-display text-[17px] text-ink-deep">{member.pointBalance.toLocaleString("ko-KR")}</b>P
+                잔액 <b className="font-display text-[17px] text-ink-deep">{summary.balance.toLocaleString("ko-KR")}</b>P
               </p>
               <PointAdjustForm memberId={member.id} />
             </div>

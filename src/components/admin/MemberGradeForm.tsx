@@ -9,10 +9,12 @@ import { btnPrimary } from "@/components/ui/Panel";
 export function MemberGradeForm({
   memberId,
   current,
+  locked,
   grades,
 }: {
   memberId: string;
   current: string;
+  locked: boolean;
   grades: { code: string; name: string; pointRateBp: number }[];
 }) {
   const [state, formAction, pending] = useActionState<GradeFormState, FormData>(
@@ -28,6 +30,10 @@ export function MemberGradeForm({
           </option>
         ))}
       </select>
+      <label className="flex items-center gap-2 text-[13px] text-ink-deep">
+        <input name="gradeLocked" type="checkbox" defaultChecked={locked} className="h-4 w-4 accent-ink-deep" />
+        등급 수동 고정 (자동 승급 제외)
+      </label>
       {state.error && <p className={errorCls}>{state.error}</p>}
       {state.ok && !state.error && (
         <p className="text-[12.5px] font-semibold text-ink-deep">등급이 저장되었습니다.</p>

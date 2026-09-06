@@ -11,10 +11,13 @@ import { COMPANY_FIELDS } from "@/lib/company";
 import { saveCompany, resetCompany } from "@/lib/companyInfo";
 import { BANK_FIELDS } from "@/lib/bankAccount";
 import { saveBankAccount } from "@/lib/bankAccountInfo";
-import { GRADE_CODES } from "@/lib/memberPoints";
+import { GRADE_CODES, evaluateGradeFor, getGrades, gradeName } from "@/lib/memberPoints";
 import { parseRatePercent, formatRatePercent } from "@/lib/points";
+import { savePointPolicy } from "@/lib/settings";
 
 export type SettingsFormState = { error?: string; ok?: boolean };
+/** 전체 재평가 결과 — 몇 명이 올라갔는지 */
+export type ReevaluateState = SettingsFormState & { changed?: number };
 
 /**
  * 회원 등급 이름·적립률 (운영자 요청서 2·3번). 코드 3개는 고정이고 이름과 적립률만 바꾼다.
@@ -25,30 +28,91 @@ export async function updateMemberGrades(
   formData: FormData,
 ): Promise<SettingsFormState> {
   await requireAdmin();
-  const rows: { code: string; name: string; pointRateBp: number }[] = [];
+  const rows: { code: string; name: string; pointRateBp: number; threshold: number }[] = [];
   for (const code of GRADE_CODES) {
     const name = String(formData.get(`name-${code}`) ?? "").trim();
     const rateBp = parseRatePercent(String(formData.get(`rate-${code}`) ?? ""));
+    const threshold = Number(String(formData.get(`threshold-${code}`) ?? "0").replace(/,/g, "").trim() || "0");
     if (!name || name.length > 20) return { error: `${code} 등급 이름은 1~20자로 입력해주세요.` };
     if (rateBp === null) return { error: `${name} 등급의 적립률은 0 ~ 100 사이, 소수 둘째 자리까지만 가능합니다.` };
-    rows.push({ code, name, pointRateBp: rateBp });
+    if (!Number.isInteger(threshold) || threshold < 0 || threshold > 10_000_000_000) {
+      return { error: `${name} 등급의 승급 기준 금액이 올바르지 않습니다. (0 이면 자동 승급 없음)` };
+    }
+    // 가장 낮은 등급(BASIC)은 기준이 없다 — 누구나 시작하는 자리
+    rows.push({ code, name, pointRateBp: rateBp, threshold: code === GRADE_CODES[0] ? 0 : threshold });
   }
   await db.$transaction(
     rows.map((r) =>
-      db.memberGrade.update({ where: { code: r.code }, data: { name: r.name, pointRateBp: r.pointRateBp } }),
+      db.memberGrade.update({
+        where: { code: r.code },
+        data: { name: r.name, pointRateBp: r.pointRateBp, threshold: r.threshold },
+      }),
     ),
   );
   await audit({
     action: "SETTING_GRADES",
     target: "setting",
     targetId: "grades",
-    summary: rows.map((r) => `${r.name} ${formatRatePercent(r.pointRateBp)}%`).join(" · "),
+    summary: rows
+      .map((r) => `${r.name} ${formatRatePercent(r.pointRateBp)}%${r.threshold > 0 ? ` / ${r.threshold.toLocaleString("ko-KR")}원↑` : ""}`)
+      .join(" · "),
     meta: { grades: rows },
   });
   revalidatePath("/admin/settings");
   revalidatePath("/admin/members");
   revalidatePath("/account");
   return { ok: true };
+}
+
+/** 포인트 정책 — 최소 사용량·단위·만료 개월 */
+export async function updatePointPolicy(
+  _prev: SettingsFormState,
+  formData: FormData,
+): Promise<SettingsFormState> {
+  await requireAdmin();
+  const minUse = Number(formData.get("minUse"));
+  const unit = Number(formData.get("unit"));
+  const expiryMonths = Number(formData.get("expiryMonths"));
+  if (!Number.isInteger(minUse) || minUse < 0 || minUse > 10_000_000) return { error: "최소 사용 포인트는 0 이상의 정수여야 합니다." };
+  if (!Number.isInteger(unit) || unit < 1 || unit > 100_000) return { error: "사용 단위는 1 이상의 정수여야 합니다. (1 이면 제한 없음)" };
+  if (minUse > 0 && minUse % unit !== 0) return { error: "최소 사용 포인트는 사용 단위의 배수여야 합니다." };
+  if (!Number.isInteger(expiryMonths) || expiryMonths < 0 || expiryMonths > 120) return { error: "만료 개월은 0 ~ 120 사이 정수여야 합니다. (0 이면 만료 없음)" };
+  await savePointPolicy({ minUse, unit, expiryMonths });
+  await audit({
+    action: "SETTING_POINTS",
+    target: "setting",
+    targetId: "points",
+    summary: `최소 ${minUse.toLocaleString("ko-KR")}P · ${unit.toLocaleString("ko-KR")}P 단위 · 만료 ${expiryMonths === 0 ? "없음" : `${expiryMonths}개월`}`,
+    meta: { minUse, unit, expiryMonths },
+  });
+  revalidatePath("/", "layout");
+  return { ok: true };
+}
+
+/** 전체 회원 자동 승급 재평가 — 올라가기만, 수동 고정은 건너뜀. 바뀐 회원마다 감사 로그 */
+export async function reevaluateAllGrades(
+  _prev: ReevaluateState,
+  _formData: FormData,
+): Promise<ReevaluateState> {
+  await requireAdmin();
+  const members = await db.user.findMany({ where: { role: "MEMBER", gradeLocked: false }, select: { id: true, companyName: true } });
+  const grades = await getGrades();
+  let changed = 0;
+  for (const m of members) {
+    const promoted = await evaluateGradeFor(m.id);
+    if (!promoted) continue;
+    changed++;
+    await audit({
+      action: "MEMBER_GRADE",
+      target: "member",
+      targetId: m.id,
+      summary: `${m.companyName} 자동 승급 ${gradeName(grades, promoted.from)} → ${gradeName(grades, promoted.to)} (전체 재평가)`,
+      meta: { ...promoted, auto: true },
+    });
+  }
+  revalidatePath("/admin/members");
+  revalidatePath("/account");
+  return { ok: true, changed };
 }
 
 export async function updateShippingSettings(

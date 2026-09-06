@@ -174,6 +174,12 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
                 <dt>배송비</dt>
                 <dd>{order.shippingFee === 0 ? "무료" : won(order.shippingFee)}</dd>
               </div>
+              {order.pointsUsed > 0 && (
+                <div className="flex justify-between text-ink-soft">
+                  <dt>포인트 사용</dt>
+                  <dd>−{won(order.pointsUsed)}</dd>
+                </div>
+              )}
               {order.paymentMethod && (
                 <div className="flex justify-between text-ink-soft">
                   <dt>결제 수단</dt>

@@ -4,7 +4,7 @@ import { requireAdmin } from "@/lib/auth";
 import { won } from "@/lib/format";
 import { MEMBER_STATUS, memberStatusLabel, memberStatusTone } from "@/lib/memberStatus";
 import { PAID_STATUSES, periodStart } from "@/lib/purchaseStats";
-import { getGrades, gradeName } from "@/lib/memberPoints";
+import { getGrades, gradeName, expireAllDuePoints } from "@/lib/memberPoints";
 import {
   PageHeader,
   Panel,
@@ -42,6 +42,9 @@ export default async function AdminMembersPage({
   const period = PERIODS.some((p) => p.key === rawPeriod) ? (rawPeriod as string) : "all";
   const bySpent = sort === "spent";
   const since = periodStart(period, new Date());
+
+  // 크론이 없어 목록이 열릴 때 전체 회원의 만료 포인트를 정리한다 — 목록의 잔액이 진실이어야 한다
+  await expireAllDuePoints();
 
   const [members, pendingCount, spentRows, grades] = await Promise.all([
     db.user.findMany({
@@ -127,12 +130,13 @@ export default async function AdminMembersPage({
           {rows.length === 0 ? (
             <EmptyState>해당 조건의 회원이 없습니다.</EmptyState>
           ) : (
-            <TableWrap minWidth={920}>
+            <TableWrap minWidth={1000}>
               <thead>
                 <tr className="border-b border-hairline-soft">
                   <Th>상호명</Th>
                   <Th>사업자번호</Th>
                   <Th align="center">등급</Th>
+                  <Th align="right">포인트</Th>
                   <Th align="right">구매금액 ({periodLabel})</Th>
                   <Th align="center">주문</Th>
                   <Th align="center">상태</Th>
@@ -163,6 +167,9 @@ export default async function AdminMembersPage({
                       <StatusPill tone={m.gradeCode === "BASIC" ? "bg-hairline-soft text-ink-soft" : "border border-ink-deep text-ink-deep"}>
                         {gradeName(grades, m.gradeCode)}
                       </StatusPill>
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3.5 text-right font-display text-[13.5px] text-ink-soft sm:px-6">
+                      {m.pointBalance > 0 ? `${m.pointBalance.toLocaleString("ko-KR")}P` : <span className="text-muted">—</span>}
                     </td>
                     <td className="whitespace-nowrap px-5 py-3.5 text-right font-semibold text-ink-deep sm:px-6">
                       {spentOf(m.id) > 0 ? won(spentOf(m.id)) : <span className="text-muted">—</span>}

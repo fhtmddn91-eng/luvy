@@ -39,12 +39,21 @@ export default async function CheckoutCompletePage({
             </li>
           ))}
         </ul>
-        <div className="mt-4 flex justify-between border-t border-line pt-4">
-          <span className="font-bold text-ink">결제 예정 금액</span>
+        {order.pointsUsed > 0 && (
+          <div className="mt-4 flex justify-between border-t border-line pt-4 text-[14px] text-ink-soft">
+            <span>포인트 사용</span>
+            <span>−{won(order.pointsUsed)}</span>
+          </div>
+        )}
+        <div className={`flex justify-between ${order.pointsUsed > 0 ? "mt-2" : "mt-4 border-t border-line pt-4"}`}>
+          <span className="font-bold text-ink">{order.total === 0 ? "결제 금액" : "결제 예정 금액"}</span>
           <span className="text-[18px] font-extrabold text-brand-600">{won(order.total)}</span>
         </div>
+        {order.total === 0 && (
+          <p className="mt-2 text-[12.5px] text-ink-soft">포인트로 전액 결제되어 입금 없이 바로 접수되었습니다.</p>
+        )}
 
-        {bankAccount && (
+        {bankAccount && order.total > 0 && (
           <div className="mt-4 rounded-xl bg-brand-50 px-4 py-4">
             <p className="text-[12px] font-bold text-brand-600">입금 계좌</p>
             <p className="mt-1 text-[15px] font-extrabold text-ink">{bankAccount}</p>

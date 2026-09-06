@@ -30,6 +30,8 @@ model User {
    */
   gradeCode      String     @default("BASIC")
   grade          MemberGrade @relation(fields: [gradeCode], references: [code])
+  /** 수동 고정 — 켜면 구매금액 자동 승급이 건드리지 않는다 (특별 관리 거래처) */
+  gradeLocked    Boolean    @default(false)
   /** 포인트 잔액 — PointLedger 합계의 캐시. 원장 기록과 같은 트랜잭션에서만 바꾼다 */
   pointBalance   Int        @default(0)
   createdAt      DateTime   @default(now())
@@ -46,6 +48,8 @@ model MemberGrade {
   name        String
   /** 적립률 만분율 (100 = 1%). 소수 % 를 정수로 안전하게 — lib/points.ts */
   pointRateBp Int    @default(0)
+  /** 자동 승급 기준(누적 결제확인 구매금액, 원). 0 = 자동 승급 없음 — lib/grades.ts */
+  threshold   Int    @default(0)
   sortOrder   Int    @default(0)
   users       User[]
 }
@@ -59,10 +63,20 @@ model PointLedger {
   userId    String
   /** +적립 / −회수·차감 */
   amount    Int
-  /** ACCRUE(배송완료 적립) | REVERSE(취소 회수) | ADJUST(관리자 수동) */
+  /**
+   * ACCRUE(배송완료 적립) | REVERSE(취소 회수) | ADJUST(관리자 수동)
+   * | USE(주문 사용) | REFUND(취소·결제실패 환급) | EXPIRE(만료 소멸)
+   */
   kind      String
   reason    String   @default("")
   orderId   String?
+  /**
+   * 양수 행 = 묶음(lot). 아직 안 쓴 양. 사용·회수·만료는 먼저 만료되는 묶음부터 뺀다.
+   * 불변식: Σ remaining == User.pointBalance == Σ amount — lib/pointLots.ts
+   */
+  remaining Int      @default(0)
+  /** 묶음 만료일 (정책 0 이면 null = 만료 없음). 음수 행은 null */
+  expiresAt DateTime?
   /** SYSTEM 또는 처리한 관리자 id */
   createdBy String   @default("")
   createdAt DateTime @default(now())
@@ -71,6 +85,8 @@ model PointLedger {
   /** 주문당 적립 1회·회수 1회 — 배송완료→되돌림→다시 배송완료 해도 두 번 쌓이지 않는다 */
   @@unique([orderId, kind])
   @@index([userId, createdAt])
+  /** 만료 정리: remaining>0 && expiresAt<=now 를 전체에서 훑는다 */
+  @@index([expiresAt, remaining])
 }
 
 model Product {
@@ -310,6 +326,8 @@ model Order {
   depositorName      String  @default("")
   /** 실제 입금액. 주문 총액과 다르면(부분·초과 입금) 이 숫자가 대사 근거가 된다 */
   depositAmount      Int     @default(0)
+  /** 결제 시 쓴 포인트. total = subtotal + shippingFee − pointsUsed (2026-09-05) */
+  pointsUsed         Int     @default(0)
   createdAt   DateTime    @default(now())
   user        User        @relation(fields: [userId], references: [id])
   items       OrderItem[]
