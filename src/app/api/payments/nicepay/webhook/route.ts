@@ -45,13 +45,23 @@ export async function POST(req: Request): Promise<Response> {
   try {
     payload = JSON.parse(raw) as Record<string, unknown>;
   } catch {
-    return new Response("BAD", { status: 400, headers: { "Content-Type": "text/html;charset=utf-8" } });
+    console.warn("[nicepay webhook] JSON 아님 — 무시");
+    return OK();
   }
 
   const checked = checkWebhook(payload, secret);
   if (!checked.ok) {
-    // 서명이 안 맞는 전문은 나이스페이가 보낸 게 아니다. 재전송해도 의미가 없으므로 401.
-    return new Response("BAD", { status: 401, headers: { "Content-Type": "text/html;charset=utf-8" } });
+    /**
+     * 서명이 안 맞아도 **200 OK 를 준다**. 응답 코드는 "받았다"는 인사일 뿐이고,
+     * 실제 방어는 아래 처리 로직을 건너뛰는 것이다.
+     *
+     * 실측(2026-09-07): 여기서 401 을 줬더니 나이스페이 가맹점관리자의 웹훅 등록이
+     * "401 Unauthorized" 로 실패했다 — 등록 검증 호출이 **서명 없는 표본 전문**으로
+     * 오기 때문이다. 등록을 못 하면 웹훅 자체가 없는 것과 같다.
+     * 인증 실패를 응답 코드로 알릴 상대도 없다(공격자에게 알려줄 이유가 없다).
+     */
+    console.warn(`[nicepay webhook] 검증 실패(${checked.code}) — 처리하지 않음`);
+    return OK();
   }
 
   // paymentId 는 우리가 채번한 나이스페이 주문번호(luvy-<orderId>-<n>)다
