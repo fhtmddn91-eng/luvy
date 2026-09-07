@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { ProductGrid } from "@/components/product/ProductGrid";
+import { currentDiscountBp } from "@/lib/memberDiscount";
 import { Icon } from "@/components/ui/Icon";
 
 /**
@@ -19,6 +20,8 @@ export async function NewProducts() {
 
   if (products.length === 0) return null;
 
+  const discountBp = await currentDiscountBp();
+
   return (
     <section className="mx-auto max-w-[1280px] px-6 pb-10">
       <div className="mb-4 flex items-end justify-between">
@@ -35,7 +38,7 @@ export async function NewProducts() {
         </Link>
       </div>
 
-      <ProductGrid products={products} />
+      <ProductGrid products={products} discountBp={discountBp} />
     </section>
   );
 }

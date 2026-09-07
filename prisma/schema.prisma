@@ -25,13 +25,19 @@ model User {
   status         String     @default("APPROVED")
   role           String     @default("MEMBER")
   /**
-   * 회원 등급 — 관리자가 수동으로 정한다(운영자 요청서 2번, 2026-09-05).
-   * 등급의 역할은 포인트 적립률 하나다. 자동 승급·할인은 넣지 않았다.
+   * 회원 등급 — 관리자가 수동으로 정하거나 구매금액으로 자동 승급된다
+   * (운영자 요청서 2번 2026-09-05, 자동 승급 lib/grades.ts).
+   * 등급은 포인트 적립률과 할인율의 기본값을 정한다.
    */
   gradeCode      String     @default("BASIC")
   grade          MemberGrade @relation(fields: [gradeCode], references: [code])
   /** 수동 고정 — 켜면 구매금액 자동 승급이 건드리지 않는다 (특별 관리 거래처) */
   gradeLocked    Boolean    @default(false)
+  /**
+   * 이 거래처만의 할인율(만분율). **null 이면 등급 기본값을 따른다** — lib/discount.ts
+   * 0 은 "등급이 뭐든 이 거래처는 할인 없음"이라는 명시적 지정이라 null 과 다르다.
+   */
+  discountBp     Int?
   /** 포인트 잔액 — PointLedger 합계의 캐시. 원장 기록과 같은 트랜잭션에서만 바꾼다 */
   pointBalance   Int        @default(0)
   createdAt      DateTime   @default(now())
@@ -50,6 +56,8 @@ model MemberGrade {
   pointRateBp Int    @default(0)
   /** 자동 승급 기준(누적 결제확인 구매금액, 원). 0 = 자동 승급 없음 — lib/grades.ts */
   threshold   Int    @default(0)
+  /** 등급 기본 할인율 만분율 (500 = 5%). 회원 개별값이 있으면 그쪽이 이긴다 — lib/discount.ts */
+  discountBp  Int    @default(0)
   sortOrder   Int    @default(0)
   users       User[]
 }
@@ -328,6 +336,11 @@ model Order {
   depositAmount      Int     @default(0)
   /** 결제 시 쓴 포인트. total = subtotal + shippingFee − pointsUsed (2026-09-05) */
   pointsUsed         Int     @default(0)
+  /**
+   * 주문 시점에 적용된 할인율(만분율). 0 = 할인 없음 — lib/discount.ts
+   * 회원의 현재 할인율로 역산하면 안 된다(등급 승급·개별 조정으로 바뀐다).
+   */
+  discountBp         Int     @default(0)
   createdAt   DateTime    @default(now())
   user        User        @relation(fields: [userId], references: [id])
   items       OrderItem[]
@@ -365,7 +378,14 @@ model OrderItem {
   optionName String @default("")
   /** 취소 시 재고를 뺀 곳으로 되돌리기 위한 참조. 옵션이 없으면 빈 문자열 */
   optionId   String @default("")
+  /** 실제로 청구한 개당 단가 — 할인이 있으면 할인가다 */
   unitPrice Int
+  /**
+   * 할인 전 정가 스냅샷. 0 이면 할인 없음(= unitPrice 가 정가).
+   * 이게 없으면 "그때 얼마 깎아줬는지"를 되짚을 방법이 사라진다 —
+   * 할인율은 그 사이 바뀌므로 지금 값으로 역산할 수 없다.
+   */
+  listPrice Int    @default(0)
   quantity  Int
   lineTotal Int
   order     Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)

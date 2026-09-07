@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { ProductGrid } from "@/components/product/ProductGrid";
+import { currentDiscountBp } from "@/lib/memberDiscount";
 
 export default async function SearchPage({
   searchParams,
@@ -25,13 +26,15 @@ export default async function SearchPage({
       })
     : [];
 
+  const discountBp = await currentDiscountBp();
+
   return (
     <div className="mx-auto max-w-[1280px] px-6 py-10">
       <h1 className="mb-1 text-[24px] font-extrabold text-ink">
         {query ? `‘${query}’ 검색 결과` : "검색어를 입력해주세요"}
       </h1>
       <p className="mb-6 text-[13px] text-muted">{products.length}개 상품</p>
-      <ProductGrid products={products} />
+      <ProductGrid products={products} discountBp={discountBp} />
     </div>
   );
 }

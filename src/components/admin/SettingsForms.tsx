@@ -21,6 +21,7 @@ import {
   type ReevaluateState,
 } from "@/lib/actions/admin-settings";
 import { formatRatePercent } from "@/lib/points";
+import { formatDiscountPercent, MAX_DISCOUNT_BP } from "@/lib/discount";
 import type { PointPolicy } from "@/lib/settings";
 import { btnPrimary } from "@/components/ui/Panel";
 
@@ -283,25 +284,29 @@ export function BankAccountForm({ current }: { current: BankAccount }) {
 }
 
 /**
- * 회원 등급 이름·적립률 (운영자 요청서 2·3번). 등급 코드 3개는 고정, 이름과 %만 편집한다.
- * 적립은 배송완료 시점에 상품금액 × 적립률로 쌓이므로, 여기 숫자를 바꾸면 그 뒤 배송완료
- * 건부터 새 비율이 적용된다 — 이미 쌓인 포인트는 그대로다.
+ * 회원 등급 이름·적립률·할인율 (운영자 요청서 2·3번 + 할인율 2026-09-08).
+ * 등급 코드 3개는 고정, 이름과 숫자만 편집한다.
+ *
+ * 적립은 배송완료 시점에 쌓이므로 바꾼 뒤 배송완료 건부터 적용되고,
+ * **할인율은 다음 주문부터 곧바로** 적용된다 — 이미 들어온 주문 금액은 그대로다.
  */
 export function MemberGradesForm({
   grades,
 }: {
-  grades: { code: string; name: string; pointRateBp: number; threshold: number }[];
+  grades: { code: string; name: string; pointRateBp: number; threshold: number; discountBp: number }[];
 }) {
   const [state, formAction] = useActionState<SettingsFormState, FormData>(updateMemberGrades, {});
+  const cols = "grid grid-cols-[1fr_88px_88px_140px] gap-x-3";
   return (
     <form action={formAction} className="space-y-3.5">
-      <div className="grid grid-cols-[1fr_96px_150px] gap-x-3 gap-y-2 text-[12px] font-semibold text-muted">
+      <div className={`${cols} gap-y-2 text-[12px] font-semibold text-muted`}>
         <span>등급 이름</span>
         <span>적립률 (%)</span>
+        <span>할인율 (%)</span>
         <span>승급 기준 (누적 구매, 원)</span>
       </div>
       {grades.map((g, i) => (
-        <div key={g.code} className="grid grid-cols-[1fr_96px_150px] gap-x-3">
+        <div key={g.code} className={cols}>
           <input
             name={`name-${g.code}`}
             defaultValue={g.name}
@@ -318,6 +323,17 @@ export function MemberGradesForm({
             inputMode="decimal"
             defaultValue={formatRatePercent(g.pointRateBp)}
             aria-label={`${g.name} 적립률 (%)`}
+            className={fieldCls}
+          />
+          <input
+            name={`discount-${g.code}`}
+            type="number"
+            min={0}
+            max={Number(formatDiscountPercent(MAX_DISCOUNT_BP))}
+            step={0.01}
+            inputMode="decimal"
+            defaultValue={formatDiscountPercent(g.discountBp)}
+            aria-label={`${g.name} 할인율 (%)`}
             className={fieldCls}
           />
           {i === 0 ? (
@@ -337,12 +353,15 @@ export function MemberGradesForm({
         </div>
       ))}
       <p className={helpCls}>
-        적립은 주문이 배송완료로 바뀔 때 (상품금액 − 사용 포인트) × 적립률로 쌓이고, 취소되면 회수됩니다.
-        승급 기준은 결제가 확인된 주문의 누적 금액이며, 배송완료 시점에 자동으로 <b>올라가기만</b> 합니다
+        <b>할인율</b>은 상품 단가에서 바로 깎이며, 다음 주문부터 적용됩니다 (이미 들어온 주문은 그대로).
+        회원 상세에서 그 거래처만 다른 할인율을 줄 수도 있습니다. 최대 {formatDiscountPercent(MAX_DISCOUNT_BP)}% 까지.
+        <br />
+        <b>적립</b>은 주문이 배송완료로 바뀔 때 (상품금액 − 사용 포인트) × 적립률로 쌓이고, 취소되면 회수됩니다.
+        <b>승급 기준</b>은 결제가 확인된 주문의 누적 금액이며, 배송완료 시점에 자동으로 <b>올라가기만</b> 합니다
         (내려가지 않음). 0 이면 그 등급은 수동 지정으로만 줍니다.
       </p>
-      <Result state={state} okText="저장되었습니다. 다음 배송완료 건부터 새 적립률·기준이 적용됩니다." />
-      <SubmitButton label="등급·적립률·기준 저장" />
+      <Result state={state} okText="저장되었습니다. 할인율은 다음 주문부터, 적립률은 다음 배송완료 건부터 적용됩니다." />
+      <SubmitButton label="등급·적립률·할인율 저장" />
     </form>
   );
 }

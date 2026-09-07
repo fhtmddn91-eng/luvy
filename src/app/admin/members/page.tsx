@@ -5,6 +5,7 @@ import { won } from "@/lib/format";
 import { MEMBER_STATUS, memberStatusLabel, memberStatusTone } from "@/lib/memberStatus";
 import { PAID_STATUSES, periodStart } from "@/lib/purchaseStats";
 import { getGrades, gradeName, expireAllDuePoints } from "@/lib/memberPoints";
+import { effectiveDiscountBp, formatDiscountPercent } from "@/lib/discount";
 import {
   PageHeader,
   Panel,
@@ -136,6 +137,7 @@ export default async function AdminMembersPage({
                   <Th>상호명</Th>
                   <Th>사업자번호</Th>
                   <Th align="center">등급</Th>
+                  <Th align="center">할인</Th>
                   <Th align="right">포인트</Th>
                   <Th align="right">구매금액 ({periodLabel})</Th>
                   <Th align="center">주문</Th>
@@ -167,6 +169,23 @@ export default async function AdminMembersPage({
                       <StatusPill tone={m.gradeCode === "BASIC" ? "bg-hairline-soft text-ink-soft" : "border border-ink-deep text-ink-deep"}>
                         {gradeName(grades, m.gradeCode)}
                       </StatusPill>
+                    </td>
+                    {/* 개별 지정은 굵게 — 등급을 봐도 알 수 없는 값이라 목록에서 구분되어야 한다 */}
+                    <td className="whitespace-nowrap px-5 py-3.5 text-center font-display text-[13.5px] sm:px-6">
+                      {(() => {
+                        const gradeBp = grades.find((g) => g.code === m.gradeCode)?.discountBp ?? 0;
+                        const bp = effectiveDiscountBp(m.discountBp, gradeBp);
+                        if (bp === 0) return <span className="text-muted">—</span>;
+                        const own = m.discountBp !== null;
+                        return (
+                          <span
+                            className={own ? "font-bold text-ink-deep" : "text-ink-soft"}
+                            title={own ? "이 거래처 개별 지정" : "등급 기본값"}
+                          >
+                            {formatDiscountPercent(bp)}%{own && <span className="ml-0.5 text-[11px]">개별</span>}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="whitespace-nowrap px-5 py-3.5 text-right font-display text-[13.5px] text-ink-soft sm:px-6">
                       {m.pointBalance > 0 ? `${m.pointBalance.toLocaleString("ko-KR")}P` : <span className="text-muted">—</span>}

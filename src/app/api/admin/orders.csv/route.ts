@@ -5,6 +5,7 @@ import { toCsv } from "@/lib/csv";
 import { parseOrderFilter, orderWhere } from "@/lib/orderQuery";
 import { orderStatusLabel } from "@/lib/orderStatus";
 import { courierName } from "@/lib/shipping";
+import { orderDiscountAmount, formatDiscountPercent } from "@/lib/discount";
 
 const dateFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", {
@@ -42,7 +43,8 @@ export async function GET(req: NextRequest) {
     [
       "주문번호", "일시", "상태", "회원사", "이메일",
       "수령인", "연락처", "주소", "배송메모",
-      "상품", "품번", "총수량", "상품합계", "배송비", "합계",
+      // 할인 주문은 "상품합계"만으로 대사가 안 된다 — 정가와 깎인 금액을 함께 준다
+      "상품", "품번", "총수량", "정가합계", "할인율", "할인금액", "상품합계", "배송비", "합계",
       "택배사", "운송장번호", "취소사유",
     ],
     ...orders.map((o) => [
@@ -59,6 +61,10 @@ export async function GET(req: NextRequest) {
       // 품번을 쓰지 않는 상품이 섞여 있어도 상품 순서와 자리가 어긋나지 않도록 빈 칸을 유지한다
       o.items.map((i) => i.sku).join(" / "),
       o.items.reduce((s, i) => s + i.quantity, 0),
+      // 할인 도입 전 주문은 listPrice 가 0 이라 정가합계 = 상품합계 로 채운다
+      o.subtotal + orderDiscountAmount(o.items),
+      o.discountBp > 0 ? `${formatDiscountPercent(o.discountBp)}%` : "",
+      orderDiscountAmount(o.items),
       o.subtotal,
       o.shippingFee,
       o.total,

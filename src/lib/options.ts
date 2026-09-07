@@ -1,4 +1,5 @@
 import { resolveUnitPrice, type Tier } from "@/lib/pricing";
+import { discountedPrice } from "@/lib/discount";
 
 /**
  * 상품 옵션 계산 (순수 함수 — 서버·클라이언트·테스트에서 같이 쓴다).
@@ -34,6 +35,20 @@ export function optionUnitPrice(
 ): number {
   if (option && option.unitPrice > 0) return option.unitPrice;
   return resolveUnitPrice(tiers, quantity);
+}
+
+/**
+ * 이 회원이 실제로 낼 옵션 단가 = 옵션 정가에 할인율을 먹인 값.
+ * 옵션가도 정가이므로 할인이 똑같이 붙는다 — 옵션을 고르면 할인이 사라지면 안 된다.
+ * `optionUnitPrice` 는 정가로 남겨 화면의 취소선에 쓴다.
+ */
+export function memberOptionUnitPrice(
+  option: Pick<OptionLite, "unitPrice"> | null | undefined,
+  tiers: Tier[],
+  quantity: number,
+  discountBp: number,
+): number {
+  return discountedPrice(optionUnitPrice(option, tiers, quantity), discountBp);
 }
 
 /** 이 옵션으로 주문할 수 있는 최대 수량 */

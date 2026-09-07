@@ -5,7 +5,9 @@ import { PriceTierTable } from "@/components/product/PriceTierTable";
 import { AddToCart } from "@/components/product/AddToCart";
 import { OptionOrder } from "@/components/product/OptionOrder";
 import { sellableOptions, anyOptionAvailable } from "@/lib/options";
-import { getMoq, hasPrice, resolveUnitPrice } from "@/lib/pricing";
+import { getMoq, hasPrice, resolveUnitPrice, memberUnitPrice } from "@/lib/pricing";
+import { getMemberDiscountBp } from "@/lib/memberDiscount";
+import { discountLabel } from "@/lib/discount";
 import { won } from "@/lib/format";
 import { AssetDownloads } from "@/components/product/AssetDownloads";
 import { ProductGallery } from "@/components/product/ProductGallery";
@@ -31,7 +33,9 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   // 숨긴 카테고리의 기존 상품도 이름은 표시되어야 하므로 전체 목록에서 찾는다
   const category = (await getAllCategories()).find((c) => c.slug === product.categorySlug);
   const moq = getMoq(product.priceTiers);
-  const wholesale = resolveUnitPrice(product.priceTiers, moq);
+  const discountBp = await getMemberDiscountBp(user.id);
+  const listPrice = resolveUnitPrice(product.priceTiers, moq);
+  const wholesale = memberUnitPrice(product.priceTiers, moq, discountBp);
   // 수집 직후라 단가가 0인 상품은 "0원"으로 보여서도, 0원에 주문돼서도 안 된다
   const priced = hasPrice(product.priceTiers);
   const options = sellableOptions(product.options);
@@ -84,9 +88,20 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
               <dd className="text-[20px] font-extrabold text-brand-600">
                 {priced ? (
                   <>
+                    {/* 할인 회원이면 정가를 함께 보여준다 — 얼마를 아끼는지가 도매의 설득력이다 */}
+                    {wholesale < listPrice && (
+                      <span className="mr-2 text-[15px] font-semibold text-muted line-through">
+                        {won(listPrice)}
+                      </span>
+                    )}
                     {won(wholesale)}
                     {product.priceTiers.length > 1 && (
                       <span className="ml-1 text-[13px] font-semibold text-muted">부터</span>
+                    )}
+                    {wholesale < listPrice && (
+                      <span className="ml-2 rounded-pill bg-brand-50 px-2 py-1 text-[12px] font-bold text-brand-600">
+                        {discountLabel(discountBp)}
+                      </span>
                     )}
                   </>
                 ) : (
@@ -100,7 +115,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
           <div className="mt-8">
             <h2 className="mb-3 text-[15px] font-bold text-ink">수량별 도매가</h2>
-            <PriceTierTable tiers={product.priceTiers} />
+            <PriceTierTable tiers={product.priceTiers} discountBp={discountBp} />
           </div>
 
           <div className="mt-8">
@@ -112,6 +127,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                   tiers={product.priceTiers}
                   moq={moq}
                   stockInfo={stockInfo}
+                  discountBp={discountBp}
                 />
               ) : (
                 <div className="border border-line bg-cream px-4 py-4 text-center">
@@ -127,6 +143,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                 tiers={product.priceTiers}
                 moq={moq}
                 stockInfo={stockInfo}
+                discountBp={discountBp}
               />
             ) : (
               <div className="border border-line bg-cream px-4 py-4 text-center">

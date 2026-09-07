@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { ProductGrid } from "@/components/product/ProductGrid";
+import { currentDiscountBp } from "@/lib/memberDiscount";
 
 export default async function BestProductsPage() {
   // 주문된 수량 기준 인기 순위. 판매 데이터가 없으면 최신순으로 채운다.
@@ -32,12 +33,14 @@ export default async function BestProductsPage() {
     ...latest,
   ].slice(0, 40);
 
+  const discountBp = await currentDiscountBp();
+
   return (
     <div className="mx-auto max-w-[1280px] px-6 py-10">
       <p className="text-[13px] font-semibold text-brand-500">BEST</p>
       <h1 className="mt-1 text-[28px] font-extrabold text-ink">인기상품</h1>
       <p className="mb-6 mt-1 text-[13px] text-muted">구매량 높은 인기 상품</p>
-      <ProductGrid products={products} />
+      <ProductGrid products={products} discountBp={discountBp} />
     </div>
   );
 }

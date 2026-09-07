@@ -11,6 +11,7 @@ import { OrderStatusForm } from "@/components/admin/OrderStatusForm";
 import { DepositForm } from "@/components/admin/DepositForm";
 import { depositGapLabel, elapsedLabel } from "@/lib/deposit";
 import { paymentMethodLabel } from "@/lib/paymentMethods";
+import { orderDiscountAmount, discountLabel } from "@/lib/discount";
 
 const dateFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(d);
@@ -29,6 +30,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
     include: { items: true, user: true, payment: true },
   });
   if (!order) notFound();
+  const discountAmount = orderDiscountAmount(order.items);
 
   const shipment = { courier: order.courier, trackingNo: order.trackingNo };
   const shipped = hasShipment(shipment);
@@ -83,6 +85,13 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
               ))}
             </ul>
             <dl className="mt-4 space-y-2 border-t border-hairline pt-4 text-[14px]">
+              {/* 할인은 이미 상품 합계에 반영돼 있다 — 얼마를 깎아 줬는지 대사용으로 보여준다 */}
+              {discountAmount > 0 && (
+                <div className="flex justify-between font-semibold text-brand-600">
+                  <dt>{discountLabel(order.discountBp) || "회원 할인"}</dt>
+                  <dd>−{won(discountAmount)}</dd>
+                </div>
+              )}
               <div className="flex justify-between text-ink-soft">
                 <dt>상품 합계</dt>
                 <dd>{won(order.subtotal)}</dd>

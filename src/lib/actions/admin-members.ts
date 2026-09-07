@@ -7,6 +7,7 @@ import { requireAdmin } from "@/lib/auth";
 import { generateTempPassword } from "@/lib/tempPassword";
 import { audit } from "@/lib/audit";
 import { GRADE_CODES, adjustPoints, getGrades, gradeName } from "@/lib/memberPoints";
+import { parseDiscountPercent, formatDiscountPercent, MAX_DISCOUNT_BP } from "@/lib/discount";
 
 export type GradeFormState = { error?: string; ok?: boolean };
 
@@ -36,6 +37,52 @@ export async function setMemberGrade(
   revalidatePath("/admin/members");
   revalidatePath(`/admin/members/${id}`);
   revalidatePath("/account");
+  return { ok: true };
+}
+
+export type DiscountFormState = { error?: string; ok?: boolean };
+
+/**
+ * 이 거래처만의 할인율 (2026-09-08).
+ *
+ * **빈 칸 = 등급 기본값(null), 0 = 이 거래처는 할인 없음.** 둘을 같게 취급하면
+ * 골드 거래처에서 할인만 빼는 지정이 불가능해진다 — 도매는 그런 경우가 생긴다.
+ *
+ * 다음 주문부터 적용된다. 이미 들어온 주문 금액은 스냅샷이라 바뀌지 않는다.
+ */
+export async function setMemberDiscount(
+  id: string,
+  _prev: DiscountFormState,
+  formData: FormData,
+): Promise<DiscountFormState> {
+  await requireAdmin();
+  const raw = String(formData.get("discountPercent") ?? "").trim();
+  const next = raw === "" ? null : parseDiscountPercent(raw);
+  if (raw !== "" && next === null) {
+    return {
+      error: `할인율은 0 ~ ${formatDiscountPercent(MAX_DISCOUNT_BP)}% 사이로 입력해주세요. (비워두면 등급 기본값)`,
+    };
+  }
+
+  const target = await db.user.findUnique({
+    where: { id },
+    select: { companyName: true, discountBp: true, grade: { select: { name: true, discountBp: true } } },
+  });
+  if (!target) return { error: "회원을 찾을 수 없습니다." };
+  if (target.discountBp === next) return { ok: true };
+
+  await db.user.update({ where: { id }, data: { discountBp: next } });
+  const show = (v: number | null) =>
+    v === null ? `등급 기본값(${formatDiscountPercent(target.grade.discountBp)}%)` : `${formatDiscountPercent(v)}%`;
+  await audit({
+    action: "MEMBER_DISCOUNT",
+    target: "member",
+    targetId: id,
+    summary: `${target.companyName} 할인율 ${show(target.discountBp)} → ${show(next)}`,
+    meta: { from: target.discountBp, to: next, gradeDiscountBp: target.grade.discountBp },
+  });
+  revalidatePath("/admin/members");
+  revalidatePath(`/admin/members/${id}`);
   return { ok: true };
 }
 

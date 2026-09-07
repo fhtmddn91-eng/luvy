@@ -7,7 +7,7 @@ import { QtyStepper } from "@/components/product/QtyStepper";
 import { updateCartQty, removeCartItem } from "@/lib/actions/cart";
 import { won } from "@/lib/format";
 import { type Tier } from "@/lib/pricing";
-import { optionUnitPrice } from "@/lib/options";
+import { memberOptionUnitPrice } from "@/lib/options";
 
 export interface CartRowData {
   id: string;
@@ -24,13 +24,14 @@ export interface CartRowData {
   optionPrice?: number;
 }
 
-export function CartItemRow({ item }: { item: CartRowData }) {
+export function CartItemRow({ item, discountBp }: { item: CartRowData; discountBp: number }) {
   const [pending, startTransition] = useTransition();
   const router = useRouter();
-  const unit = optionUnitPrice(
+  const unit = memberOptionUnitPrice(
     item.optionPrice ? { unitPrice: item.optionPrice } : null,
     item.tiers,
     item.quantity,
+    discountBp,
   );
 
   const changeQty = (v: number) =>

@@ -73,10 +73,23 @@ interface CartRow {
   };
 }
 
-const state = { cart: [] as CartRow[] };
+const state = {
+  cart: [] as CartRow[],
+  /** 회원 개별 할인율(만분율). null 이면 등급 기본값을 따른다 */
+  userDiscountBp: null as number | null,
+  gradeDiscountBp: 0,
+};
 
 vi.mock("@/lib/db", () => ({
-  db: { cartItem: { findMany: async () => state.cart } },
+  db: {
+    cartItem: { findMany: async () => state.cart },
+    user: {
+      findUnique: async () => ({
+        discountBp: state.userDiscountBp,
+        grade: { discountBp: state.gradeDiscountBp },
+      }),
+    },
+  },
 }));
 vi.mock("@/lib/settings", () => ({
   getShippingPolicy: async () => ({ fee: 3000, freeThreshold: 50000 }),
@@ -104,6 +117,8 @@ const row = (
 
 beforeEach(() => {
   state.cart = [];
+  state.userDiscountBp = null;
+  state.gradeDiscountBp = 0;
 });
 
 describe("buildOrderDraft — 일부 품목 누락 시 전체 중단", () => {
@@ -286,6 +301,117 @@ describe("buildOrderDraft — 죽은 옵션은 주문 전체를 중단시킨다 
     if (res.ok) {
       expect(res.draft.items[0].optionId).toBe("o1");
       expect(res.draft.items[0].unitPrice).toBe(1500);
+    }
+  });
+});
+
+/**
+ * 등급·회원별 할인율 (2026-09-08).
+ *
+ * 주문서가 금액의 진실이다 — 상품카드·장바구니가 회원가를 보여줬는데 여기서
+ * 정가로 계산하면 손님이 본 금액과 청구액이 갈린다. 그래서 buildOrderDraft 는
+ * 호출자가 넘겨주는 값이 아니라 **자기가 직접** 할인율을 읽는다.
+ */
+describe("buildOrderDraft — 할인율", () => {
+  const LIVE = { id: "o1", name: "핑크", unitPrice: 1500, trackStock: true, stock: 10, active: true };
+
+  it("할인이 없으면 정가 그대로이고 listPrice 도 같다", async () => {
+    state.cart = [row({ quantity: 2 })];
+    const res = await buildOrderDraft("u1");
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.draft.items[0].unitPrice).toBe(1000);
+      expect(res.draft.items[0].listPrice).toBe(1000);
+      expect(res.draft.discountBp).toBe(0);
+      expect(res.draft.discountAmount).toBe(0);
+      expect(res.draft.subtotal).toBe(2000);
+    }
+  });
+
+  it("등급 할인 5% 가 개당 단가에 붙는다", async () => {
+    state.gradeDiscountBp = 500;
+    state.cart = [row({ quantity: 3 })];
+    const res = await buildOrderDraft("u1");
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.draft.items[0].unitPrice).toBe(950);
+      expect(res.draft.items[0].listPrice).toBe(1000); // 정가는 그대로 남는다
+      expect(res.draft.items[0].lineTotal).toBe(2850);
+      expect(res.draft.subtotal).toBe(2850);
+      expect(res.draft.discountBp).toBe(500);
+      expect(res.draft.discountAmount).toBe(150);
+    }
+  });
+
+  it("회원 개별 할인율이 등급을 덮는다", async () => {
+    state.gradeDiscountBp = 500;
+    state.userDiscountBp = 1000; // 이 거래처만 10%
+    state.cart = [row({ quantity: 1 })];
+    const res = await buildOrderDraft("u1");
+    if (res.ok) {
+      expect(res.draft.items[0].unitPrice).toBe(900);
+      expect(res.draft.discountBp).toBe(1000);
+    }
+  });
+
+  /** null(등급 따름)과 0(할인 없음)이 같아지면 골드 거래처 할인을 뺄 방법이 사라진다 */
+  it("회원 개별 0% 는 등급 할인을 무효로 만든다", async () => {
+    state.gradeDiscountBp = 500;
+    state.userDiscountBp = 0;
+    state.cart = [row({ quantity: 1 })];
+    const res = await buildOrderDraft("u1");
+    if (res.ok) {
+      expect(res.draft.items[0].unitPrice).toBe(1000);
+      expect(res.draft.discountBp).toBe(0);
+    }
+  });
+
+  /** 옵션을 고르면 할인이 사라지는 사고를 막는다 */
+  it("옵션 단가에도 같은 할인이 붙는다", async () => {
+    state.gradeDiscountBp = 1000;
+    state.cart = [row({ optionId: "o1", quantity: 2, product: { options: [LIVE] } })];
+    const res = await buildOrderDraft("u1");
+    if (res.ok) {
+      expect(res.draft.items[0].listPrice).toBe(1500);
+      expect(res.draft.items[0].unitPrice).toBe(1350);
+      expect(res.draft.items[0].lineTotal).toBe(2700);
+    }
+  });
+
+  /**
+   * 무료배송은 **할인 후** 금액으로 판정한다(2026-09-08 결정).
+   * 정가로 재면 할인율을 올릴수록 배송비가 샌다.
+   */
+  it("무료배송 기준을 할인 후 금액으로 본다", async () => {
+    // 정가 50,000원(= 무료배송 기준) → 10% 할인 후 45,000원이면 배송비가 붙어야 한다
+    state.gradeDiscountBp = 1000;
+    state.cart = [row({ quantity: 50 })]; // 1,000원 × 50개
+    const res = await buildOrderDraft("u1");
+    if (res.ok) {
+      expect(res.draft.subtotal).toBe(45_000);
+      expect(res.draft.shippingFee).toBe(3000);
+      expect(res.draft.total).toBe(48_000);
+    }
+  });
+
+  it("할인 후에도 기준을 넘으면 배송비는 무료다", async () => {
+    state.gradeDiscountBp = 1000;
+    state.cart = [row({ quantity: 60 })]; // 60,000원 → 54,000원
+    const res = await buildOrderDraft("u1");
+    if (res.ok) {
+      expect(res.draft.subtotal).toBe(54_000);
+      expect(res.draft.shippingFee).toBe(0);
+    }
+  });
+
+  /** 상한을 넘는 값이 DB 에 들어가 있어도 0원 주문이 나가면 안 된다 */
+  it("상한을 넘는 할인율이 저장돼 있어도 90% 까지만 깎는다", async () => {
+    state.userDiscountBp = 99_999;
+    state.cart = [row({ quantity: 1 })];
+    const res = await buildOrderDraft("u1");
+    if (res.ok) {
+      expect(res.draft.items[0].unitPrice).toBe(100);
+      expect(res.draft.discountBp).toBe(9000);
     }
   });
 });

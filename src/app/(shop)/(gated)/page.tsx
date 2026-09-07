@@ -11,6 +11,7 @@ import { NoticePopup } from "@/components/home/NoticePopup";
 import { FeatureGrid } from "@/components/home/FeatureGrid";
 import { getHomeTabs } from "@/lib/homeTabs";
 import { getCategoryTree } from "@/lib/categories";
+import { currentDiscountBp } from "@/lib/memberDiscount";
 import { CategoryColumns } from "@/components/layout/CategoryMenu";
 
 export default async function HomePage() {
@@ -28,6 +29,7 @@ export default async function HomePage() {
     getHomeTabs(),
     getCategoryTree(),
   ]);
+  const discountBp = await currentDiscountBp();
 
   return (
     <>
@@ -48,7 +50,7 @@ export default async function HomePage() {
         }
       />
       <QuickMenu />
-      <ProductTabs tabs={tabs} />
+      <ProductTabs tabs={tabs} discountBp={discountBp} />
       <NewProducts />
       <NoticeStrip notices={notices} />
       <FeatureGrid />

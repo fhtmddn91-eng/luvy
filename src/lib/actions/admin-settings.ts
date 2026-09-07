@@ -13,6 +13,7 @@ import { BANK_FIELDS } from "@/lib/bankAccount";
 import { saveBankAccount } from "@/lib/bankAccountInfo";
 import { GRADE_CODES, evaluateGradeFor, getGrades, gradeName } from "@/lib/memberPoints";
 import { parseRatePercent, formatRatePercent } from "@/lib/points";
+import { parseDiscountPercent, formatDiscountPercent, MAX_DISCOUNT_BP } from "@/lib/discount";
 import { savePointPolicy } from "@/lib/settings";
 
 export type SettingsFormState = { error?: string; ok?: boolean };
@@ -28,24 +29,30 @@ export async function updateMemberGrades(
   formData: FormData,
 ): Promise<SettingsFormState> {
   await requireAdmin();
-  const rows: { code: string; name: string; pointRateBp: number; threshold: number }[] = [];
+  const rows: { code: string; name: string; pointRateBp: number; threshold: number; discountBp: number }[] = [];
   for (const code of GRADE_CODES) {
     const name = String(formData.get(`name-${code}`) ?? "").trim();
     const rateBp = parseRatePercent(String(formData.get(`rate-${code}`) ?? ""));
+    const discountBp = parseDiscountPercent(String(formData.get(`discount-${code}`) ?? "0"));
     const threshold = Number(String(formData.get(`threshold-${code}`) ?? "0").replace(/,/g, "").trim() || "0");
     if (!name || name.length > 20) return { error: `${code} 등급 이름은 1~20자로 입력해주세요.` };
     if (rateBp === null) return { error: `${name} 등급의 적립률은 0 ~ 100 사이, 소수 둘째 자리까지만 가능합니다.` };
+    if (discountBp === null) {
+      return {
+        error: `${name} 등급의 할인율은 0 ~ ${formatDiscountPercent(MAX_DISCOUNT_BP)}% 사이, 소수 둘째 자리까지만 가능합니다.`,
+      };
+    }
     if (!Number.isInteger(threshold) || threshold < 0 || threshold > 10_000_000_000) {
       return { error: `${name} 등급의 승급 기준 금액이 올바르지 않습니다. (0 이면 자동 승급 없음)` };
     }
     // 가장 낮은 등급(BASIC)은 기준이 없다 — 누구나 시작하는 자리
-    rows.push({ code, name, pointRateBp: rateBp, threshold: code === GRADE_CODES[0] ? 0 : threshold });
+    rows.push({ code, name, pointRateBp: rateBp, threshold: code === GRADE_CODES[0] ? 0 : threshold, discountBp });
   }
   await db.$transaction(
     rows.map((r) =>
       db.memberGrade.update({
         where: { code: r.code },
-        data: { name: r.name, pointRateBp: r.pointRateBp, threshold: r.threshold },
+        data: { name: r.name, pointRateBp: r.pointRateBp, threshold: r.threshold, discountBp: r.discountBp },
       }),
     ),
   );
@@ -54,7 +61,12 @@ export async function updateMemberGrades(
     target: "setting",
     targetId: "grades",
     summary: rows
-      .map((r) => `${r.name} ${formatRatePercent(r.pointRateBp)}%${r.threshold > 0 ? ` / ${r.threshold.toLocaleString("ko-KR")}원↑` : ""}`)
+      .map(
+        (r) =>
+          `${r.name} 적립 ${formatRatePercent(r.pointRateBp)}%` +
+          `${r.discountBp > 0 ? ` / 할인 ${formatDiscountPercent(r.discountBp)}%` : ""}` +
+          `${r.threshold > 0 ? ` / ${r.threshold.toLocaleString("ko-KR")}원↑` : ""}`,
+      )
       .join(" · "),
     meta: { grades: rows },
   });

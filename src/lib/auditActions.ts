@@ -12,6 +12,7 @@ export const AUDIT_ACTIONS = {
   MEMBER_PENDING: "회원 대기 전환",
   MEMBER_TEMP_PASSWORD: "임시 비밀번호 발급",
   MEMBER_GRADE: "회원 등급 변경",
+  MEMBER_DISCOUNT: "회원 할인율 변경",
   POINT_ADJUST: "포인트 수동 지급/차감",
 
   // 주문
@@ -42,7 +43,7 @@ export const AUDIT_ACTIONS = {
   // 설정·시스템
   SETTING_SHIPPING: "배송비 정책 변경",
   SETTING_BANK: "입금 계좌 변경",
-  SETTING_GRADES: "회원 등급·적립률 변경",
+  SETTING_GRADES: "회원 등급·적립률·할인율 변경",
   SETTING_POINTS: "포인트 정책 변경",
   NAV_UPDATE: "상단 메뉴 변경",
   BRANDING_UPDATE: "로고 변경",
@@ -64,7 +65,7 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
   {
     key: "member",
     label: "회원",
-    actions: ["MEMBER_APPROVE", "MEMBER_REJECT", "MEMBER_PENDING", "MEMBER_TEMP_PASSWORD", "MEMBER_GRADE", "POINT_ADJUST"],
+    actions: ["MEMBER_APPROVE", "MEMBER_REJECT", "MEMBER_PENDING", "MEMBER_TEMP_PASSWORD", "MEMBER_GRADE", "MEMBER_DISCOUNT", "POINT_ADJUST"],
   },
   {
     key: "order",
@@ -100,6 +101,8 @@ const CRITICAL: AuditAction[] = [
   "ADMIN_PASSWORD", "PRODUCT_DELETE",
   // 입금 계좌 바꿔치기는 곧바로 돈이 새는 사고다 — 눈에 띄게
   "SETTING_BANK",
+  // 할인율은 다음 주문부터 곧바로 청구액이 달라진다 — 누가 언제 바꿨는지 눈에 띄어야 한다
+  "MEMBER_DISCOUNT", "SETTING_GRADES",
   // 입금 확인은 "돈을 받았다"고 선언하고 발송을 여는 동작이다 — 누가 눌렀는지 남아야 한다
   "ORDER_DEPOSIT_CONFIRM",
   // 승인 결과를 모르는 상태 — 돈이 나갔을 수 있는데 주문이 안 잡혀 있다. 사람이 봐야 한다

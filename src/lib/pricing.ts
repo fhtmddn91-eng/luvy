@@ -1,3 +1,5 @@
+import { discountedPrice } from "@/lib/discount";
+
 export type Tier = { minQty: number; unitPrice: number };
 
 /** 배송비 기본값 — 실제 적용값은 어드민 설정(Setting 테이블)이 우선한다 (lib/settings.ts) */
@@ -38,6 +40,19 @@ export function resolveUnitPrice(tiers: Tier[], qty: number): number {
     if (qty >= t.minQty) price = t.unitPrice;
   }
   return price;
+}
+
+/**
+ * 이 회원이 실제로 낼 개당 단가 = 수량별 정가에 할인율을 먹인 값.
+ *
+ * `resolveUnitPrice` 는 **정가**로 남겨 둔다 — 화면에서 취소선(정가)과 회원가를
+ * 나란히 보여주려면 둘 다 필요하기 때문이다.
+ *
+ * `discountBp` 에 기본값을 두지 않는 것은 일부러다. 기본값이 있으면 새로 만든
+ * 화면이 할인을 빼먹어도 **조용히 정가로 팔린다**. 필수 인자면 타입이 잡는다.
+ */
+export function memberUnitPrice(tiers: Tier[], qty: number, discountBp: number): number {
+  return discountedPrice(resolveUnitPrice(tiers, qty), discountBp);
 }
 
 export function shippingFor(

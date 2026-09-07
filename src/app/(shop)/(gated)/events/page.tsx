@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { ProductGrid } from "@/components/product/ProductGrid";
+import { currentDiscountBp } from "@/lib/memberDiscount";
 import { Icon } from "@/components/ui/Icon";
 
 export default async function EventsPage() {
@@ -28,6 +29,8 @@ export default async function EventsPage() {
     : [];
   const byRank = new Map(rankedIds.map((id, i) => [id, i]));
   const best = ranked.sort((a, b) => (byRank.get(a.id) ?? 0) - (byRank.get(b.id) ?? 0));
+
+  const discountBp = await currentDiscountBp();
 
   return (
     <div className="mx-auto max-w-[1280px] px-4 py-10 sm:px-6">
@@ -76,7 +79,7 @@ export default async function EventsPage() {
             <Icon name="chevronRight" className="h-4 w-4" strokeWidth={2} />
           </Link>
         </div>
-        <ProductGrid products={newest} />
+        <ProductGrid products={newest} discountBp={discountBp} />
       </section>
 
       {/* 베스트 기획전 */}
@@ -92,7 +95,7 @@ export default async function EventsPage() {
               <Icon name="chevronRight" className="h-4 w-4" strokeWidth={2} />
             </Link>
           </div>
-          <ProductGrid products={best} />
+          <ProductGrid products={best} discountBp={discountBp} />
         </section>
       )}
     </div>

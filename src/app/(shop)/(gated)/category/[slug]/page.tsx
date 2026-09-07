@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getCategories, selfAndDescendantSlugs } from "@/lib/categories";
 import { categoryHref } from "@/lib/nav";
 import { ProductGrid } from "@/components/product/ProductGrid";
+import { currentDiscountBp } from "@/lib/memberDiscount";
 import { SortSelect } from "@/components/product/SortSelect";
 
 const orderByFor = (sort?: string) => {
@@ -42,6 +43,8 @@ export default async function CategoryPage({
     include: { priceTiers: true },
   });
 
+  const discountBp = await currentDiscountBp();
+
   return (
     <div className="mx-auto max-w-[1280px] px-6 py-10">
       <div className="mb-6 flex items-end justify-between">
@@ -78,7 +81,7 @@ export default async function CategoryPage({
         </nav>
       )}
 
-      <ProductGrid products={products} />
+      <ProductGrid products={products} discountBp={discountBp} />
     </div>
   );
 }

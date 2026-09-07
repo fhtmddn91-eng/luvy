@@ -122,6 +122,8 @@ export async function placeOrder(_prev: OrderState, formData: FormData): Promise
           subtotal: draft.subtotal,
           shippingFee: draft.shippingFee,
           pointsUsed: points.amount,
+          // 주문 시점 할인율 스냅샷 — 나중에 등급이 바뀌어도 역산할 수 있어야 한다
+          discountBp: draft.discountBp,
           total,
           items: { create: draft.items },
           ...(total === 0 ? zeroPaidData(new Date()) : {}),
@@ -210,6 +212,8 @@ export async function createNicePayOrder(formData: FormData): Promise<NicePayOrd
           subtotal: draft.subtotal,
           shippingFee: draft.shippingFee,
           pointsUsed: points.amount,
+          // 주문 시점 할인율 스냅샷 — 나중에 등급이 바뀌어도 역산할 수 있어야 한다
+          discountBp: draft.discountBp,
           total,
           items: { create: draft.items },
           ...(zeroPaid ? zeroPaidData(new Date()) : {}),

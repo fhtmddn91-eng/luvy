@@ -8,6 +8,7 @@ import { orderStatusLabel } from "@/lib/orderStatus";
 import { setMemberStatus } from "@/lib/actions/admin-members";
 import { TempPasswordForm } from "@/components/admin/TempPasswordForm";
 import { MemberGradeForm } from "@/components/admin/MemberGradeForm";
+import { MemberDiscountForm } from "@/components/admin/MemberDiscountForm";
 import { PointAdjustForm } from "@/components/admin/PointAdjustForm";
 import { PAID_STATUSES, bucketOrders, type BucketView } from "@/lib/purchaseStats";
 import { getGrades, gradeName, pointSummary } from "@/lib/memberPoints";
@@ -274,8 +275,19 @@ export default async function AdminMemberDetailPage({
             <h2 className="mb-3 text-[15px] font-bold text-ink-deep">회원 등급</h2>
             <MemberGradeForm memberId={member.id} current={member.gradeCode} locked={member.gradeLocked} grades={grades} />
             <p className="mt-2 text-[12px] leading-relaxed text-muted">
-              적립률·자동 승급 기준은 「설정 › 회원 등급」에서 바꿉니다. 자동 승급은 올라가기만 하며, 수동 고정을 켜면 건드리지 않습니다.
+              적립률·할인율·자동 승급 기준은 「설정 › 회원 등급」에서 바꿉니다. 자동 승급은 올라가기만 하며, 수동 고정을 켜면 건드리지 않습니다.
             </p>
+
+            {/* 이 거래처만의 할인율 — 등급 기본값을 덮어쓴다 */}
+            <div className="mt-6 border-t border-hairline pt-5">
+              <h2 className="mb-3 text-[15px] font-bold text-ink-deep">이 거래처 할인율</h2>
+              <MemberDiscountForm
+                memberId={member.id}
+                current={member.discountBp}
+                gradeName={gradeName(grades, member.gradeCode)}
+                gradeDiscountBp={grades.find((g) => g.code === member.gradeCode)?.discountBp ?? 0}
+              />
+            </div>
 
             <div className="mt-6 border-t border-hairline pt-5">
               <h2 className="mb-1 text-[15px] font-bold text-ink-deep">포인트</h2>

@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 import { CartItemRow, type CartRowData } from "@/components/cart/CartItemRow";
 import { CartSummary } from "@/components/cart/CartSummary";
 import { getMoq, shippingFor, type Tier } from "@/lib/pricing";
-import { optionUnitPrice } from "@/lib/options";
+import { memberOptionUnitPrice } from "@/lib/options";
+import { getMemberDiscountBp } from "@/lib/memberDiscount";
 import { getShippingPolicy } from "@/lib/settings";
 
 export default async function CartPage() {
@@ -14,6 +15,8 @@ export default async function CartPage() {
     include: { product: { include: { priceTiers: true, options: true } } },
     orderBy: { id: "desc" },
   });
+
+  const discountBp = await getMemberDiscountBp(user.id);
 
   const rows: CartRowData[] = items.map((it) => {
     const option = it.optionId ? it.product.options.find((o) => o.id === it.optionId) : undefined;
@@ -34,8 +37,12 @@ export default async function CartPage() {
   const subtotal = rows.reduce(
     (sum, r) =>
       sum +
-      optionUnitPrice(r.optionPrice ? { unitPrice: r.optionPrice } : null, r.tiers, r.quantity) *
+      memberOptionUnitPrice(
+        r.optionPrice ? { unitPrice: r.optionPrice } : null,
+        r.tiers,
         r.quantity,
+        discountBp,
+      ) * r.quantity,
     0,
   );
   const shippingFee = shippingFor(subtotal, await getShippingPolicy());
@@ -54,7 +61,7 @@ export default async function CartPage() {
         <div className="grid gap-8 lg:grid-cols-[1fr_360px]">
           <div>
             {rows.map((r) => (
-              <CartItemRow key={r.id} item={r} />
+              <CartItemRow key={r.id} item={r} discountBp={discountBp} />
             ))}
           </div>
           <CartSummary subtotal={subtotal} shippingFee={shippingFee} />

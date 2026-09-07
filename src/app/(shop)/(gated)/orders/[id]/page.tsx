@@ -11,6 +11,7 @@ import { Panel, StatusPill } from "@/components/ui/Panel";
 import { getBankAccount } from "@/lib/bankAccountInfo";
 import { formatBankAccount } from "@/lib/bankAccount";
 import { paymentMethodLabel } from "@/lib/paymentMethods";
+import { orderDiscountAmount, discountLabel } from "@/lib/discount";
 
 const dateTimeFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", {
@@ -33,6 +34,7 @@ export default async function OrderDetailPage({
   const { pay } = await searchParams;
   const order = await db.order.findUnique({ where: { id }, include: { items: true } });
   if (!order || order.userId !== user.id) notFound();
+  const discountAmount = orderDiscountAmount(order.items);
   // 카드 승인 결과를 확인하지 못한 채 돌아온 경우 — 손님이 다시 결제하면 이중 결제가 된다
   const payUncertain = pay === "uncertain" || order.status === "PENDING_PAYMENT";
 
@@ -184,6 +186,12 @@ export default async function OrderDetailPage({
         <div className="rise rise-4">
           <Panel title="결제 금액">
             <dl className="space-y-2.5 text-[13.5px]">
+              {discountAmount > 0 && (
+                <div className="flex justify-between font-semibold text-brand-600">
+                  <dt>{discountLabel(order.discountBp) || "회원 할인"}</dt>
+                  <dd>−{won(discountAmount)}</dd>
+                </div>
+              )}
               <div className="flex justify-between text-ink-soft">
                 <dt>상품 합계</dt>
                 <dd>{won(order.subtotal)}</dd>

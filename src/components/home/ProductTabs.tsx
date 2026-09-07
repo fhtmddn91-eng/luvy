@@ -10,7 +10,7 @@ export interface TabData {
   products: ProductCardData[];
 }
 
-export function ProductTabs({ tabs }: { tabs: TabData[] }) {
+export function ProductTabs({ tabs, discountBp }: { tabs: TabData[]; discountBp: number }) {
   const [active, setActive] = useState(0);
   if (tabs.length === 0) return null;
 
@@ -49,7 +49,7 @@ export function ProductTabs({ tabs }: { tabs: TabData[] }) {
       </div>
 
       <div role="tabpanel" aria-label={current.label}>
-        <ProductGrid products={current.products} />
+        <ProductGrid products={current.products} discountBp={discountBp} />
       </div>
     </section>
   );

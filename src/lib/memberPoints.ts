@@ -24,6 +24,8 @@ export interface GradeRow {
   name: string;
   pointRateBp: number;
   threshold: number;
+  /** 등급 기본 할인율(만분율) — lib/discount.ts */
+  discountBp: number;
   sortOrder: number;
 }
 

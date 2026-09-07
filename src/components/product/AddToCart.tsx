@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { QtyStepper } from "./QtyStepper";
 import { addToCart } from "@/lib/actions/cart";
 import { won } from "@/lib/format";
-import { resolveUnitPrice, type Tier } from "@/lib/pricing";
+import { memberUnitPrice, type Tier } from "@/lib/pricing";
 import { maxOrderable, stockState, type StockInfo } from "@/lib/stock";
 
 export function AddToCart({
@@ -13,11 +13,14 @@ export function AddToCart({
   tiers,
   moq,
   stockInfo,
+  discountBp,
 }: {
   productId: string;
   tiers: Tier[];
   moq: number;
   stockInfo: StockInfo;
+  /** 회원 할인율. 여기 금액과 주문서 금액이 같아야 한다 */
+  discountBp: number;
 }) {
   const state = stockState(stockInfo);
   const max = maxOrderable(stockInfo, 100_000);
@@ -29,7 +32,7 @@ export function AddToCart({
   const [done, setDone] = useState(false);
   const router = useRouter();
 
-  const unit = resolveUnitPrice(tiers, qty);
+  const unit = memberUnitPrice(tiers, qty, discountBp);
   const total = unit * qty;
 
   const submit = (goCheckout: boolean) =>

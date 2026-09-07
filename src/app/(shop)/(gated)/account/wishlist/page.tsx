@@ -2,7 +2,8 @@ import Link from "next/link";
 import { requireApprovedUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { won } from "@/lib/format";
-import { getMoq, resolveUnitPrice } from "@/lib/pricing";
+import { getMoq, memberUnitPrice } from "@/lib/pricing";
+import { currentDiscountBp } from "@/lib/memberDiscount";
 import { AccountShell } from "@/components/account/AccountShell";
 import { Panel, EmptyState } from "@/components/ui/Panel";
 import { ProductThumb } from "@/components/product/ProductThumb";
@@ -33,6 +34,8 @@ export default async function WishlistPage() {
   });
   // 숨김 처리된 상품은 목록에서 빼되 찜 자체는 남긴다(다시 판매하면 되살아난다)
   const items = rows.filter((r) => r.product.status === "ACTIVE");
+
+  const discountBp = await currentDiscountBp();
 
   return (
     <AccountShell
@@ -73,7 +76,7 @@ export default async function WishlistPage() {
                       {p.name}
                     </Link>
                     <p className="mt-0.5 text-[12.5px] text-muted">
-                      공급가 {won(resolveUnitPrice(p.priceTiers, moq))} · MOQ {moq}
+                      공급가 {won(memberUnitPrice(p.priceTiers, moq, discountBp))} · MOQ {moq}
                       {p.basePrice > 0 && ` · 권장 판매가 ${won(p.basePrice)}`}
                     </p>
                   </div>

@@ -6,7 +6,7 @@ import { QtyStepper } from "./QtyStepper";
 import { addOptionsToCart } from "@/lib/actions/cart";
 import { won } from "@/lib/format";
 import { type Tier } from "@/lib/pricing";
-import { optionUnitPrice, optionMaxQty, isOptionSoldOut, type OptionLite } from "@/lib/options";
+import { memberOptionUnitPrice, optionMaxQty, isOptionSoldOut, type OptionLite } from "@/lib/options";
 import type { StockInfo } from "@/lib/stock";
 
 /**
@@ -21,12 +21,15 @@ export function OptionOrder({
   tiers,
   moq,
   stockInfo,
+  discountBp,
 }: {
   productId: string;
   options: OptionLite[];
   tiers: Tier[];
   moq: number;
   stockInfo: StockInfo;
+  /** 회원 할인율. 여기 금액과 주문서 금액이 같아야 한다 */
+  discountBp: number;
 }) {
   const [qty, setQty] = useState<Record<string, number>>({});
   const [pending, startTransition] = useTransition();
@@ -42,9 +45,9 @@ export function OptionOrder({
     () =>
       options.reduce((sum, o) => {
         const n = qty[o.id] ?? 0;
-        return n > 0 ? sum + optionUnitPrice(o, tiers, totalQty) * n : sum;
+        return n > 0 ? sum + memberOptionUnitPrice(o, tiers, totalQty, discountBp) * n : sum;
       }, 0),
-    [options, qty, tiers, totalQty],
+    [options, qty, tiers, totalQty, discountBp],
   );
 
   const belowMoq = totalQty > 0 && totalQty < moq;
@@ -74,7 +77,7 @@ export function OptionOrder({
           {options.map((o) => {
             const soldOut = isOptionSoldOut(o, stockInfo);
             const max = optionMaxQty(o, stockInfo, 100_000);
-            const unit = optionUnitPrice(o, tiers, Math.max(totalQty, moq));
+            const unit = memberOptionUnitPrice(o, tiers, Math.max(totalQty, moq), discountBp);
             return (
               <li key={o.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
                 <div className="min-w-0 flex-1">

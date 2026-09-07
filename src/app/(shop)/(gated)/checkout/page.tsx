@@ -4,7 +4,9 @@ import { db } from "@/lib/db";
 import { CheckoutForm } from "./CheckoutForm";
 import { won } from "@/lib/format";
 import { shippingFor, type Tier } from "@/lib/pricing";
-import { optionUnitPrice } from "@/lib/options";
+import { optionUnitPrice, memberOptionUnitPrice } from "@/lib/options";
+import { getMemberDiscountBp } from "@/lib/memberDiscount";
+import { discountLabel } from "@/lib/discount";
 import { getShippingPolicy } from "@/lib/settings";
 import { getBankAccount } from "@/lib/bankAccountInfo";
 import { formatBankAccount } from "@/lib/bankAccount";
@@ -31,17 +33,25 @@ export default async function CheckoutPage({
   });
   if (items.length === 0) redirect("/cart");
 
+  /*
+   * 여기 금액은 buildOrderDraft(payments.ts)와 **같은 순수 함수·같은 할인율**로
+   * 계산한다. 한쪽만 고치면 손님이 본 금액과 청구액이 갈린다.
+   */
+  const discountBp = await getMemberDiscountBp(user.id);
   const lines = items.map((it) => {
     const option = it.optionId ? it.product.options.find((o) => o.id === it.optionId) : undefined;
-    const unit = optionUnitPrice(option, it.product.priceTiers as Tier[], it.quantity);
+    const list = optionUnitPrice(option, it.product.priceTiers as Tier[], it.quantity);
+    const unit = memberOptionUnitPrice(option, it.product.priceTiers as Tier[], it.quantity, discountBp);
     return {
       id: it.id,
       name: option ? `${it.product.name} (${option.name})` : it.product.name,
       quantity: it.quantity,
       lineTotal: unit * it.quantity,
+      discountTotal: (list - unit) * it.quantity,
     };
   });
   const subtotal = lines.reduce((s, l) => s + l.lineTotal, 0);
+  const discountAmount = lines.reduce((s, l) => s + l.discountTotal, 0);
   const shippingFee = shippingFor(subtotal, await getShippingPolicy());
   // 포인트 잔액은 만료 정리 뒤의 값 — 주문 액션이 같은 기준으로 다시 검사한다
   const [policy, summary] = await Promise.all([getPointPolicy(), pointSummary(user.id)]);
@@ -68,6 +78,13 @@ export default async function CheckoutPage({
             ))}
           </ul>
           <dl className="mt-4 space-y-2 border-t border-line pt-4 text-[14px]">
+            {/* 할인은 이미 상품 합계에 반영돼 있다 — 얼마를 아꼈는지만 따로 알린다 */}
+            {discountAmount > 0 && (
+              <div className="flex justify-between font-semibold text-brand-600">
+                <dt>{discountLabel(discountBp)}</dt>
+                <dd>−{won(discountAmount)}</dd>
+              </div>
+            )}
             <div className="flex justify-between text-ink-soft"><dt>상품 합계</dt><dd>{won(subtotal)}</dd></div>
             <div className="flex justify-between text-ink-soft"><dt>배송비</dt><dd>{shippingFee === 0 ? "무료" : won(shippingFee)}</dd></div>
           </dl>
