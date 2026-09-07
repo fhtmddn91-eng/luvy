@@ -10,17 +10,26 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * 그래서 스크립트 차단보다 실효가 큰 항목에 집중한다 — 폼 전송 대상 고정(로그인 폼
  * 하이재킹 차단), 프레임 삽입 차단(클릭재킹), 출처 제한.
  */
+/**
+ * 나이스페이 결제창 출처. SDK(pay.nicepay.co.kr/v1/js/)는 결제창을 **iframe** 으로 열고
+ * 결제 파라미터를 **form POST** 로 그 도메인에 보낸다. 그래서 script·frame 만이 아니라
+ * form-action 에도 있어야 한다 — form-action 은 target 이 iframe 이어도 action URL 을 본다.
+ * 실측(2026-09-07): script-src 에 없어서 "결제 모듈을 불러오지 못했습니다" 로 결제가
+ * 통째로 막혔다. 운영에서 똑같이 났을 사고다.
+ */
+const NICEPAY = "https://pay.nicepay.co.kr https://sandbox-pay.nicepay.co.kr https://*.nicepay.co.kr";
+
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.portone.io",
+  `script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.portone.io ${NICEPAY}`,
   "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
   "font-src 'self' https://cdn.jsdelivr.net data:",
-  "img-src 'self' data: blob:",
-  "connect-src 'self' https://api.portone.io",
-  // 결제창이 iframe 으로 열리므로 포트원만 허용
-  "frame-src 'self' https://cdn.portone.io https://*.portone.io",
+  "img-src 'self' data: blob: https://*.nicepay.co.kr",
+  `connect-src 'self' https://api.portone.io ${NICEPAY}`,
+  // 결제창이 iframe 으로 열리므로 결제사만 허용
+  `frame-src 'self' https://cdn.portone.io https://*.portone.io ${NICEPAY}`,
   "frame-ancestors 'none'",
-  "form-action 'self'",
+  `form-action 'self' ${NICEPAY}`,
   "base-uri 'self'",
   "object-src 'none'",
   "upgrade-insecure-requests",

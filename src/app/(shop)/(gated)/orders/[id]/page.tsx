@@ -21,11 +21,20 @@ const dateTimeFmt = (d: Date) =>
     minute: "2-digit",
   }).format(d);
 
-export default async function OrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function OrderDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ pay?: string }>;
+}) {
   const user = await requireUser();
   const { id } = await params;
+  const { pay } = await searchParams;
   const order = await db.order.findUnique({ where: { id }, include: { items: true } });
   if (!order || order.userId !== user.id) notFound();
+  // 카드 승인 결과를 확인하지 못한 채 돌아온 경우 — 손님이 다시 결제하면 이중 결제가 된다
+  const payUncertain = pay === "uncertain" || order.status === "PENDING_PAYMENT";
 
   const shipment = { courier: order.courier, trackingNo: order.trackingNo };
   const shipped = hasShipment(shipment);
@@ -53,6 +62,15 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ id
       }
     >
       <div className="space-y-4">
+        {payUncertain && order.paymentMethod === "NICEPAY" && (
+          <div className="rise rise-1 border border-brand-500 bg-brand-50 px-5 py-4 text-[13px] leading-relaxed text-ink-deep sm:px-6">
+            <p className="font-bold text-brand-600">카드 승인 결과를 확인하는 중입니다</p>
+            <p className="mt-1">
+              결제사 응답이 늦어져 승인 여부를 아직 확정하지 못했습니다. <strong className="font-bold">다시 결제하지 마세요</strong> —
+              이중 결제가 될 수 있습니다. 영업일 기준 1일 이내에 확인 후 안내드리며, 급하시면 고객센터로 문의해주세요.
+            </p>
+          </div>
+        )}
         {/* 주문 요약 */}
         <div className="rise rise-1 flex flex-wrap items-center justify-between gap-3 border border-hairline bg-white px-5 py-4 sm:px-6">
           <div>

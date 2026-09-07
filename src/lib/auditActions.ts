@@ -22,6 +22,8 @@ export const AUDIT_ACTIONS = {
   ORDER_CANCEL_ADMIN: "주문 취소 (관리자)",
   ORDER_CANCEL_MEMBER: "주문 취소 (회원)",
   ORDER_REFUND_FAILED: "환불 실패",
+  PAYMENT_UNCERTAIN: "카드 승인 결과 불명 (수동 확인 필요)",
+  PAYMENT_STRAY_REFUNDED: "닫힌 주문 승인 자동 환불",
 
   // 상품·카탈로그
   PRODUCT_CREATE: "상품 등록",
@@ -70,6 +72,7 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
     actions: [
       "ORDER_STATUS", "ORDER_DEPOSIT_CONFIRM", "ORDER_SHIPPING", "ORDER_SHIPPING_CLEAR",
       "ORDER_CANCEL_ADMIN", "ORDER_CANCEL_MEMBER", "ORDER_REFUND_FAILED",
+      "PAYMENT_UNCERTAIN", "PAYMENT_STRAY_REFUNDED",
     ],
   },
   {
@@ -99,6 +102,8 @@ const CRITICAL: AuditAction[] = [
   "SETTING_BANK",
   // 입금 확인은 "돈을 받았다"고 선언하고 발송을 여는 동작이다 — 누가 눌렀는지 남아야 한다
   "ORDER_DEPOSIT_CONFIRM",
+  // 승인 결과를 모르는 상태 — 돈이 나갔을 수 있는데 주문이 안 잡혀 있다. 사람이 봐야 한다
+  "PAYMENT_UNCERTAIN", "PAYMENT_STRAY_REFUNDED",
 ];
 
 export const isCritical = (action: string): boolean =>

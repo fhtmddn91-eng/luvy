@@ -1,6 +1,8 @@
 import "server-only";
 import { db } from "@/lib/db";
 import { cancelOrderCore } from "@/lib/orderCancel";
+import { cancelPayment } from "@/lib/nicepay";
+import { audit, shortId } from "@/lib/audit";
 
 /**
  * 나이스페이 결제 결과를 우리 주문에 반영한다.
@@ -20,6 +22,10 @@ export type SettleResult =
  * 금액은 여기서 **한 번 더** 본다. returnUrl 단계에서 이미 검증했지만, 웹훅은 그 검증을
  * 거치지 않고 들어오므로 여기가 마지막 방어선이다. 우리가 저장해 둔 금액과 다르면
  * 확정하지 않는다 — 덜 받고 물건을 내보내는 게 최악이다.
+ *
+ * 주문이 이미 취소돼 있으면(손님이 결제창을 두 번 열어 앞 주문이 정리된 경우 등)
+ * 확정하지 않고 **즉시 환불**한다. 취소된 주문을 PAID 로 되살리면 재고는 이미
+ * 돌아간 뒤라 "돈은 받았는데 물건은 없는" 주문이 된다.
  */
 export async function settleNicePayPaid(input: {
   paymentId: string;
@@ -37,6 +43,11 @@ export async function settleNicePayPaid(input: {
 
   if (payment.amount !== input.amount) {
     return { ok: false, code: "AMOUNT_MISMATCH", message: "결제 금액이 주문과 다릅니다." };
+  }
+
+  if (payment.order.status === "CANCELED" || payment.order.status === "PAYMENT_FAILED") {
+    await refundStrayApproval({ paymentId: input.paymentId, tid: input.tid, orderId: payment.orderId, source: input.source });
+    return { ok: false, code: "ORDER_CLOSED", message: "이미 닫힌 주문입니다. 결제는 취소 처리됩니다." };
   }
 
   // 조건부 claim — returnUrl 과 웹훅이 겹쳐 들어와도 여기를 통과하는 건 하나뿐이다
@@ -65,6 +76,27 @@ export async function settleNicePayPaid(input: {
 }
 
 /**
+ * 닫힌 주문에 승인이 들어온 경우의 환불. 실패하면 감사로그에 눈에 띄게 남긴다 —
+ * 돈은 받았는데 주문은 없는 상태라 운영자가 손으로 환불해야 한다.
+ */
+async function refundStrayApproval(input: { paymentId: string; tid: string; orderId: string; source: string }): Promise<void> {
+  const r = await cancelPayment(input.tid, { reason: "닫힌 주문에 대한 승인 — 자동 환불", orderId: input.paymentId });
+  await db.payment.updateMany({
+    where: { paymentId: input.paymentId },
+    data: r.ok ? { status: "CANCELED", canceledAt: new Date(), pgTxId: input.tid } : { status: "CANCEL_FAILED", pgTxId: input.tid },
+  });
+  await audit({
+    action: r.ok ? "PAYMENT_STRAY_REFUNDED" : "ORDER_REFUND_FAILED",
+    target: "order",
+    targetId: input.orderId,
+    summary: r.ok
+      ? `주문 ${shortId(input.orderId)} 닫힌 주문에 승인(${input.source}) → 자동 환불`
+      : `주문 ${shortId(input.orderId)} 닫힌 주문에 승인(${input.source}) — 환불 실패, 수동 환불 필요 (${r.code})`,
+    meta: { tid: input.tid, paymentId: input.paymentId, source: input.source, result: r.ok ? "refunded" : r.code },
+  });
+}
+
+/**
  * 결제가 확정되지 못한 주문을 실패로 닫고 선점했던 재고를 되돌린다.
  * (승인 거절·금액 불일치·인증 실패 — 돈이 나가지 않은 경우)
  */
@@ -83,6 +115,30 @@ export async function failNicePayPayment(input: {
 
   // 재고·포인트 복원은 취소 공통 경로가 담당한다. PG 환불은 부르지 않는다 — 돈이 안 나갔다.
   await cancelOrderCore(payment.orderId, { by: "SYSTEM", reason: input.reason }, { skipPgRefund: true });
+}
+
+/**
+ * 승인 결과를 알 수 없고 망취소도 실패한 경우.
+ *
+ * 돈이 나갔을 수도, 안 나갔을 수도 있다. 이때 재고를 풀거나 주문을 닫으면 둘 중
+ * 한쪽이 틀린다. 그래서 **아무것도 되돌리지 않고** 주문을 결제대기로 둔 채 운영자에게
+ * 눈에 띄게 알린다 — 거래조회로 확인한 뒤 사람이 확정하거나 취소한다.
+ */
+export async function markNicePayUncertain(input: { paymentId: string; detail: string }): Promise<void> {
+  const payment = await db.payment.findUnique({ where: { paymentId: input.paymentId } });
+  if (!payment) return;
+
+  await db.payment.updateMany({
+    where: { paymentId: input.paymentId, status: { not: "PAID" } },
+    data: { status: "UNCERTAIN", rawResponse: input.detail.slice(0, 8000) },
+  });
+  await audit({
+    action: "PAYMENT_UNCERTAIN",
+    target: "order",
+    targetId: payment.orderId,
+    summary: `주문 ${shortId(payment.orderId)} 승인 결과 불명 — 망취소 실패. 나이스페이 거래조회 후 수동 처리 필요`,
+    meta: { paymentId: input.paymentId, detail: input.detail.slice(0, 500) },
+  });
 }
 
 /**

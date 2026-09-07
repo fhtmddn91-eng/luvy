@@ -14,7 +14,10 @@ import {
   formatCancelReason,
   orderStatusLabel,
 } from "@/lib/orderStatus";
-import { isSelectableMethod } from "@/lib/paymentMethods";
+import { isSelectableMethod, type Availability } from "@/lib/paymentMethods";
+import { isNicePayConfigured, NICEPAY_CLIENT_KEY } from "@/lib/nicepay";
+import { nicePayOrderId, safeGoodsName } from "@/lib/nicepaySign";
+import { headers } from "next/headers";
 import { getPointPolicy } from "@/lib/settings";
 import { validatePointUse, orderTotalAfterPoints } from "@/lib/points";
 import { pointSummary, usePointsForOrder, InsufficientPointsError } from "@/lib/memberPoints";
@@ -59,7 +62,25 @@ function parseShipping(formData: FormData) {
  */
 function parsePaymentMethod(formData: FormData): string | null {
   const value = String(formData.get("paymentMethod") ?? "").trim();
-  return isSelectableMethod(value) ? value : null;
+  return isSelectableMethod(value, paymentAvailability()) ? value : null;
+}
+
+/** 서버만 아는 "지금 열 수 있는 결제 수단". 주문서 화면(checkout/page)도 같은 식으로 계산한다 */
+function paymentAvailability(): Availability {
+  return { nicepay: isNicePayConfigured() };
+}
+
+/**
+ * 결제창이 돌아올 주소의 origin. 운영은 NEXT_PUBLIC_SITE_URL, 없으면 요청 호스트.
+ * (로컬에서 운영 주소로 돌아가면 결제 결과가 딴 서버로 간다)
+ */
+async function requestOrigin(): Promise<string> {
+  const fixed = process.env.NEXT_PUBLIC_SITE_URL;
+  if (fixed) return fixed.replace(/\/$/, "");
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "luvyb2b.com";
+  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  return `${proto}://${host}`;
 }
 
 /**
@@ -194,6 +215,117 @@ export async function createPendingOrder(formData: FormData): Promise<PendingOrd
   });
 
   return { ok: true, orderId: order.id, paymentId, orderName: draft.orderName, amount: total };
+}
+
+/** 나이스페이 결제창(AUTHNICE.requestPay)에 그대로 넘기는 값 — 전부 공개 가능한 값이다 */
+export interface NicePayWindowParams {
+  clientId: string;
+  orderId: string;
+  amount: number;
+  goodsName: string;
+  returnUrl: string;
+  buyerName: string;
+  buyerTel: string;
+  buyerEmail: string;
+}
+
+export type NicePayOrderResult =
+  /** 포인트로 총액이 0원 — 결제창 없이 이미 접수됐다 */
+  | { ok: true; paid: true; orderId: string }
+  | { ok: true; paid: false; orderId: string; window: NicePayWindowParams }
+  | { ok: false; error: string };
+
+/**
+ * 나이스페이 카드 결제 시작: 결제대기 주문 + Payment(READY, channel nicepay) 를 만들고
+ * 결제창 호출값을 돌려준다. 장바구니는 승인이 확정된 뒤에 비운다.
+ *
+ * 같은 회원의 **이전 결제대기 주문은 여기서 정리**한다. 결제창을 닫고 다시 여는 손님이
+ * 흔한데, 앞 주문이 재고를 문 채 남으면 "재고 부족"으로 자기 자신에게 막힌다.
+ * 승인이 진행 중일 수 있는 건(READY 가 아닌 것)은 건드리지 않는다.
+ */
+export async function createNicePayOrder(formData: FormData): Promise<NicePayOrderResult> {
+  const user = await requireApprovedUser();
+  if (!isNicePayConfigured()) return { ok: false, error: "카드 결제가 아직 열리지 않았습니다." };
+
+  const s = parseShipping(formData);
+  if (!s.recipient || !s.phone || !s.address) {
+    return { ok: false, error: "수령인, 연락처, 주소를 모두 입력해주세요." };
+  }
+
+  const draftResult = await buildOrderDraft(user.id);
+  if (!draftResult.ok) return { ok: false, error: draftResult.error };
+  const draft = draftResult.draft;
+
+  const points = await parsePointsUsed(formData, user.id, draft.total);
+  if (!points.ok) return { ok: false, error: points.error };
+  const total = orderTotalAfterPoints(draft.subtotal, draft.shippingFee, points.amount);
+  const zeroPaid = total === 0;
+
+  // 이전 결제대기(미승인) 주문 정리 — 재고·포인트가 돌아와야 이번 주문이 잡힌다
+  const stale = await db.order.findMany({
+    where: { userId: user.id, status: "PENDING_PAYMENT", paymentMethod: "NICEPAY", payment: { status: { in: ["READY", "FAILED"] } } },
+    select: { id: true },
+  });
+  for (const o of stale) {
+    await cancelOrderCore(o.id, { by: "SYSTEM", reason: "새 결제 시작으로 이전 결제대기 주문 정리" }, { skipPgRefund: true });
+  }
+
+  let order;
+  try {
+    order = await db.$transaction(async (tx) => {
+      await reserveStock(tx, linesFromOrderItems(draft.items));
+      const created = await tx.order.create({
+        data: {
+          userId: user.id,
+          status: "PENDING_PAYMENT",
+          recipient: s.recipient,
+          phone: s.phone,
+          address: s.address,
+          memo: s.memo,
+          paymentMethod: "NICEPAY",
+          subtotal: draft.subtotal,
+          shippingFee: draft.shippingFee,
+          pointsUsed: points.amount,
+          total,
+          items: { create: draft.items },
+          ...(zeroPaid ? zeroPaidData(new Date()) : {}),
+        },
+      });
+      await usePointsForOrder(tx, { userId: user.id, orderId: created.id, amount: points.amount });
+      if (zeroPaid) await tx.cartItem.deleteMany({ where: { userId: user.id } });
+      return created;
+    });
+  } catch (e) {
+    if (e instanceof InsufficientStockError) return { ok: false, error: e.message };
+    if (e instanceof InsufficientPointsError) return { ok: false, error: e.message };
+    throw e;
+  }
+
+  if (zeroPaid) {
+    revalidatePath("/", "layout");
+    return { ok: true, paid: true, orderId: order.id };
+  }
+
+  const paymentId = nicePayOrderId(order.id, 1);
+  await db.payment.create({
+    data: { orderId: order.id, paymentId, amount: total, status: "READY", channel: "nicepay" },
+  });
+
+  return {
+    ok: true,
+    paid: false,
+    orderId: order.id,
+    window: {
+      clientId: NICEPAY_CLIENT_KEY,
+      orderId: paymentId,
+      amount: total,
+      goodsName: safeGoodsName(draft.orderName),
+      returnUrl: `${await requestOrigin()}/api/payments/nicepay/return`,
+      buyerName: s.recipient,
+      buyerTel: s.phone,
+      buyerEmail: user.email,
+    },
+  };
 }
 
 export type CancelState = { error?: string };

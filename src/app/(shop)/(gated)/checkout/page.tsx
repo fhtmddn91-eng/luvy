@@ -12,10 +12,22 @@ import { getBankAccount } from "@/lib/bankAccountInfo";
 import { formatBankAccount } from "@/lib/bankAccount";
 import { getPointPolicy } from "@/lib/settings";
 import { pointSummary } from "@/lib/memberPoints";
+import { isNicePayConfigured } from "@/lib/nicepay";
 
-export default async function CheckoutPage() {
+export default async function CheckoutPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ pay?: string; why?: string }>;
+}) {
   const user = await requireApprovedUser();
   const portoneMode = isPortOneConfigured();
+  // returnUrl 이 실패로 돌려보낸 경우 — 사유를 주문서 위에 보여준다 (장바구니는 그대로다)
+  const sp = await searchParams;
+  const payError =
+    sp.pay === "failed" ? sp.why || "결제가 완료되지 않았습니다. 다시 시도해주세요."
+    : sp.pay === "invalid" ? "결제 정보를 찾을 수 없습니다. 다시 시도해주세요."
+    : undefined;
+  const availability = { nicepay: isNicePayConfigured() };
   const items = await db.cartItem.findMany({
     where: { userId: user.id },
     include: { product: { include: { priceTiers: true, options: true } } },
@@ -51,7 +63,12 @@ export default async function CheckoutPage() {
             points={points}
           />
         ) : (
-          <CheckoutForm bankAccount={formatBankAccount(await getBankAccount())} points={points} />
+          <CheckoutForm
+            bankAccount={formatBankAccount(await getBankAccount())}
+            points={points}
+            availability={availability}
+            payError={payError}
+          />
         )}
         <div className="rounded-2xl border border-line bg-white p-6 shadow-[var(--shadow-soft)]">
           <h2 className="text-[16px] font-bold text-ink">주문 상품</h2>

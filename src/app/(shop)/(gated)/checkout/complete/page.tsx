@@ -27,7 +27,9 @@ export default async function CheckoutCompletePage({
       <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-brand-100 text-[32px]">
         🎀
       </div>
-      <h1 className="text-[24px] font-extrabold text-ink">주문이 접수되었습니다</h1>
+      <h1 className="text-[24px] font-extrabold text-ink">
+        {order.paymentMethod === "NICEPAY" && order.status === "PAID" ? "결제가 완료되었습니다" : "주문이 접수되었습니다"}
+      </h1>
       <p className="mt-2 text-[14px] text-muted">주문번호 {order.id.slice(0, 8).toUpperCase()}</p>
 
       <div className="mt-8 rounded-2xl border border-line bg-white p-6 text-left shadow-[var(--shadow-soft)]">
