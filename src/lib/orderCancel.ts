@@ -2,6 +2,7 @@ import "server-only";
 
 import { db } from "@/lib/db";
 import { cancelPortOnePayment } from "@/lib/portone";
+import { cancelPayment as cancelNicePayPayment } from "@/lib/nicepay";
 import { restoreStock, linesFromOrderItems, STOCK_LINE_SELECT, type TxClient } from "@/lib/stockOps";
 import { reversePointsForOrder, refundPointsForOrder } from "@/lib/memberPoints";
 
@@ -15,9 +16,19 @@ export class RefundFailedError extends Error {
 }
 
 export interface CancelMeta {
-  /** MEMBER | ADMIN */
+  /** MEMBER | ADMIN | SYSTEM | PG */
   by: string;
   reason: string;
+}
+
+export interface CancelOptions {
+  /**
+   * PG 환불 호출을 건너뛴다. 두 경우에만 켠다:
+   *  · 승인 전에 실패해 돈이 안 나간 주문 (환불할 게 없다)
+   *  · PG 쪽에서 이미 취소된 것을 웹훅으로 받아 반영하는 경우
+   *    (다시 부르면 "이미 취소된 거래" 오류가 나고, 그 오류 때문에 재고 복원이 막힌다)
+   */
+  skipPgRefund?: boolean;
 }
 
 /**
@@ -45,18 +56,41 @@ async function claimCancel(tx: TxClient, orderId: string, meta: CancelMeta): Pro
 }
 
 /**
+ * PG 환불 호출. 어느 PG 로 결제됐는지는 Payment.channel 이 안다.
+ *
+ * 나이스페이 취소는 tid(pgTxId)로 부르고 orderId 를 함께 보낸다 — 같은 orderId 로는
+ * 재호출이 거부되므로 그 자체가 중복 환불 방어가 된다.
+ */
+async function refundAtPg(
+  payment: { channel: string; paymentId: string; pgTxId: string | null },
+  reason: string,
+): Promise<void> {
+  if (payment.channel === "nicepay") {
+    if (!payment.pgTxId) throw new Error("승인 키(tid)가 없어 환불할 수 없습니다.");
+    const r = await cancelNicePayPayment(payment.pgTxId, { reason, orderId: payment.paymentId });
+    if (!r.ok) throw new Error(`${r.code} ${r.message}`);
+    return;
+  }
+  await cancelPortOnePayment(payment.paymentId, reason);
+}
+
+/**
  * 주문 취소의 공통 처리. 회원 취소와 관리자 취소가 같은 경로를 쓴다.
  *
  * 결제(PAID)가 있으면 포트원 환불을 **먼저** 호출한다. 환불이 실패하면 로컬 상태를
  * 취소로 바꾸지 않고(돈은 받았는데 취소된 주문이 되는 상황 방지) Payment 를
  * CANCEL_FAILED 로 표시한 뒤 예외를 던져 운영자가 재시도하게 한다.
  */
-export async function cancelOrderCore(orderId: string, meta: CancelMeta): Promise<void> {
+export async function cancelOrderCore(
+  orderId: string,
+  meta: CancelMeta,
+  options: CancelOptions = {},
+): Promise<void> {
   const payment = await db.payment.findUnique({ where: { orderId } });
 
-  if (payment && payment.status === "PAID") {
+  if (payment && payment.status === "PAID" && !options.skipPgRefund) {
     try {
-      await cancelPortOnePayment(payment.paymentId, meta.reason);
+      await refundAtPg(payment, meta.reason);
     } catch (e) {
       await db.payment.update({ where: { orderId }, data: { status: "CANCEL_FAILED" } });
       throw new RefundFailedError(e instanceof Error ? e.message : "unknown");
