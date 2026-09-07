@@ -80,7 +80,8 @@ async function requestOrigin(): Promise<string> {
 }
 
 /**
- * 모의 결제(포트원 미설정) 플로우: 주문을 바로 접수 처리하고 장바구니를 비운다.
+ * 무통장입금 주문: 결제창 없이 바로 접수 처리하고 장바구니를 비운다.
+ * (카드는 createNicePayOrder → 결제창 → returnUrl 경로를 탄다)
  */
 export async function placeOrder(_prev: OrderState, formData: FormData): Promise<OrderState> {
   const user = await requireApprovedUser();
@@ -138,79 +139,6 @@ export async function placeOrder(_prev: OrderState, formData: FormData): Promise
 
   revalidatePath("/", "layout");
   redirect(`/checkout/complete?order=${order.id}`);
-}
-
-export type PendingOrderResult =
-  /** paid: 포인트로 총액이 0원이라 결제창 없이 이미 접수된 주문 — 완료 화면으로 바로 간다 */
-  | { ok: true; orderId: string; paymentId: string; orderName: string; amount: number; paid?: boolean }
-  | { ok: false; error: string };
-
-/**
- * 포트원 결제 플로우: 결제 대기 주문 + Payment(READY)를 만들고 결제창 호출에
- * 필요한 값을 반환한다. 장바구니는 결제 완료 시점에 비운다.
- */
-export async function createPendingOrder(formData: FormData): Promise<PendingOrderResult> {
-  const user = await requireApprovedUser();
-  const s = parseShipping(formData);
-  if (!s.recipient || !s.phone || !s.address) {
-    return { ok: false, error: "수령인, 연락처, 주소를 모두 입력해주세요." };
-  }
-
-  // 주문 불가 품목이 섞여 있으면 여기서 전체가 멈춘다 — 일부만 결제되지 않는다
-  const draftResult = await buildOrderDraft(user.id);
-  if (!draftResult.ok) return { ok: false, error: draftResult.error };
-  const draft = draftResult.draft;
-
-  const points = await parsePointsUsed(formData, user.id, draft.total);
-  if (!points.ok) return { ok: false, error: points.error };
-  const total = orderTotalAfterPoints(draft.subtotal, draft.shippingFee, points.amount);
-  const zeroPaid = total === 0;
-
-  // 결제창을 띄우기 전에 재고와 포인트를 선점한다.
-  // 결제가 끝난 뒤에 차감하면, 마지막 재고를 두 명이 동시에 결제해
-  // "돈은 받았지만 보낼 물건이 없는" 상황이 생긴다.
-  // 결제 실패·취소 시에는 restoreStock·refundPointsForOrder 로 되돌린다.
-  let order;
-  try {
-    order = await db.$transaction(async (tx) => {
-      await reserveStock(tx, linesFromOrderItems(draft.items));
-      const created = await tx.order.create({
-        data: {
-          userId: user.id,
-          status: "PENDING_PAYMENT",
-          recipient: s.recipient,
-          phone: s.phone,
-          address: s.address,
-          memo: s.memo,
-          subtotal: draft.subtotal,
-          shippingFee: draft.shippingFee,
-          pointsUsed: points.amount,
-          total,
-          items: { create: draft.items },
-          // 0원이면 결제창을 거치지 않으므로 여기서 바로 접수·장바구니 비움까지 끝낸다
-          ...(zeroPaid ? zeroPaidData(new Date()) : {}),
-        },
-      });
-      await usePointsForOrder(tx, { userId: user.id, orderId: created.id, amount: points.amount });
-      if (zeroPaid) await tx.cartItem.deleteMany({ where: { userId: user.id } });
-      return created;
-    });
-  } catch (e) {
-    if (e instanceof InsufficientStockError) return { ok: false, error: e.message };
-    if (e instanceof InsufficientPointsError) return { ok: false, error: e.message };
-    throw e;
-  }
-
-  const paymentId = `luvy-${order.id}`;
-  if (zeroPaid) {
-    revalidatePath("/", "layout");
-    return { ok: true, orderId: order.id, paymentId, orderName: draft.orderName, amount: 0, paid: true };
-  }
-  await db.payment.create({
-    data: { orderId: order.id, paymentId, amount: total, status: "READY" },
-  });
-
-  return { ok: true, orderId: order.id, paymentId, orderName: draft.orderName, amount: total };
 }
 
 /** 나이스페이 결제창(AUTHNICE.requestPay)에 그대로 넘기는 값 — 전부 공개 가능한 값이다 */

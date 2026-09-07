@@ -130,7 +130,7 @@ const fakeDb = {
 };
 
 vi.mock("@/lib/db", () => ({ db: fakeDb }));
-vi.mock("@/lib/portone", () => ({ cancelPortOnePayment: vi.fn() }));
+vi.mock("@/lib/nicepay", () => ({ cancelPayment: vi.fn() }));
 
 const { cancelOrderCore } = await import("./orderCancel");
 

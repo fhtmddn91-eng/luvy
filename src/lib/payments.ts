@@ -3,9 +3,6 @@ import { db } from "@/lib/db";
 import { shippingFor, type Tier } from "@/lib/pricing";
 import { optionUnitPrice } from "@/lib/options";
 import { getShippingPolicy } from "@/lib/settings";
-import { fetchPortOnePayment } from "@/lib/portone";
-import { restoreStock, linesFromOrderItems, STOCK_LINE_SELECT } from "@/lib/stockOps";
-import { refundPointsForOrder } from "@/lib/memberPoints";
 import { partitionCart, blockedCartMessage } from "@/lib/orderDraft";
 
 export interface OrderDraft {
@@ -75,84 +72,4 @@ export async function buildOrderDraft(userId: string): Promise<OrderDraftResult>
     ok: true,
     draft: { items, subtotal, shippingFee, total: subtotal + shippingFee, orderName },
   };
-}
-
-export type FinalizeResult =
-  | { ok: true; orderId: string }
-  | { ok: false; reason: string; orderId?: string };
-
-/**
- * 결제창 완료 후 서버 검증. 포트원 결제를 조회해 상태/금액을 대사하고
- * 일치하면 주문을 PAID로 확정하며 장바구니를 비운다.
- */
-export async function finalizePayment(paymentId: string): Promise<FinalizeResult> {
-  const payment = await db.payment.findUnique({ where: { paymentId }, include: { order: true } });
-  if (!payment) return { ok: false, reason: "결제 정보를 찾을 수 없습니다." };
-  if (payment.status === "PAID") return { ok: true, orderId: payment.orderId };
-
-  let remote;
-  try {
-    remote = await fetchPortOnePayment(paymentId);
-  } catch {
-    return { ok: false, reason: "결제 조회에 실패했습니다.", orderId: payment.orderId };
-  }
-
-  const info = remote as unknown as {
-    status: string;
-    amount?: { total?: number };
-    pgTxId?: string;
-    method?: { type?: string };
-  };
-
-  const paidOk = info.status === "PAID" && info.amount?.total === payment.amount;
-
-  if (!paidOk) {
-    // 결제 실패 → 선점했던 재고를 되돌린다.
-    // 상태 전이를 조건부로 claim 해 웹훅/콜백이 겹쳐도 복원이 두 번 일어나지 않게 한다.
-    await db.$transaction(async (tx) => {
-      const claimed = await tx.order.updateMany({
-        where: { id: payment.orderId, status: { notIn: ["PAYMENT_FAILED", "CANCELED"] } },
-        data: { status: "PAYMENT_FAILED" },
-      });
-      await tx.payment.update({
-        where: { paymentId },
-        data: { status: "FAILED", rawResponse: JSON.stringify(remote) },
-      });
-      if (claimed.count === 1) {
-        const items = await tx.orderItem.findMany({
-          where: { orderId: payment.orderId },
-          select: STOCK_LINE_SELECT,
-        });
-        await restoreStock(tx, linesFromOrderItems(items));
-        // 결제창에서 실패한 주문의 사용 포인트도 재고와 같은 조건으로 돌려준다
-        await refundPointsForOrder(tx, payment.orderId);
-      }
-    });
-    return { ok: false, reason: "결제가 완료되지 않았거나 금액이 일치하지 않습니다.", orderId: payment.orderId };
-  }
-
-  // 원자적 단일 실행: READY→PAID 전이를 성공시킨 호출자만 후속 처리(주문 확정·장바구니 비움).
-  // 웹훅과 /complete가 동시에 들어와도 side effect는 한 번만 발생한다.
-  const claimed = await db.payment.updateMany({
-    where: { paymentId, status: { not: "PAID" } },
-    data: {
-      status: "PAID",
-      method: info.method?.type ?? null,
-      pgTxId: info.pgTxId ?? null,
-      approvedAt: new Date(),
-      rawResponse: JSON.stringify(remote),
-    },
-  });
-
-  if (claimed.count === 0) {
-    // 다른 경로에서 이미 확정됨
-    return { ok: true, orderId: payment.orderId };
-  }
-
-  await db.$transaction([
-    db.order.update({ where: { id: payment.orderId }, data: { status: "PAID" } }),
-    db.cartItem.deleteMany({ where: { userId: payment.order.userId } }),
-  ]);
-
-  return { ok: true, orderId: payment.orderId };
 }

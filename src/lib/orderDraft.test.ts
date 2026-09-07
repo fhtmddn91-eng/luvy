@@ -78,7 +78,6 @@ const state = { cart: [] as CartRow[] };
 vi.mock("@/lib/db", () => ({
   db: { cartItem: { findMany: async () => state.cart } },
 }));
-vi.mock("@/lib/portone", () => ({ fetchPortOnePayment: vi.fn() }));
 vi.mock("@/lib/settings", () => ({
   getShippingPolicy: async () => ({ fee: 3000, freeThreshold: 50000 }),
 }));

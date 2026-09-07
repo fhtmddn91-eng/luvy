@@ -1,7 +1,6 @@
 import "server-only";
 
 import { db } from "@/lib/db";
-import { cancelPortOnePayment } from "@/lib/portone";
 import { cancelPayment as cancelNicePayPayment } from "@/lib/nicepay";
 import { restoreStock, linesFromOrderItems, STOCK_LINE_SELECT, type TxClient } from "@/lib/stockOps";
 import { reversePointsForOrder, refundPointsForOrder } from "@/lib/memberPoints";
@@ -60,18 +59,21 @@ async function claimCancel(tx: TxClient, orderId: string, meta: CancelMeta): Pro
  *
  * 나이스페이 취소는 tid(pgTxId)로 부르고 orderId 를 함께 보낸다 — 같은 orderId 로는
  * 재호출이 거부되므로 그 자체가 중복 환불 방어가 된다.
+ *
+ * 모르는 channel 은 **조용히 넘기지 않고 실패시킨다**. 환불을 건너뛰고 주문만 취소하면
+ * 손님 돈은 그대로 있는데 우리 장부에는 취소로 남는다 — 그게 제일 나쁘다.
+ * (포트원 경로는 2026-09-07 제거됐다. 그 시절 결제는 실제로 한 건도 없었다)
  */
 async function refundAtPg(
   payment: { channel: string; paymentId: string; pgTxId: string | null },
   reason: string,
 ): Promise<void> {
-  if (payment.channel === "nicepay") {
-    if (!payment.pgTxId) throw new Error("승인 키(tid)가 없어 환불할 수 없습니다.");
-    const r = await cancelNicePayPayment(payment.pgTxId, { reason, orderId: payment.paymentId });
-    if (!r.ok) throw new Error(`${r.code} ${r.message}`);
-    return;
+  if (payment.channel !== "nicepay") {
+    throw new Error(`지원하지 않는 결제 채널(${payment.channel}) — 환불을 수동으로 처리해야 합니다.`);
   }
-  await cancelPortOnePayment(payment.paymentId, reason);
+  if (!payment.pgTxId) throw new Error("승인 키(tid)가 없어 환불할 수 없습니다.");
+  const r = await cancelNicePayPayment(payment.pgTxId, { reason, orderId: payment.paymentId });
+  if (!r.ok) throw new Error(`${r.code} ${r.message}`);
 }
 
 /**
