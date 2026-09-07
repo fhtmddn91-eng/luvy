@@ -83,6 +83,33 @@ beforeEach(() => {
   api.cancelPayment.mockResolvedValue({ ok: true, body: {}, raw: "{}" });
 });
 
+describe("redirect 주소 — 프록시 안쪽 주소로 보내면 안 된다", () => {
+  it("Railway 뒤에서 req.url 이 localhost:8080 이어도 손님 주소(luvyb2b.com)로 보낸다", async () => {
+    // 실사례(2026-09-07 운영): https://localhost:8080/checkout 으로 redirect 돼 죽은 페이지
+    findPayment.mockResolvedValue(null);
+    const res = await POST(
+      new Request("http://localhost:8080/api/payments/nicepay/return", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "x-forwarded-host": "luvyb2b.com",
+          "x-forwarded-proto": "https",
+        },
+        body: new URLSearchParams({ orderId: "luvy-nope-1" }).toString(),
+      }),
+    );
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("https://luvyb2b.com/checkout?pay=invalid");
+  });
+
+  it("본문 없는 POST 는 500 이 아니라 주문서로 돌려보낸다", async () => {
+    const res = await POST(new Request("https://luvyb2b.com/api/payments/nicepay/return", { method: "POST" }));
+    expect(res.status).toBe(303);
+    expect(location(res)).toBe("/checkout?pay=invalid");
+    expect(api.approvePayment).not.toHaveBeenCalled();
+  });
+});
+
 describe("정상 흐름", () => {
   it("인증 성공 → 승인 → 확정 → 완료 화면 (303)", async () => {
     const res = await form();

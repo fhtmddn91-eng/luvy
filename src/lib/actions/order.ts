@@ -18,6 +18,7 @@ import { isSelectableMethod, type Availability } from "@/lib/paymentMethods";
 import { isNicePayConfigured, NICEPAY_CLIENT_KEY } from "@/lib/nicepay";
 import { nicePayOrderId, safeGoodsName } from "@/lib/nicepaySign";
 import { headers } from "next/headers";
+import { publicOriginFrom } from "@/lib/publicOrigin";
 import { getPointPolicy } from "@/lib/settings";
 import { validatePointUse, orderTotalAfterPoints } from "@/lib/points";
 import { pointSummary, usePointsForOrder, InsufficientPointsError } from "@/lib/memberPoints";
@@ -71,16 +72,11 @@ function paymentAvailability(): Availability {
 }
 
 /**
- * 결제창이 돌아올 주소의 origin. 운영은 NEXT_PUBLIC_SITE_URL, 없으면 요청 호스트.
+ * 결제창이 돌아올 주소의 origin — returnUrl 라우트의 redirect 와 같은 규칙(publicOrigin).
  * (로컬에서 운영 주소로 돌아가면 결제 결과가 딴 서버로 간다)
  */
 async function requestOrigin(): Promise<string> {
-  const fixed = process.env.NEXT_PUBLIC_SITE_URL;
-  if (fixed) return fixed.replace(/\/$/, "");
-  const h = await headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "luvyb2b.com";
-  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  return `${proto}://${host}`;
+  return publicOriginFrom(await headers());
 }
 
 /**

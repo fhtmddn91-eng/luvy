@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { checkAuthResult } from "@/lib/nicepaySign";
 import { NICEPAY_CLIENT_KEY, nicePaySecret, approvePayment, netCancel, cancelPayment } from "@/lib/nicepay";
 import { settleNicePayPaid, failNicePayPayment, markNicePayUncertain } from "@/lib/nicepayOrders";
+import { publicOriginFrom } from "@/lib/publicOrigin";
 
 /**
  * 나이스페이 returnUrl — 결제창 인증이 끝나면 나이스페이가 손님 브라우저를 통해
@@ -21,12 +22,19 @@ import { settleNicePayPaid, failNicePayPayment, markNicePayUncertain } from "@/l
  * 응답은 전부 303 redirect — POST 로 들어온 요청을 GET 화면으로 보낸다.
  */
 export async function POST(req: Request): Promise<Response> {
-  const form = await req.formData();
-  const p: Record<string, string> = {};
-  for (const [k, v] of form.entries()) p[k] = String(v);
-
-  const to = (path: string) => NextResponse.redirect(new URL(path, req.url), 303);
+  // redirect 는 손님이 보는 주소로 — req.url 은 프록시 안쪽 주소(localhost:8080)다
+  const origin = publicOriginFrom(req.headers);
+  const to = (path: string) => NextResponse.redirect(new URL(path, origin), 303);
   const failed = (why: string) => to(`/checkout?pay=failed&why=${encodeURIComponent(why)}`);
+
+  const p: Record<string, string> = {};
+  try {
+    const form = await req.formData();
+    for (const [k, v] of form.entries()) p[k] = String(v);
+  } catch {
+    // 본문이 없거나 form 이 아니다 — 나이스페이가 보낸 게 아니다. 500 대신 조용히 돌려보낸다.
+    return to("/checkout?pay=invalid");
+  }
 
   const npOrderId = p.orderId ?? "";
   if (!npOrderId) return to("/checkout?pay=invalid");
