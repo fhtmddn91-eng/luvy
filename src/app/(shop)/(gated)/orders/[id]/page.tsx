@@ -176,7 +176,8 @@ export default async function OrderDetailPage({
               ].map(([k, v]) => (
                 <div key={k} className="flex gap-4">
                   <dt className="w-[76px] shrink-0 text-muted">{k}</dt>
-                  <dd className="min-w-0 font-medium text-ink-deep">{v}</dd>
+                  {/* 배송 메모는 여러 줄로 쓸 수 있다 — 손님이 쓴 그대로 보여준다 */}
+                  <dd className="min-w-0 whitespace-pre-line break-words font-medium text-ink-deep">{v}</dd>
                 </div>
               ))}
             </dl>

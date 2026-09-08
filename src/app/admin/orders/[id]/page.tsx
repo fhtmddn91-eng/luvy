@@ -137,7 +137,9 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
               {order.memo && (
                 <div className="flex gap-3">
                   <dt className="w-16 shrink-0 text-muted">메모</dt>
-                  <dd>{order.memo}</dd>
+                  {/* 손님이 여러 줄로 남긴 요청("부재 시 …", "문 앞에 …")이 한 줄로
+                      뭉개지면 뒷줄을 놓치고 발송한다 — 쓴 그대로 보여준다 */}
+                  <dd className="min-w-0 whitespace-pre-line break-words">{order.memo}</dd>
                 </div>
               )}
             </dl>
