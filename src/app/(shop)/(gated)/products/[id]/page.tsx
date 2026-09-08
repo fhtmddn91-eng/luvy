@@ -8,6 +8,7 @@ import { sellableOptions, anyOptionAvailable } from "@/lib/options";
 import { getMoq, hasPrice, resolveUnitPrice, memberUnitPrice } from "@/lib/pricing";
 import { getMemberDiscountBp } from "@/lib/memberDiscount";
 import { discountLabel } from "@/lib/discount";
+import { publicDescription } from "@/lib/productDescription";
 import { won } from "@/lib/format";
 import { AssetDownloads } from "@/components/product/AssetDownloads";
 import { ProductGallery } from "@/components/product/ProductGallery";
@@ -73,7 +74,19 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
               품번 <span className="font-semibold text-ink-soft">{product.sku}</span>
             </p>
           )}
-          <p className="mt-4 text-[15px] leading-relaxed text-ink-soft">{product.description}</p>
+          {/*
+           * whitespace-pre-line: 관리자에서 줄을 나눠 쓴 그대로 보여준다.
+           * 이게 없어서 단락·기능 나열이 한 덩어리로 뭉개져 있었다(2026-09-08).
+           * 공지·FAQ·약관은 처음부터 이 규칙을 썼는데 상품 설명만 빠져 있었다.
+           *
+           * publicDescription: 수집 파이프라인이 붙인 원본 주소·매입 원가를 걷어낸다.
+           * 줄바꿈을 살리면 그 두 줄이 또렷하게 드러나므로 반드시 함께 가야 한다.
+           */}
+          {publicDescription(product.description) && (
+            <p className="mt-4 whitespace-pre-line text-[15px] leading-relaxed text-ink-soft">
+              {publicDescription(product.description)}
+            </p>
+          )}
 
           {/* 권장 판매가 ↔ 공급가. 거래처는 "얼마에 받아 얼마에 파는지"를 먼저 본다 */}
           <dl className="mt-6 space-y-1.5 border-t border-line pt-5 text-[15px]">

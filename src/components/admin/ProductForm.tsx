@@ -6,6 +6,7 @@ import type { ProductFormState } from "@/lib/actions/admin-products";
 import { Panel, btnPrimary } from "@/components/ui/Panel";
 import { Icon } from "@/components/ui/Icon";
 import { fieldCls, areaCls, labelCls, helpCls, errorCls } from "@/components/ui/form";
+import { internalNotes } from "@/lib/productDescription";
 
 export interface ProductFormData {
  id: string;
@@ -57,6 +58,8 @@ export function ProductForm({
  const [state, formAction, pending] = useActionState<ProductFormState, FormData>(action, {});
  // 첨부한 썸네일 미리보기 — "첨부가 됐는지" 눈으로 확인할 수 있게
  const [preview, setPreview] = useState<string | null>(null);
+ // 손님 화면에서 걸러지는 줄 — 저장된 설명 기준. 운영자가 무엇이 가려지는지 보게 한다
+ const hiddenNotes = internalNotes(product?.description ?? "");
  const [tiers, setTiers] = useState<{ minQty: string; unitPrice: string }[]>(
  product?.priceTiers.length
  ? product.priceTiers.map((t) => ({ minQty: String(t.minQty), unitPrice: String(t.unitPrice) }))
@@ -294,6 +297,25 @@ export function ProductForm({
  defaultValue={product?.description}
  className={areaCls}
  />
+ {/* 손님 화면은 줄바꿈을 그대로 살리고, 수집 파이프라인이 붙인 원본 주소·매입
+ 원가는 걸러서 보여준다(lib/productDescription.ts). 운영자가 "왜 저 줄이
+ 손님 화면에 없지?" 하고 헤매지 않도록 여기서 무엇이 가려지는지 밝힌다. */}
+ <p className={helpCls}>
+ 줄을 바꾼 그대로 손님 화면에 나옵니다.
+ {hiddenNotes.length > 0 && (
+ <>
+ {" "}아래 {hiddenNotes.length}줄은 <b>운영자만 봅니다 — 손님에게는 안 보입니다.</b>{" "}
+ 지우셔도 되고 그대로 두셔도 됩니다.
+ <span className="mt-1.5 block">
+ {hiddenNotes.map((line) => (
+ <span key={line} className="block break-all text-[11.5px] text-ink-soft">
+ {line}
+ </span>
+ ))}
+ </span>
+ </>
+ )}
+ </p>
  </div>
  </div>
  </Panel>
