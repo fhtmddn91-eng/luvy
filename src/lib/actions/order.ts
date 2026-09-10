@@ -19,6 +19,8 @@ import { isNicePayConfigured, NICEPAY_CLIENT_KEY } from "@/lib/nicepay";
 import { nicePayOrderId, safeGoodsName } from "@/lib/nicepaySign";
 import { headers } from "next/headers";
 import { publicOriginFrom } from "@/lib/publicOrigin";
+import { formatPhone, isValidPhone } from "@/lib/phone";
+import { isValidPostcode } from "@/lib/address";
 import { getPointPolicy } from "@/lib/settings";
 import { validatePointUse, orderTotalAfterPoints } from "@/lib/points";
 import { pointSummary, usePointsForOrder, InsufficientPointsError } from "@/lib/memberPoints";
@@ -49,12 +51,33 @@ function zeroPaidData(now: Date) {
 }
 
 function parseShipping(formData: FormData) {
+  const get = (k: string) => String(formData.get(k) ?? "").trim();
   return {
-    recipient: String(formData.get("recipient") ?? "").trim(),
-    phone: String(formData.get("phone") ?? "").trim(),
-    address: String(formData.get("address") ?? "").trim(),
-    memo: String(formData.get("memo") ?? "").trim() || null,
+    recipient: get("recipient"),
+    // 저장은 하이픈을 붙인 한 가지 꼴로 모은다 — 송장에 그대로 실린다
+    phone: formatPhone(get("phone")),
+    address: get("address"),
+    postcode: get("postcode"),
+    addressDetail: get("addressDetail"),
+    memo: get("memo") || null,
   };
+}
+
+/**
+ * 배송지 검사. **화면에서 막는 것만으로는 부족하다** — 우편번호·기본주소 칸을
+ * readOnly 로 두어도 폼 값은 조작할 수 있다.
+ *
+ * 예전엔 "비어 있지만 않으면" 통과해서 주소 "청주", 연락처 "ㅁㄴㅇㄹ" 로도
+ * 주문이 들어왔다. 그대로 송장이 나가면 배송이 안 되고, 기사가 손님에게
+ * 연락할 방법도 없다.
+ */
+function shippingError(s: ReturnType<typeof parseShipping>): string | null {
+  if (!s.recipient) return "수령인을 입력해주세요.";
+  if (!isValidPhone(s.phone)) return "연락처를 정확히 입력해주세요. (예: 010-1234-5678)";
+  if (!isValidPostcode(s.postcode) || !s.address) {
+    return "「주소 찾기」로 배송지를 선택해주세요.";
+  }
+  return null;
 }
 
 /**
@@ -86,9 +109,8 @@ async function requestOrigin(): Promise<string> {
 export async function placeOrder(_prev: OrderState, formData: FormData): Promise<OrderState> {
   const user = await requireApprovedUser();
   const s = parseShipping(formData);
-  if (!s.recipient || !s.phone || !s.address) {
-    return { error: "수령인, 연락처, 주소를 모두 입력해주세요." };
-  }
+  const badShipping = shippingError(s);
+  if (badShipping) return { error: badShipping };
 
   const paymentMethod = parsePaymentMethod(formData);
   if (!paymentMethod) {
@@ -117,6 +139,8 @@ export async function placeOrder(_prev: OrderState, formData: FormData): Promise
           recipient: s.recipient,
           phone: s.phone,
           address: s.address,
+          postcode: s.postcode,
+          addressDetail: s.addressDetail,
           memo: s.memo,
           paymentMethod,
           subtotal: draft.subtotal,
@@ -174,9 +198,9 @@ export async function createNicePayOrder(formData: FormData): Promise<NicePayOrd
   if (!isNicePayConfigured()) return { ok: false, error: "카드 결제가 아직 열리지 않았습니다." };
 
   const s = parseShipping(formData);
-  if (!s.recipient || !s.phone || !s.address) {
-    return { ok: false, error: "수령인, 연락처, 주소를 모두 입력해주세요." };
-  }
+  // 무통장과 **같은 검증**을 태운다 — 한쪽만 고치면 카드 주문만 엉터리 주소로 들어온다
+  const badShipping = shippingError(s);
+  if (badShipping) return { ok: false, error: badShipping };
 
   const draftResult = await buildOrderDraft(user.id);
   if (!draftResult.ok) return { ok: false, error: draftResult.error };
@@ -207,6 +231,8 @@ export async function createNicePayOrder(formData: FormData): Promise<NicePayOrd
           recipient: s.recipient,
           phone: s.phone,
           address: s.address,
+          postcode: s.postcode,
+          addressDetail: s.addressDetail,
           memo: s.memo,
           paymentMethod: "NICEPAY",
           subtotal: draft.subtotal,

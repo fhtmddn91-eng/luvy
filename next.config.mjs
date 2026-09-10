@@ -19,17 +19,32 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  */
 const NICEPAY = "https://pay.nicepay.co.kr https://sandbox-pay.nicepay.co.kr https://*.nicepay.co.kr";
 
+/**
+ * 다음 우편번호 서비스 출처 (주소 검색, lib/postcodeClient.ts).
+ *
+ * 공식 스크립트 주소는 t1.kakaocdn.net 이고(옛 t1.daumcdn.net 도 남겨 둔다), 검색 화면 **iframe 은**
+ * (postcode.map.kakao.com)에서 온다 — 서비스가 카카오로 옮겨갔다. 실측(2026-09-10):
+ * daum.net 만 열어 뒀더니 레이어는 열리는데 **안이 빈 채로** 막혔다
+ * (콘솔: Framing 'https://postcode.map.kakao.com/' violates ... frame-src).
+ *
+ * script-src·frame-src 둘 다 있어야 하고, 하나라도 빠지면 「주소 찾기」를 눌러도
+ * 아무 일도 일어나지 않는다 — 나이스페이 SDK 가 같은 이유로 조용히 막혔었다.
+ */
+const DAUM_POSTCODE =
+  "https://t1.kakaocdn.net https://*.kakaocdn.net https://postcode.map.kakao.com https://*.kakao.com " +
+  "https://t1.daumcdn.net https://*.daumcdn.net https://postcode.map.daum.net";
+
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.portone.io ${NICEPAY}`,
+  `script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.portone.io ${NICEPAY} ${DAUM_POSTCODE}`,
   "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
   "font-src 'self' https://cdn.jsdelivr.net data:",
-  "img-src 'self' data: blob: https://*.nicepay.co.kr",
-  `connect-src 'self' https://api.portone.io ${NICEPAY}`,
+  `img-src 'self' data: blob: https://*.nicepay.co.kr ${DAUM_POSTCODE}`,
+  `connect-src 'self' https://api.portone.io ${NICEPAY} ${DAUM_POSTCODE}`,
   // 결제창이 iframe 으로 열리므로 결제사만 허용
-  `frame-src 'self' https://cdn.portone.io https://*.portone.io ${NICEPAY}`,
+  `frame-src 'self' https://cdn.portone.io https://*.portone.io ${NICEPAY} ${DAUM_POSTCODE}`,
   "frame-ancestors 'none'",
-  `form-action 'self' ${NICEPAY}`,
+  `form-action 'self' ${NICEPAY} ${DAUM_POSTCODE}`,
   "base-uri 'self'",
   "object-src 'none'",
   "upgrade-insecure-requests",

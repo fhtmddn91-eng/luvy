@@ -4,6 +4,8 @@ import { useActionState, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { placeOrder, createNicePayOrder, type OrderState } from "@/lib/actions/order";
 import { AuthField } from "@/components/auth/AuthField";
+import { PhoneField } from "@/components/form/PhoneField";
+import { AddressFields } from "@/components/checkout/AddressFields";
 import { SubmitButton } from "@/components/auth/SubmitButton";
 import { PaymentMethodPicker } from "@/components/checkout/PaymentMethodPicker";
 import { PointUseField } from "@/components/checkout/PointUseField";
@@ -78,8 +80,8 @@ export function CheckoutForm({
     >
       <h2 className="text-[16px] font-bold text-ink">배송 정보</h2>
       <AuthField label="수령인" name="recipient" />
-      <AuthField label="연락처" name="phone" placeholder="010-0000-0000" autoComplete="tel" />
-      <AuthField label="주소" name="address" placeholder="도로명 주소 + 상세주소" />
+      <PhoneField label="연락처" />
+      <AddressFields />
       <label className="block">
         <span className="mb-1.5 block text-[13px] font-semibold text-ink-soft">배송 메모 (선택)</span>
         <textarea

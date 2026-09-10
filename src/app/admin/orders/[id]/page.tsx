@@ -12,6 +12,7 @@ import { DepositForm } from "@/components/admin/DepositForm";
 import { depositGapLabel, elapsedLabel } from "@/lib/deposit";
 import { paymentMethodLabel } from "@/lib/paymentMethods";
 import { orderDiscountAmount, discountLabel } from "@/lib/discount";
+import { fullAddress } from "@/lib/address";
 
 const dateFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(d);
@@ -132,7 +133,8 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
               </div>
               <div className="flex gap-3">
                 <dt className="w-16 shrink-0 text-muted">주소</dt>
-                <dd>{order.address}</dd>
+                {/* 우편번호·상세주소가 없는 옛 주문은 fullAddress 가 그 자리를 접는다 */}
+                <dd className="min-w-0 break-words">{fullAddress(order)}</dd>
               </div>
               {order.memo && (
                 <div className="flex gap-3">

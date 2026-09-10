@@ -12,6 +12,7 @@ import { getBankAccount } from "@/lib/bankAccountInfo";
 import { formatBankAccount } from "@/lib/bankAccount";
 import { paymentMethodLabel } from "@/lib/paymentMethods";
 import { orderDiscountAmount, discountLabel } from "@/lib/discount";
+import { fullAddress } from "@/lib/address";
 
 const dateTimeFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", {
@@ -171,7 +172,7 @@ export default async function OrderDetailPage({
               {[
                 ["수령인", order.recipient],
                 ["연락처", order.phone],
-                ["주소", order.address],
+                ["주소", fullAddress(order)],
                 ...(order.memo ? [["배송 메모", order.memo]] : []),
               ].map(([k, v]) => (
                 <div key={k} className="flex gap-4">

@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { signupAction, type AuthState } from "@/lib/actions/auth";
 import { AuthField } from "@/components/auth/AuthField";
+import { PhoneField } from "@/components/form/PhoneField";
 import { SubmitButton } from "@/components/auth/SubmitButton";
 
 export function SignupForm() {
@@ -16,7 +17,7 @@ export function SignupForm() {
       <AuthField label="상호명" name="companyName" placeholder="러비상사" />
       <AuthField label="사업자등록번호" name="businessNumber" placeholder="123-45-67890" />
       <AuthField label="대표자명" name="ownerName" />
-      <AuthField label="휴대폰" name="phone" placeholder="010-0000-0000" autoComplete="tel" />
+      <PhoneField label="휴대폰" />
       <label className="block">
         <span className="mb-1.5 block text-[13px] font-semibold text-ink-soft">
           사업자등록증 첨부 (JPG/PNG/PDF)

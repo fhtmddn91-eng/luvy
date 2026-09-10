@@ -307,7 +307,15 @@ model Order {
   status      String      @default("RECEIVED")
   recipient   String
   phone       String
+  /**
+   * 기본주소 — 도로명/지번. 주소 검색으로만 채운다(lib/address.ts).
+   * 예전엔 이 칸 하나뿐이라 "청주" 두 글자로도 주문이 통과했다.
+   */
   address     String
+  /** 우편번호 5자리. 이 기능 전 주문은 빈 문자열이다 */
+  postcode    String      @default("")
+  /** 동·호수. 단독주택·상가는 없을 수 있어 필수가 아니다 */
+  addressDetail String    @default("")
   memo        String?
   /** 주문 시 고른 결제 수단 (src/lib/paymentMethods.ts PAYMENT_METHODS 의 value) */
   paymentMethod String    @default("")
