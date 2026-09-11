@@ -25,6 +25,7 @@ export const AUDIT_ACTIONS = {
   ORDER_REFUND_FAILED: "환불 실패",
   PAYMENT_UNCERTAIN: "카드 승인 결과 불명 (수동 확인 필요)",
   PAYMENT_STRAY_REFUNDED: "닫힌 주문 승인 자동 환불",
+  PAYMENT_PARTIAL_CANCEL: "나이스페이 부분 취소 수신 (수동 확인 필요)",
 
   // 상품·카탈로그
   PRODUCT_CREATE: "상품 등록",
@@ -73,7 +74,7 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
     actions: [
       "ORDER_STATUS", "ORDER_DEPOSIT_CONFIRM", "ORDER_SHIPPING", "ORDER_SHIPPING_CLEAR",
       "ORDER_CANCEL_ADMIN", "ORDER_CANCEL_MEMBER", "ORDER_REFUND_FAILED",
-      "PAYMENT_UNCERTAIN", "PAYMENT_STRAY_REFUNDED",
+      "PAYMENT_UNCERTAIN", "PAYMENT_STRAY_REFUNDED", "PAYMENT_PARTIAL_CANCEL",
     ],
   },
   {
@@ -107,6 +108,8 @@ const CRITICAL: AuditAction[] = [
   "ORDER_DEPOSIT_CONFIRM",
   // 승인 결과를 모르는 상태 — 돈이 나갔을 수 있는데 주문이 안 잡혀 있다. 사람이 봐야 한다
   "PAYMENT_UNCERTAIN", "PAYMENT_STRAY_REFUNDED",
+  // 부분 취소는 자동으로 아무것도 안 바꾼다 — 사람이 금액·재고를 맞춰야 한다
+  "PAYMENT_PARTIAL_CANCEL",
 ];
 
 export const isCritical = (action: string): boolean =>

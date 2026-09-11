@@ -246,7 +246,25 @@ export async function createNicePayOrder(formData: FormData): Promise<NicePayOrd
         },
       });
       await usePointsForOrder(tx, { userId: user.id, orderId: created.id, amount: points.amount });
-      if (zeroPaid) await tx.cartItem.deleteMany({ where: { userId: user.id } });
+      if (zeroPaid) {
+        await tx.cartItem.deleteMany({ where: { userId: user.id } });
+      } else {
+        /*
+         * Payment 행은 주문과 **같은 트랜잭션**에서 만든다 (2026-09-11 리뷰).
+         * 커밋 뒤 따로 만들던 시절엔 그 사이 실패하면 주문만 PENDING_PAYMENT 로 남고
+         * Payment 가 없었다 — 재고·포인트는 잠긴 채, 이전 주문 정리는 payment.status 로
+         * 거르니 거기에도 안 걸려 영영 안 풀렸다. 회귀: order.nicepay.test.ts
+         */
+        await tx.payment.create({
+          data: {
+            orderId: created.id,
+            paymentId: nicePayOrderId(created.id, 1),
+            amount: total,
+            status: "READY",
+            channel: "nicepay",
+          },
+        });
+      }
       return created;
     });
   } catch (e) {
@@ -260,10 +278,8 @@ export async function createNicePayOrder(formData: FormData): Promise<NicePayOrd
     return { ok: true, paid: true, orderId: order.id };
   }
 
+  // 트랜잭션 안에서 저장한 것과 같은 채번 규칙 — 순수 함수라 여기서 다시 계산해도 같다
   const paymentId = nicePayOrderId(order.id, 1);
-  await db.payment.create({
-    data: { orderId: order.id, paymentId, amount: total, status: "READY", channel: "nicepay" },
-  });
 
   return {
     ok: true,

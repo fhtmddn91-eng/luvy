@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { checkWebhook } from "@/lib/nicepaySign";
 import { nicePaySecret } from "@/lib/nicepay";
-import { settleNicePayPaid, markNicePayCanceled } from "@/lib/nicepayOrders";
+import { settleNicePayPaid, markNicePayCanceled, markNicePayPartialCanceled } from "@/lib/nicepayOrders";
 
 /**
  * 나이스페이 웹훅(노티) 수신.
@@ -81,8 +81,11 @@ export async function POST(req: Request): Promise<Response> {
         raw,
         source: "webhook",
       });
-    } else if (status === "cancelled" || status === "canceled" || status === "partialcancelled") {
+    } else if (status === "cancelled" || status === "canceled") {
       await markNicePayCanceled({ paymentId: checked.orderId, raw });
+    } else if (status === "partialcancelled") {
+      // 부분 취소는 주문을 닫지 않는다 — 전체 취소와 같은 길로 보내면 재고가 통째로 돌아간다
+      await markNicePayPartialCanceled({ paymentId: checked.orderId, raw });
     }
   } catch {
     // DB 쓰기 실패 — 여기서 OK 를 주면 이 사건이 영영 사라진다. 재전송을 받는다.

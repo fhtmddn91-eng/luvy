@@ -159,8 +159,37 @@ export async function markNicePayUncertain(input: { paymentId: string; detail: s
 }
 
 /**
- * 나이스페이 쪽에서 이미 취소된 거래를 우리 DB 에 반영.
+ * 나이스페이 **부분** 취소 수신 — 주문을 닫지 않는다.
+ *
+ * 예전엔 부분 취소도 전체 취소와 같은 길로 보내 주문을 CANCELED 로 만들고 재고를
+ * 전부 되돌렸다(2026-09-11 리뷰). 50,000원 주문에서 1,000원만 돌려줬는데 장부는
+ * 통째로 취소되고 손님은 49,000원을 낸 채 물건을 못 받는 상태가 된다.
+ *
+ * 우리 데이터 모델에는 부분 환불 상태가 없다. 자동으로 무언가를 바꾸면 어느 쪽이든
+ * 틀리므로, 응답 전문을 남기고 감사로그로 운영자를 부른다. 주문·재고·포인트는 그대로.
+ */
+export async function markNicePayPartialCanceled(input: { paymentId: string; raw: string }): Promise<void> {
+  const payment = await db.payment.findUnique({ where: { paymentId: input.paymentId } });
+  if (!payment) return;
+
+  // 전문은 남긴다 — 얼마가 돌아갔는지 나중에 여기서 읽는다. 상태는 건드리지 않는다.
+  await db.payment.updateMany({
+    where: { paymentId: input.paymentId },
+    data: { rawResponse: input.raw.slice(0, 8000) },
+  });
+  await audit({
+    action: "PAYMENT_PARTIAL_CANCEL",
+    target: "order",
+    targetId: payment.orderId,
+    summary: `주문 ${shortId(payment.orderId)} 나이스페이에서 부분 취소됨 — 주문은 유지. 금액·재고를 사람이 맞춰야 합니다`,
+    meta: { paymentId: input.paymentId },
+  });
+}
+
+/**
+ * 나이스페이 쪽에서 이미 **전체** 취소된 거래를 우리 DB 에 반영.
  * 가맹점관리자에서 사람이 직접 취소하면 이 경로로만 알 수 있다.
+ * (부분 취소는 markNicePayPartialCanceled — 여기로 오면 안 된다)
  */
 export async function markNicePayCanceled(input: { paymentId: string; raw: string }): Promise<void> {
   const payment = await db.payment.findUnique({ where: { paymentId: input.paymentId } });
