@@ -10,6 +10,7 @@ import { ShippingForm } from "@/components/admin/ShippingForm";
 import { OrderStatusForm } from "@/components/admin/OrderStatusForm";
 import { DepositForm } from "@/components/admin/DepositForm";
 import { PaymentDetail } from "@/components/admin/PaymentDetail";
+import { ResolveUncertainForm } from "@/components/admin/ResolveUncertainForm";
 import { depositGapLabel, elapsedLabel } from "@/lib/deposit";
 import { paymentMethodLabel } from "@/lib/paymentMethods";
 import { orderDiscountAmount, discountLabel } from "@/lib/discount";
@@ -147,7 +148,11 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
           <section className="border border-hairline bg-white p-6">
             <h2 className="mb-4 text-[15px] font-bold text-ink-deep">결제</h2>
             {order.payment ? (
-              <PaymentDetail payment={order.payment} />
+              <>
+                <PaymentDetail payment={order.payment} />
+                {/* 승인 불명은 사람이 결정해야 한다 — 그 결정을 내릴 버튼이 여기 있어야 한다 (#7) */}
+                {order.payment.status === "UNCERTAIN" && <ResolveUncertainForm orderId={order.id} />}
+              </>
             ) : order.paymentMethod ? (
               // PG 연동 전 주문 — 회원이 주문서에서 고른 수단만 남는다
               <dl className="space-y-1.5 text-[13px] text-ink-soft">

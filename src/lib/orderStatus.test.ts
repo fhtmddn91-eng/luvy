@@ -188,3 +188,33 @@ describe("shippingEntryRejection — 송장을 붙일 수 있는 주문인가", 
     }
   });
 });
+
+/**
+ * 결제완료 주문의 드롭다운 — 결제완료(PAID)는 수동 목록에 없어서 드롭다운이 첫 항목
+ * '접수됨'을 기본으로 보여 줬다. 아무것도 안 고치고 저장만 눌러도 PAID → RECEIVED 가
+ * 통과됐고, 접수됨은 매출 집계(PAID_STATUSES)에서 빠지므로 카드 매출이 장부에서
+ * 사라졌다(2026-09-11 리뷰).
+ */
+describe("statusChangeRejection — 결제완료 주문", () => {
+  const paidCard = { from: "PAID", paymentMethod: "NICEPAY", depositConfirmedAt: null };
+
+  it("현재 상태 그대로 제출하면 통과한다 (수동 목록에 없는 PAID 도)", () => {
+    expect(statusChangeRejection({ ...paidCard, to: "PAID" })).toBeNull();
+  });
+
+  it("결제완료 → 접수됨은 거부한다 — 매출에서 사라진다", () => {
+    const why = statusChangeRejection({ ...paidCard, to: "RECEIVED" });
+    expect(why).toContain("되돌릴 수 없습니다");
+    expect(why).toContain("환불");
+  });
+
+  it("결제완료 → 배송준비·배송중·배송완료는 정상 진행이다", () => {
+    for (const to of ["PREPARING", "SHIPPED", "DELIVERED"]) {
+      expect(statusChangeRejection({ ...paidCard, to }), to).toBeNull();
+    }
+  });
+
+  it("무통장 접수됨 → 접수됨(그대로)도 여전히 통과한다", () => {
+    expect(statusChangeRejection({ from: "RECEIVED", to: "RECEIVED", paymentMethod: "BANK_TRANSFER", depositConfirmedAt: null })).toBeNull();
+  });
+});

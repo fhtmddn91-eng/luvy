@@ -6,6 +6,9 @@ import { requireAdmin } from "@/lib/auth";
 import { statusChangeRejection, shippingEntryRejection, orderStatusLabel } from "@/lib/orderStatus";
 import { accruePointsForOrder, evaluateGradeFor, getGrades, gradeName } from "@/lib/memberPoints";
 import { cancelOrderCore, RefundFailedError } from "@/lib/orderCancel";
+import { findByOrderId } from "@/lib/nicepay";
+import { settleNicePayPaid, failNicePayPayment, markNicePayCanceled } from "@/lib/nicepayOrders";
+import { decideUncertain } from "@/lib/uncertainRules";
 import { parseDepositInput, depositGapLabel } from "@/lib/deposit";
 import { audit, shortId } from "@/lib/audit";
 import {
@@ -286,4 +289,67 @@ export async function cancelOrderPayment(orderId: string): Promise<void> {
     // 환불 실패로 Payment 가 CANCEL_FAILED 가 된 경우에도 화면에 반영되어야 한다.
     revalidateOrder(orderId);
   }
+}
+
+export interface ResolveFormState {
+  error?: string;
+  ok?: boolean;
+  /** 무엇으로 정리됐는지 — 화면에 그대로 보여 준다 */
+  outcome?: string;
+}
+
+/**
+ * 승인 결과 불명(UNCERTAIN) 결제를 나이스페이 거래조회로 확정하거나 닫는다 (2026-09-11 리뷰 #7).
+ *
+ * 예전엔 "거래조회 후 수동 처리"라고만 적혀 있고 그 수동 처리를 할 버튼이 없었다.
+ * 운영자가 쥔 건 상태 드롭다운뿐이었는데 그건 결제대기 주문에서 막혔다(#2).
+ *
+ * 판정은 uncertainRules.ts(순수)가 한다 — 확신이 없으면 아무것도 바꾸지 않는다.
+ * 확정은 settleNicePayPaid(웹훅·returnUrl 과 같은 경로, 금액 재대조·중복 확정 방지),
+ * 정리는 failNicePayPayment(돈 안 나감 → 재고 복원), 전액 취소 반영은 markNicePayCanceled.
+ */
+export async function resolveUncertainPayment(
+  orderId: string,
+  _prev: ResolveFormState,
+  _formData: FormData,
+): Promise<ResolveFormState> {
+  await requireAdmin();
+
+  const payment = await db.payment.findUnique({ where: { orderId } });
+  if (!payment) return { error: "결제 정보가 없는 주문입니다." };
+  if (payment.status !== "UNCERTAIN") {
+    return { error: `승인 불명 상태가 아닙니다 (현재 ${payment.status}). 화면을 새로고침해주세요.` };
+  }
+
+  const lookup = await findByOrderId(payment.paymentId);
+  const d = decideUncertain(lookup, payment.amount);
+
+  let outcome: string;
+  if (d.action === "settle") {
+    const r = await settleNicePayPaid({
+      paymentId: payment.paymentId, tid: d.tid, amount: d.amount, raw: d.raw, source: "admin", method: d.method,
+    });
+    if (!r.ok) return { error: `확정하지 못했습니다: ${r.message}` };
+    outcome = "나이스페이에 승인이 확인되어 결제완료로 확정했습니다.";
+  } else if (d.action === "canceled") {
+    await markNicePayCanceled({ paymentId: payment.paymentId, raw: d.raw });
+    outcome = "나이스페이에서 이미 전액 취소된 거래입니다. 주문을 취소하고 재고를 돌려놓았습니다.";
+  } else if (d.action === "fail") {
+    await failNicePayPayment({ paymentId: payment.paymentId, reason: d.reason, raw: d.raw });
+    outcome = "나이스페이에 승인 내역이 없습니다 (돈이 나가지 않음). 주문을 취소하고 재고를 돌려놓았습니다.";
+  } else {
+    // hold — 아무것도 바꾸지 않았다. 이유만 보여 준다
+    return { error: d.reason };
+  }
+
+  await audit({
+    action: "PAYMENT_UNCERTAIN_RESOLVED",
+    target: "order",
+    targetId: orderId,
+    summary: `주문 ${shortId(orderId)} 승인 불명 → ${d.action === "settle" ? "결제완료 확정" : "취소(재고 복원)"} — 거래조회 ${d.action}`,
+    meta: { paymentId: payment.paymentId, decision: d.action, lookupOk: lookup.ok, code: lookup.ok ? "0000" : lookup.code },
+  });
+
+  revalidateOrder(orderId);
+  return { ok: true, outcome };
 }

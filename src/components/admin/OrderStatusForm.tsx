@@ -30,9 +30,21 @@ export function OrderStatusForm({ orderId, status }: { orderId: string; status: 
   const bound = setOrderStatus.bind(null, orderId);
   const [state, formAction] = useActionState<StatusFormState, FormData>(bound, {});
 
+  /*
+   * 현재 상태가 수동 목록에 없으면(결제완료 등) 그 상태를 첫 항목으로 넣는다.
+   * 없으면 브라우저가 첫 항목 '접수됨'을 골라 보여 줘서, 아무것도 안 고치고 저장만
+   * 눌러도 결제완료 → 접수됨이 제출됐다 — 그 주문은 매출 집계에서 빠진다(2026-09-11).
+   * 서버는 같은 상태 제출을 변경 없음으로 받고, PAID → RECEIVED 는 거부한다.
+   */
+  const inList = (MANUAL_STATUSES as readonly string[]).includes(status);
   return (
     <form action={formAction} className="space-y-3">
       <select name="status" defaultValue={status} className={fieldCls} aria-label="주문 상태">
+        {!inList && (
+          <option value={status}>
+            {orderStatusLabel(status)} (현재 — 그대로 두기)
+          </option>
+        )}
         {MANUAL_STATUSES.map((s) => (
           <option key={s} value={s}>
             {orderStatusLabel(s)}

@@ -85,7 +85,8 @@ export async function settleNicePayPaid(input: {
   tid: string;
   amount: number;
   raw: string;
-  source: "return" | "webhook";
+  /** admin = 승인 불명 결제를 운영자가 거래조회로 확정한 경우 (#7) */
+  source: "return" | "webhook" | "admin";
   method?: string | null;
 }): Promise<SettleResult> {
   const payment = await db.payment.findUnique({

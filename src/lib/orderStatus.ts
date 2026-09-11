@@ -65,6 +65,12 @@ export function needsDepositConfirm(i: {
  * 폼 값을 그대로 받으므로 화면에 없는 값도 들어올 수 있다.
  */
 export function statusChangeRejection(i: StatusChangeInput): string | null {
+  /*
+   * 같은 상태는 변경이 아니다 — 여기서 먼저 통과시킨다. 아래 "수동 지정 불가" 검사보다
+   * 앞이어야 한다: 결제완료(PAID)는 수동 목록에 없어서, 드롭다운이 현재 상태를 그대로
+   * 제출하면 "지정할 수 없는 상태" 오류가 났다(2026-09-11 리뷰).
+   */
+  if (i.to === i.from) return null;
   if (i.to === "CANCELED") {
     return "취소는 '주문 취소' 버튼으로만 처리할 수 있습니다. 재고 복원과 환불이 함께 이뤄져야 합니다.";
   }
@@ -80,6 +86,15 @@ export function statusChangeRejection(i: StatusChangeInput): string | null {
    */
   if (i.from === "PENDING_PAYMENT") {
     return "카드 결제가 아직 완료되지 않은 주문입니다. 결제가 확정되면 자동으로 결제완료가 됩니다. 결제되지 않은 주문은 '주문 취소'로 정리해주세요.";
+  }
+  /*
+   * 결제완료 → 접수됨은 돈을 받은 주문을 "아직 안 받은" 칸으로 되돌리는 것이다.
+   * 접수됨은 매출 집계(PAID_STATUSES)에서 빠지므로 카드 매출이 장부에서 사라진다.
+   * 실사례(2026-09-11): 드롭다운이 결제완료 주문에서 첫 항목 '접수됨'을 기본으로
+   * 보여 줘, 아무것도 안 고치고 저장만 눌러도 이 길로 들어왔다.
+   */
+  if (i.from === "PAID" && i.to === "RECEIVED") {
+    return "결제완료 주문은 접수됨으로 되돌릴 수 없습니다. 결제를 무르려면 '결제 취소 (환불)'을 쓰세요.";
   }
   if (i.to !== i.from && needsDepositConfirm(i)) {
     return "무통장 입금이 아직 확인되지 않았습니다. '입금 확인'을 먼저 처리해주세요.";
