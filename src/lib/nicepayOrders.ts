@@ -108,10 +108,27 @@ export async function failNicePayPayment(input: {
   const payment = await db.payment.findUnique({ where: { paymentId: input.paymentId } });
   if (!payment) return;
 
-  await db.payment.updateMany({
+  const marked = await db.payment.updateMany({
     where: { paymentId: input.paymentId, status: { not: "PAID" } },
     data: { status: "FAILED", rawResponse: input.raw?.slice(0, 8000) ?? null },
   });
+
+  if (marked.count === 0) {
+    /*
+     * 이미 PAID 다 — 우리가 "실패"라고 판단하는 사이 웹훅이 승인을 확정했다.
+     * 여기서 취소하면 돈이 나간 주문을 닫는 꼴이라 아무것도 되돌리지 않고 남긴다.
+     * (cancelOrderCore 도 돈이 나간 결제는 skip 으로 취소하지 않고 예외를 던진다 —
+     *  그 예외가 returnUrl 을 500 으로 만들지 않게 여기서 먼저 걸러 둔다)
+     */
+    await audit({
+      action: "PAYMENT_UNCERTAIN",
+      target: "order",
+      targetId: payment.orderId,
+      summary: `주문 ${shortId(payment.orderId)} 실패 처리 중 웹훅이 먼저 승인 확정 — 취소하지 않음. 거래조회로 확인 필요 (${input.reason})`,
+      meta: { paymentId: input.paymentId, reason: input.reason },
+    });
+    return;
+  }
 
   // 재고·포인트 복원은 취소 공통 경로가 담당한다. PG 환불은 부르지 않는다 — 돈이 안 나갔다.
   await cancelOrderCore(payment.orderId, { by: "SYSTEM", reason: input.reason }, { skipPgRefund: true });

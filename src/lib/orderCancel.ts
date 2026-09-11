@@ -77,9 +77,20 @@ async function refundAtPg(
 }
 
 /**
+ * 돈이 실제로 나가 있는 결제 상태.
+ *
+ * CANCEL_FAILED 가 여기 있어야 한다. 실사례(2026-09-11 리뷰, 실경로로 재현): 환불이
+ * 한 번 실패하면 CANCEL_FAILED 로 표시하고 운영자가 다시 누르게 해뒀는데, 재시도가
+ * `status === "PAID"` 관문을 통과하지 못해 **환불 없이** 주문만 취소하고 재고를
+ * 되돌렸다 — 손님 돈은 그대로인데 장부는 취소. 환불 실패를 복구하려고 만든 길이
+ * 그 사고를 내고 있었다. 회귀: orderCancelRefund.test.ts
+ */
+const MONEY_OUT_STATUSES = ["PAID", "CANCEL_FAILED"] as const;
+
+/**
  * 주문 취소의 공통 처리. 회원 취소와 관리자 취소가 같은 경로를 쓴다.
  *
- * 결제(PAID)가 있으면 포트원 환불을 **먼저** 호출한다. 환불이 실패하면 로컬 상태를
+ * 돈이 나간 결제가 있으면 PG 환불을 **먼저** 호출한다. 환불이 실패하면 로컬 상태를
  * 취소로 바꾸지 않고(돈은 받았는데 취소된 주문이 되는 상황 방지) Payment 를
  * CANCEL_FAILED 로 표시한 뒤 예외를 던져 운영자가 재시도하게 한다.
  */
@@ -89,10 +100,20 @@ export async function cancelOrderCore(
   options: CancelOptions = {},
 ): Promise<void> {
   const payment = await db.payment.findUnique({ where: { orderId } });
+  const moneyOut = payment !== null && (MONEY_OUT_STATUSES as readonly string[]).includes(payment.status);
 
-  if (payment && payment.status === "PAID" && !options.skipPgRefund) {
+  if (moneyOut && options.skipPgRefund) {
+    /*
+     * 호출자는 "돈이 안 나갔다/PG 가 이미 취소했다"고 믿지만 우리 기록은 나갔다고 한다.
+     * (승인 응답을 못 받은 사이 웹훅이 먼저 확정한 경합이 여기로 온다)
+     * 이 상태에서 취소하면 돈만 뺏는다. 멈추고 사람이 거래조회로 확인해야 한다.
+     */
+    throw new RefundFailedError(`돈이 나간 결제(${payment!.status})는 환불 없이 취소할 수 없습니다`);
+  }
+
+  if (moneyOut) {
     try {
-      await refundAtPg(payment, meta.reason);
+      await refundAtPg(payment!, meta.reason);
     } catch (e) {
       await db.payment.update({ where: { orderId }, data: { status: "CANCEL_FAILED" } });
       throw new RefundFailedError(e instanceof Error ? e.message : "unknown");

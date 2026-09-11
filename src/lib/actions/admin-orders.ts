@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
-import { statusChangeRejection, orderStatusLabel } from "@/lib/orderStatus";
+import { statusChangeRejection, shippingEntryRejection, orderStatusLabel } from "@/lib/orderStatus";
 import { accruePointsForOrder, evaluateGradeFor, getGrades, gradeName } from "@/lib/memberPoints";
 import { cancelOrderCore, RefundFailedError } from "@/lib/orderCancel";
 import { parseDepositInput, depositGapLabel } from "@/lib/deposit";
@@ -231,6 +231,10 @@ export async function setShipping(
 
   const order = await db.order.findUnique({ where: { id }, select: { status: true } });
   if (!order) return { error: "주문을 찾을 수 없습니다.", values };
+
+  // 결제대기·취소·결제실패 주문에는 송장을 붙일 수 없다 — 미결제 주문이 이 길로 '배송중'이 됐다
+  const blocked = shippingEntryRejection(order.status);
+  if (blocked) return { error: blocked, values };
 
   const advance = shouldAdvanceToShipped(order.status);
   await db.order.update({

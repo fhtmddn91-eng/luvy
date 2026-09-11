@@ -246,11 +246,18 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
             ) : (
               <p className="mb-4 mt-2 text-[13px] text-muted">등록된 송장이 없습니다.</p>
             )}
-            <ShippingForm
-              orderId={order.id}
-              courier={order.courier}
-              trackingNo={order.trackingNo}
-            />
+            {/* 서버(shippingEntryRejection)가 어차피 거부한다 — 폼을 보여 주고 오류를 내느니 이유를 먼저 적는다 */}
+            {order.status === "PENDING_PAYMENT" ? (
+              <p className="text-[12.5px] leading-relaxed text-muted">
+                카드 결제가 완료되지 않은 주문이라 송장을 붙일 수 없습니다.
+              </p>
+            ) : (
+              <ShippingForm
+                orderId={order.id}
+                courier={order.courier}
+                trackingNo={order.trackingNo}
+              />
+            )}
           </section>
 
           {awaitingDeposit && (
@@ -293,7 +300,15 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
 
           <section className="border border-hairline bg-white p-6">
             <h2 className="mb-4 text-[15px] font-bold text-ink-deep">상태 변경</h2>
-            <OrderStatusForm orderId={order.id} status={order.status} />
+            {order.status === "PENDING_PAYMENT" ? (
+              /* 돈이 안 들어온 주문은 손으로 못 넘긴다(statusChangeRejection). 드롭다운 대신 이유를 보여 준다 */
+              <p className="text-[12.5px] leading-relaxed text-muted">
+                카드 결제가 아직 완료되지 않았습니다. 결제가 확정되면 자동으로 <b>결제완료</b>가 됩니다.
+                손님이 결제창을 닫고 떠났다면 아래 「주문 취소」로 재고를 돌려놓으세요.
+              </p>
+            ) : (
+              <OrderStatusForm orderId={order.id} status={order.status} />
+            )}
             {awaitingDeposit && (
               <p className="mt-3 text-[12px] leading-relaxed text-muted">
                 무통장 입금이 확인되기 전에는 접수됨을 벗어날 수 없습니다.
@@ -304,11 +319,20 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
                 action={cancelOrderPayment.bind(null, order.id)}
                 className="mt-3 border-t border-hairline pt-3"
               >
+                {order.payment?.status === "CANCEL_FAILED" && (
+                  <p className="mb-2 text-[12px] font-semibold leading-relaxed text-brand-600">
+                    앞선 환불 시도가 실패했습니다. 다시 누르면 환불을 다시 시도합니다 — 환불이 성공해야만 취소됩니다.
+                  </p>
+                )}
                 <button
                   type="submit"
                   className="h-10 w-full border border-hairline bg-white text-[13px] font-bold text-ink-soft hover:border-ink-deep hover:text-ink-deep"
                 >
-                  {order.payment?.status === "PAID" ? "결제 취소 (환불)" : "주문 취소"}
+                  {order.payment?.status === "CANCEL_FAILED"
+                    ? "환불 재시도 후 취소"
+                    : order.payment?.status === "PAID"
+                      ? "결제 취소 (환불)"
+                      : "주문 취소"}
                 </button>
               </form>
             )}

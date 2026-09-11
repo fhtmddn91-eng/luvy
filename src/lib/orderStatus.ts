@@ -72,9 +72,32 @@ export function statusChangeRejection(i: StatusChangeInput): string | null {
   if ((TERMINAL_STATUSES as readonly string[]).includes(i.from)) {
     return `이미 종료된 주문(${orderStatusLabel(i.from)})의 상태는 되돌릴 수 없습니다.`;
   }
+  /*
+   * 카드 결제대기 — 돈이 아직 안 들어왔다. 무통장은 needsDepositConfirm 이 막는데
+   * 카드는 관문이 없어, 결제창을 닫고 떠난 주문을 드롭다운으로 배송준비·배송완료로
+   * 넘길 수 있었다(2026-09-11 리뷰). 배송완료는 적립까지 한다 — 물건이 공짜로 나간다.
+   * 승인 결과 불명(Payment UNCERTAIN)도 주문은 이 상태라 같이 막힌다.
+   */
+  if (i.from === "PENDING_PAYMENT") {
+    return "카드 결제가 아직 완료되지 않은 주문입니다. 결제가 확정되면 자동으로 결제완료가 됩니다. 결제되지 않은 주문은 '주문 취소'로 정리해주세요.";
+  }
   if (i.to !== i.from && needsDepositConfirm(i)) {
     return "무통장 입금이 아직 확인되지 않았습니다. '입금 확인'을 먼저 처리해주세요.";
   }
+  return null;
+}
+
+/**
+ * 송장을 붙일 수 있는 주문인가. null 이면 통과.
+ *
+ * 송장 입력에는 상태 관문이 없었다(2026-09-11 리뷰) — 취소된 주문·미결제 주문에도
+ * 운송장을 붙일 수 있었고, 미결제 주문은 그 길로 '배송중'이 됐다. 배송 이후 상태는
+ * 송장 정정을 위해 열어 둔다.
+ */
+export function shippingEntryRejection(status: string): string | null {
+  if (status === "PENDING_PAYMENT") return "카드 결제가 완료되지 않은 주문에는 송장을 붙일 수 없습니다.";
+  if (status === "CANCELED") return "취소된 주문에는 송장을 붙일 수 없습니다.";
+  if (status === "PAYMENT_FAILED") return "결제가 실패한 주문에는 송장을 붙일 수 없습니다.";
   return null;
 }
 

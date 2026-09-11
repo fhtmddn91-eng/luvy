@@ -11,6 +11,7 @@ import {
   orderStatusLabel,
   orderStatusTone,
   ORDER_STATUS,
+  shippingEntryRejection,
 } from "./orderStatus";
 
 const order = (status: string, trackingNo = "") => ({ status, trackingNo });
@@ -140,5 +141,50 @@ describe("needsDepositConfirm", () => {
     expect(needsDepositConfirm({ from: "RECEIVED", paymentMethod: "BANK_TRANSFER", depositConfirmedAt: new Date() })).toBe(false);
     expect(needsDepositConfirm({ from: "RECEIVED", paymentMethod: "NICEPAY", depositConfirmedAt: null })).toBe(false);
     expect(needsDepositConfirm({ from: "PREPARING", paymentMethod: "BANK_TRANSFER", depositConfirmedAt: null })).toBe(false);
+  });
+});
+
+/**
+ * 카드 결제대기(PENDING_PAYMENT) 주문 — 돈이 아직 안 들어왔다.
+ *
+ * 실사례(2026-09-11 코드 리뷰): 무통장은 needsDepositConfirm 이 막는데 카드는
+ * 아무 관문이 없어, 결제창을 닫고 떠난 주문을 관리자가 드롭다운으로 배송준비·
+ * 배송완료로 넘길 수 있었다. 배송완료는 적립까지 한다. 물건이 공짜로 나간다.
+ */
+describe("statusChangeRejection — 카드 결제대기 주문은 손으로 못 넘긴다", () => {
+  const pendingCard = { from: "PENDING_PAYMENT", paymentMethod: "NICEPAY", depositConfirmedAt: null };
+
+  it("PREPARING·SHIPPED·DELIVERED 전부 거부한다", () => {
+    for (const to of ["PREPARING", "SHIPPED", "DELIVERED", "RECEIVED"]) {
+      const why = statusChangeRejection({ ...pendingCard, to });
+      expect(why, to).not.toBeNull();
+      expect(why).toContain("결제");
+    }
+  });
+
+  it("승인 결과 불명(UNCERTAIN)도 주문은 PENDING_PAYMENT 라 같은 관문에 걸린다", () => {
+    expect(statusChangeRejection({ ...pendingCard, to: "PREPARING" })).not.toBeNull();
+  });
+
+  it("결제가 끝난(PAID) 카드 주문은 정상적으로 진행한다", () => {
+    expect(statusChangeRejection({ from: "PAID", to: "PREPARING", paymentMethod: "NICEPAY", depositConfirmedAt: null })).toBeNull();
+  });
+});
+
+/**
+ * 송장 입력에는 상태 관문이 없었다 — 취소된 주문·미결제 주문에도 운송장을 붙일 수 있었고,
+ * 미결제 주문은 그 길로 '배송중'이 됐다.
+ */
+describe("shippingEntryRejection — 송장을 붙일 수 있는 주문인가", () => {
+  it("결제대기·취소·결제실패 주문에는 송장을 붙일 수 없다", () => {
+    expect(shippingEntryRejection("PENDING_PAYMENT")).toContain("결제");
+    expect(shippingEntryRejection("CANCELED")).toContain("취소");
+    expect(shippingEntryRejection("PAYMENT_FAILED")).not.toBeNull();
+  });
+
+  it("결제완료·접수·배송준비·배송중·배송완료는 붙일 수 있다 (송장 정정 포함)", () => {
+    for (const s of ["PAID", "RECEIVED", "PREPARING", "SHIPPED", "DELIVERED"]) {
+      expect(shippingEntryRejection(s), s).toBeNull();
+    }
   });
 });
