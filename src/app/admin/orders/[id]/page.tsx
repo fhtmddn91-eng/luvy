@@ -9,6 +9,7 @@ import { courierName, hasShipment, trackingUrl } from "@/lib/shipping";
 import { ShippingForm } from "@/components/admin/ShippingForm";
 import { OrderStatusForm } from "@/components/admin/OrderStatusForm";
 import { DepositForm } from "@/components/admin/DepositForm";
+import { PaymentDetail } from "@/components/admin/PaymentDetail";
 import { depositGapLabel, elapsedLabel } from "@/lib/deposit";
 import { paymentMethodLabel } from "@/lib/paymentMethods";
 import { orderDiscountAmount, discountLabel } from "@/lib/discount";
@@ -16,12 +17,6 @@ import { fullAddress } from "@/lib/address";
 
 const dateFmt = (d: Date) =>
   new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(d);
-
-const payMethodLabel: Record<string, string> = {
-  CARD: "신용카드",
-  TRANSFER: "계좌이체",
-  EASY_PAY: "간편결제",
-};
 
 export default async function AdminOrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   await requireAdmin();
@@ -152,28 +147,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
           <section className="border border-hairline bg-white p-6">
             <h2 className="mb-4 text-[15px] font-bold text-ink-deep">결제</h2>
             {order.payment ? (
-              <dl className="space-y-1.5 text-[13px] text-ink-soft">
-                <div className="flex justify-between">
-                  <dt className="text-muted">상태</dt>
-                  <dd className="font-semibold">{orderStatusLabel(order.payment.status)}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted">수단</dt>
-                  <dd>
-                    {order.payment.method
-                      ? payMethodLabel[order.payment.method] ?? order.payment.method
-                      : "-"}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted">채널</dt>
-                  <dd>{order.payment.channel.toUpperCase()}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-muted">금액</dt>
-                  <dd className="font-semibold">{won(order.payment.amount)}</dd>
-                </div>
-              </dl>
+              <PaymentDetail payment={order.payment} />
             ) : order.paymentMethod ? (
               // PG 연동 전 주문 — 회원이 주문서에서 고른 수단만 남는다
               <dl className="space-y-1.5 text-[13px] text-ink-soft">
@@ -198,11 +172,16 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
                 <div className="flex justify-between gap-3">
                   <dt className="shrink-0 text-muted">취소자</dt>
                   <dd className="font-semibold">
+                    {/* SYSTEM 은 자동 정리(#5)·결제 실패 처리, PG 는 나이스페이 쪽 취소 — 둘 다 사람이 아니다 */}
                     {order.canceledBy === "MEMBER"
                       ? "회원"
                       : order.canceledBy === "ADMIN"
                         ? "관리자"
-                        : "—"}
+                        : order.canceledBy === "SYSTEM"
+                          ? "시스템 (자동)"
+                          : order.canceledBy === "PG"
+                            ? "나이스페이"
+                            : "—"}
                   </dd>
                 </div>
                 <div className="flex justify-between gap-3">

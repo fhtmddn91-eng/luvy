@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
+import { sweepAbandonedPendingOrders } from "@/lib/nicepayOrders";
 import { won } from "@/lib/format";
 import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
 import {
@@ -23,6 +24,8 @@ const dateFmt = (d: Date) =>
 
 export default async function AdminDashboardPage() {
   await requireAdmin();
+  // 결제창을 닫고 떠난 카드 주문이 재고를 물고 있다 — 화면을 열 때 정리한다 (#5)
+  await sweepAbandonedPendingOrders();
 
   // 매출 집계에서 제외할 상태 — 취소·실패·미결제는 돈이 아니다
   const DEAD = ["CANCELED", "PAYMENT_FAILED", "PENDING_PAYMENT"];

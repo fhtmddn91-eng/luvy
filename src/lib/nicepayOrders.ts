@@ -3,6 +3,59 @@ import { db } from "@/lib/db";
 import { cancelOrderCore } from "@/lib/orderCancel";
 import { cancelPayment } from "@/lib/nicepay";
 import { audit, shortId } from "@/lib/audit";
+import { isAbandonedPending, staleBefore, STALE_PENDING_MINUTES } from "@/lib/pendingRules";
+
+/**
+ * 버려진 카드 결제대기 주문 정리 (2026-09-11 리뷰 #5).
+ *
+ * 어드민 주문 목록·대시보드를 열 때 돈다 — 회원 포인트 만료(expireAllDuePoints)와
+ * 같은 "페이지 로드 시 정리" 방식이다. 별도 스케줄러 없이도 운영자가 하루 한 번
+ * 화면을 열면 재고가 풀린다. 판정 규칙은 pendingRules.ts(순수)에 있고, 여기서는
+ * 후보를 DB 에서 좁게 읽어 **한 번 더** 그 규칙으로 걸러 취소 경로에 넘긴다.
+ *
+ * 취소는 cancelOrderCore(skipPgRefund) — 돈이 안 나간 주문만 넘기지만, 혹시
+ * 그 사이 웹훅이 PAID 로 바꿨다면 cancelOrderCore 가 MONEY_OUT 관문에서 막는다.
+ * 한 건이 실패해도 나머지는 계속 정리한다.
+ */
+export async function sweepAbandonedPendingOrders(now = new Date()): Promise<number> {
+  const candidates = await db.order.findMany({
+    where: {
+      status: "PENDING_PAYMENT",
+      paymentMethod: "NICEPAY",
+      createdAt: { lt: staleBefore(now) },
+    },
+    select: { id: true, status: true, paymentMethod: true, createdAt: true, payment: { select: { status: true } } },
+    take: 200, // 한 번에 너무 많이 돌지 않게 — 나머지는 다음 화면 로드에서
+  });
+
+  let swept = 0;
+  for (const o of candidates) {
+    if (!isAbandonedPending(o, now)) continue;
+    try {
+      await cancelOrderCore(
+        o.id,
+        { by: "SYSTEM", reason: `결제창을 닫고 ${STALE_PENDING_MINUTES}분 넘게 돌아오지 않음 — 자동 정리` },
+        { skipPgRefund: true },
+      );
+      swept += 1;
+    } catch (e) {
+      // 돈이 나간 결제로 바뀐 경우 등 — 이 건은 두고 나머지를 계속한다
+      console.warn(`[pending sweep] ${o.id} 정리 실패:`, e instanceof Error ? e.message : e);
+    }
+  }
+
+  if (swept > 0) {
+    await audit({
+      action: "PAYMENT_PENDING_SWEPT",
+      target: "order",
+      targetId: "",
+      summary: `결제창을 닫고 돌아오지 않은 카드 주문 ${swept}건 자동 정리 — 재고 복원`,
+      meta: { swept, candidates: candidates.length, staleMinutes: STALE_PENDING_MINUTES },
+      actor: { id: null, name: "시스템", role: "SYSTEM" },
+    });
+  }
+  return swept;
+}
 
 /**
  * 나이스페이 결제 결과를 우리 주문에 반영한다.

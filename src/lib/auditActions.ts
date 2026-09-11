@@ -26,6 +26,7 @@ export const AUDIT_ACTIONS = {
   PAYMENT_UNCERTAIN: "카드 승인 결과 불명 (수동 확인 필요)",
   PAYMENT_STRAY_REFUNDED: "닫힌 주문 승인 자동 환불",
   PAYMENT_PARTIAL_CANCEL: "나이스페이 부분 취소 수신 (수동 확인 필요)",
+  PAYMENT_PENDING_SWEPT: "미결제 카드 주문 자동 정리",
 
   // 상품·카탈로그
   PRODUCT_CREATE: "상품 등록",
@@ -74,7 +75,7 @@ export const AUDIT_GROUPS: { key: string; label: string; actions: AuditAction[] 
     actions: [
       "ORDER_STATUS", "ORDER_DEPOSIT_CONFIRM", "ORDER_SHIPPING", "ORDER_SHIPPING_CLEAR",
       "ORDER_CANCEL_ADMIN", "ORDER_CANCEL_MEMBER", "ORDER_REFUND_FAILED",
-      "PAYMENT_UNCERTAIN", "PAYMENT_STRAY_REFUNDED", "PAYMENT_PARTIAL_CANCEL",
+      "PAYMENT_UNCERTAIN", "PAYMENT_STRAY_REFUNDED", "PAYMENT_PARTIAL_CANCEL", "PAYMENT_PENDING_SWEPT",
     ],
   },
   {

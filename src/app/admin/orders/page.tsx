@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
+import { sweepAbandonedPendingOrders } from "@/lib/nicepayOrders";
 import { won } from "@/lib/format";
 import { orderStatusLabel, orderStatusTone } from "@/lib/orderStatus";
 import {
@@ -48,6 +49,8 @@ export default async function AdminOrdersPage({
   searchParams: Promise<{ status?: string; q?: string; from?: string; to?: string }>;
 }) {
   await requireAdmin();
+  // 결제창을 닫고 떠난 카드 주문이 재고를 물고 있다 — 화면을 열 때 정리한다 (#5)
+  await sweepAbandonedPendingOrders();
   const filter = parseOrderFilter(await searchParams);
   const active = filter.status;
   // 행마다 new Date() 를 부르면 같은 표 안에서 기준 시각이 흔들린다
